@@ -120,3 +120,22 @@ class OptimizationError(CracktradeError):
 
 class NoOptimizableParametersError(OptimizationError):
     """The strategy exposes no numeric parameters to search over."""
+
+
+# --------------------------------------------------------------------------- cancellation
+
+
+class RunCancelled(CracktradeError):  # noqa: N818 - a signal, not a fault; see the docstring
+    """The caller asked for the run to stop, and it did.
+
+    Not a failure: nothing went wrong and nothing was computed incorrectly. It is an error
+    class only because unwinding is how a long call stack stops. Interfaces report it as its
+    own outcome -- neither a result nor a fault -- because a partial search is not a cheaper
+    search, it is an unfinished one, and reporting its intermediate numbers would present a
+    search that never ran to completion as if it had.
+
+    Deliberately without the ``Error`` suffix the naming rule asks for. It is the same kind of
+    exception as ``StopIteration``, ``KeyboardInterrupt`` and ``GeneratorExit``, none of which
+    carries one either: control flow, not a defect. Naming it ``RunCancelledError`` would make
+    every ``except`` site read as though something had gone wrong.
+    """

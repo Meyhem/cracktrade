@@ -22,6 +22,7 @@ import numpy as np
 
 from cracktrade.backtest import buy_and_hold_portfolio, extract_metrics, run_simulation
 from cracktrade.config import dump_strategy
+from cracktrade.control import NO_CONTROL, RunControl
 from cracktrade.domain import FoldResult, Metrics, ValidationReport
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import discover_parameters
@@ -59,6 +60,7 @@ def walk_forward(
     objective_name: str = DEFAULT_OBJECTIVE,
     train_fraction: float = 0.5,
     min_test_bars: int = 30,
+    control: RunControl = NO_CONTROL,
 ) -> ValidationReport:
     """Optimize and evaluate ``strategy`` across successive walk-forward folds.
 
@@ -80,19 +82,28 @@ def walk_forward(
     logger.info("walk-forward: %d %s fold(s) over %d bars", len(splits), scheme.value, len(data))
 
     started = time.perf_counter()
-    outcomes = [
-        optimize_split(
-            strategy,
-            division,
-            ticker=data.ticker,
-            epochs=epochs,
-            seed=seed,
-            workers=workers,
-            objective_name=objective_name,
+    outcomes = []
+    for index, division in enumerate(splits):
+        # Between folds, not inside one: a fold stopped half-way has an unusable search behind
+        # it, and cancelling here leaves nothing partially computed.
+        control.raise_if_cancelled()
+        control.progress(f"fold {index + 1} of {len(splits)}", 100.0 * index / len(splits))
+        outcomes.append(
+            optimize_split(
+                strategy,
+                division,
+                ticker=data.ticker,
+                epochs=epochs,
+                seed=seed,
+                workers=workers,
+                objective_name=objective_name,
+                # Each fold's search reports within its own share of the whole run, so the
+                # percentage advances monotonically rather than restarting per fold.
+                control=_fold_control(control, index, len(splits)),
+            )
         )
-        for division in splits
-    ]
     elapsed = time.perf_counter() - started
+    control.progress("computing statistics", 100.0)
 
     fold_results = tuple(
         FoldResult(
@@ -231,3 +242,24 @@ def _log_verdict(report: ValidationReport) -> None:
             report.strategy_name,
             "; ".join(report.failures),
         )
+
+
+def _fold_control(control: RunControl, index: int, folds: int) -> RunControl:
+    """Scale one fold's progress into its slice of the whole run.
+
+    Each fold's search reports 0-100% of itself. Passed straight through, the bar would restart
+    six times and mean nothing; mapped into ``[index/folds, (index+1)/folds]`` it advances once
+    from end to end. Cancellation passes through untouched.
+    """
+    if control.on_progress is None and control.should_stop is None:
+        return control
+
+    def scaled(stage: str, percent: float) -> None:
+        control.progress(
+            f"fold {index + 1} of {folds} - {stage}", 100.0 * (index + percent / 100.0) / folds
+        )
+
+    return RunControl(
+        on_progress=scaled if control.on_progress is not None else None,
+        should_stop=control.should_stop,
+    )

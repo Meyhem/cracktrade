@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 from scipy.optimize import differential_evolution
 
+from cracktrade.control import NO_CONTROL, RunControl
+from cracktrade.errors import RunCancelled
 from cracktrade.log import get_logger
 from cracktrade.optimize.objective import INFEASIBLE
 
@@ -106,20 +108,35 @@ def run_search(
     workers: int,
     diagnostics: SearchDiagnostics,
     on_generation: Callable[[int, float], None] | None = None,
+    control: RunControl = NO_CONTROL,
 ) -> SearchOutcome:
     """Search ``parameters`` with differential evolution, minimising ``score``.
 
     ``on_generation`` is called once per completed generation with the generation number and
     scipy's convergence measure, so a caller can show progress without this module knowing
     anything about terminals.
+
+    ``control`` adds the same for long-running callers: a percentage of the epoch budget, and
+    a cancellation check between generations. Verified against scipy 1.18: returning ``True``
+    from the callback halts the search and sets ``result.message`` to "callback function
+    requested stop early", which is why cancellation is detected from a flag here rather than
+    inferred from that string.
     """
     generation = 0
+    cancelled = False
 
-    def report(_vector: npt.NDArray[np.float64], convergence: float = 0.0) -> None:
-        nonlocal generation
+    def report(_vector: npt.NDArray[np.float64], convergence: float = 0.0) -> bool:
+        nonlocal generation, cancelled
         generation += 1
         if on_generation is not None:
             on_generation(generation, float(convergence))
+        control.progress(
+            f"generation {generation} of {epochs}", 100.0 * generation / max(epochs, 1)
+        )
+        cancelled = control.cancelled
+        # scipy halts the search when a callback returns True. Stopping between generations
+        # means the population is whole and nothing is half-evaluated.
+        return cancelled
 
     bounds = [(parameter.low, parameter.high) for parameter in parameters]
     integrality = np.array([parameter.is_integer for parameter in parameters], dtype=bool)
@@ -140,8 +157,13 @@ def run_search(
         polish=False,
         init=_initial_population(parameters, seed),
         integrality=integrality,
-        callback=report if on_generation is not None else None,
+        # Always installed now: the callback carries cancellation as well as progress, and a
+        # search that could not be stopped would hold a worker for its full budget.
+        callback=report,
     )
+
+    if cancelled:
+        raise RunCancelled("the search was cancelled")
 
     diagnostics.message = str(result.message)
     # scipy's own count, authoritative however the work was distributed.

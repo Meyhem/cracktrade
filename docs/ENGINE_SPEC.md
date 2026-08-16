@@ -1422,6 +1422,34 @@ public fields: `Metrics`, `Trade`, `YearReturn`, `BenchmarkComparison`, `DataVin
 indicator is defined. Interfaces pass it, plus a margin, to `load_history`, which is how D11 is
 enforced without the CLI reimplementing the calculation.
 
+### 11.2 Progress and cancellation
+
+**[NEW — decided 2026-08-16.]** `optimize` and `walk_forward` accept a `RunControl`
+(`cracktrade.control`) carrying two optional callables:
+
+```python
+RunControl(on_progress: (stage: str, percent: float) -> None, should_stop: () -> bool)
+```
+
+Both are the caller's, because the engine knows nothing about terminals, queues or HTTP
+requests. `RunControl()` — the default — installs neither, and the engine then behaves exactly
+as it did before hooks existed.
+
+**Hooks must not change results.** Asserted, not reasoned about: `tests/test_control.py`
+optimizes the same strategy with and without hooks at the same seed and compares the resulting
+YAML, metrics and parameter changes. If watching a run altered it, the numbers a user saw being
+computed would not be the numbers they would otherwise have got.
+
+**Cancellation is cooperative and coarse.** It is checked between DE generations and between
+folds — never inside one — so a stopped run leaves nothing half-computed. It raises
+`RunCancelled` and produces **no result at all**. A search halted at generation three is not a
+cheaper search, it is an unfinished one, and reporting its intermediate numbers would present a
+search that never finished choosing as though it had. Verified against scipy 1.18: returning
+`True` from the `differential_evolution` callback halts the search, so cancellation is recorded
+in a flag rather than inferred from `result.message`.
+
+---
+
 ### 11.1 Conformance test list
 
 Derived from the three legacy test files plus one regression test per defect.

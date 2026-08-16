@@ -22,6 +22,7 @@ import numpy as np
 
 from cracktrade.backtest import extract_metrics, extract_trades, run_simulation
 from cracktrade.config import dump_strategy
+from cracktrade.control import NO_CONTROL, RunControl
 from cracktrade.domain import Metrics, OptimizationResult, ParameterChange
 from cracktrade.errors import CracktradeError
 from cracktrade.log import get_logger
@@ -61,6 +62,7 @@ def optimize(
     objective_name: str = DEFAULT_OBJECTIVE,
     min_test_bars: int = 30,
     on_generation: Callable[[int, float], None] | None = None,
+    control: RunControl = NO_CONTROL,
 ) -> OptimizationResult:
     """Search ``strategy``'s parameters on train data and report on unseen test data.
 
@@ -82,6 +84,7 @@ def optimize(
         workers=workers,
         objective_name=objective_name,
         on_generation=on_generation,
+        control=control,
     ).result
 
 
@@ -116,6 +119,7 @@ def optimize_split(
     workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
     on_generation: Callable[[int, float], None] | None = None,
+    control: RunControl = NO_CONTROL,
 ) -> SplitOutcome:
     """Run the full protocol over one already-computed train/test division.
 
@@ -151,6 +155,7 @@ def optimize_split(
         workers=workers,
         diagnostics=diagnostics,
         on_generation=on_generation,
+        control=control,
     )
     diagnostics.elapsed_seconds = time.perf_counter() - started
     _absorb_counts(diagnostics, fitness, workers=workers)

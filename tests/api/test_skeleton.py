@@ -20,7 +20,7 @@ from cracktrade.api.errors import (
     NotFoundError,
     ValidationFailedError,
 )
-from cracktrade.api.main import NOT_IMPLEMENTED, main
+from cracktrade.api.main import DATABASE_ERROR, NOT_IMPLEMENTED, main
 from cracktrade.api.settings import DEFAULT_DATABASE_URL
 from tests.api.conftest import IsolatedApiSettings
 
@@ -31,19 +31,27 @@ def test_help_exits_zero() -> None:
     assert main(["--help"]) == 0
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["serve"],
-        ["worker"],
-        ["db", "migrate"],
-        ["db", "status"],
-        ["db", "verify"],
-    ],
-)
+@pytest.mark.parametrize("argv", [["serve"], ["worker"]])
 def test_registered_but_unbuilt_subcommands_fail(argv: list[str]) -> None:
-    """An unimplemented command reports failure rather than a quiet success."""
+    """An unimplemented command reports failure rather than a quiet success.
+
+    The ``db`` subcommands were on this list until phase 2 built them; their behaviour is now
+    covered by ``test_migrate.py`` against a real database.
+    """
     assert main(argv) == NOT_IMPLEMENTED
+
+
+@pytest.mark.parametrize("argv", [["db", "migrate"], ["db", "status"], ["db", "verify"]])
+def test_db_subcommands_report_an_unreachable_database(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A database that is not running is an operational condition, not a crash.
+
+    It deserves a sentence naming the fix, and an exit code a script can act on -- not a
+    traceback, and emphatically not a zero.
+    """
+    monkeypatch.setenv("CRACKTRADE_API_DATABASE_URL", "postgresql://nobody@localhost:59999/nope")
+    assert main(argv) == DATABASE_ERROR
 
 
 def test_version_prints_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:

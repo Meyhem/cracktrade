@@ -15,12 +15,18 @@ then they exit :data:`NOT_IMPLEMENTED` rather than printing a success they did n
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
+import psycopg
 import typer
+from psycopg.rows import TupleRow
 from rich.console import Console
 
 from cracktrade import __version__
+from cracktrade.api.db.console import render_migrate, render_status, render_verify
+from cracktrade.api.settings import load_api_settings
+from cracktrade.errors import CracktradeError
 from cracktrade.log import configure
 
 #: Exit status for a subcommand that exists but is not built yet. Distinct from the engine's
@@ -29,6 +35,13 @@ NOT_IMPLEMENTED = 70
 
 #: Conventional status for a process ended with Ctrl-C, as in the engine CLI.
 INTERRUPTED = 130
+
+#: ``db verify`` found the database is not fully migrated. Distinct from a refusal, which is an
+#: error: pending migrations are an ordinary state, they simply are not a passing verification.
+NOT_MIGRATED = 3
+
+#: The database could not be reached, or the migration chain refused to run.
+DATABASE_ERROR = 4
 
 app = typer.Typer(
     name="cracktrade-api",
@@ -57,6 +70,30 @@ def _unimplemented(what: str, phase: str) -> None:
     raise typer.Exit(NOT_IMPLEMENTED)
 
 
+@contextmanager
+def _database() -> Iterator[psycopg.Connection[TupleRow]]:
+    """Open the configured database, reporting an unreachable server as an error, not a crash.
+
+    A wrong password or a database that is not running is an ordinary operational condition
+    and deserves a sentence saying so; a traceback here would only bury it.
+    """
+    settings = load_api_settings()
+    try:
+        # Autocommit: the migration engine opens each migration's transaction itself, and an
+        # implicit transaction underneath would silently reduce those to savepoints.
+        connection = psycopg.connect(settings.database_url, autocommit=True)
+    except psycopg.OperationalError as error:
+        err_console.print(f"[bold red]cannot reach the database:[/bold red] {error}")
+        err_console.print(
+            "Start it with `docker compose up -d`, or set CRACKTRADE_API_DATABASE_URL."
+        )
+        raise typer.Exit(DATABASE_ERROR) from error
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
 @app.callback()
 def main_callback(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Debug logging."),
@@ -81,19 +118,26 @@ def worker() -> None:
 @db_app.command("migrate")
 def db_migrate() -> None:
     """Apply every pending migration."""
-    _unimplemented("db migrate", "phase 2")
+    with _database() as connection:
+        render_migrate(connection)
 
 
 @db_app.command("status")
 def db_status() -> None:
     """Show applied and pending migrations."""
-    _unimplemented("db status", "phase 2")
+    with _database() as connection:
+        render_status(connection)
 
 
 @db_app.command("verify")
 def db_verify() -> None:
-    """Check the migration ledger against the migration files, applying nothing."""
-    _unimplemented("db verify", "phase 2")
+    """Check the migration ledger against the migration files, applying nothing.
+
+    Exits non-zero when the database is not fully migrated, so a deployment can gate on it.
+    """
+    with _database() as connection:
+        if not render_verify(connection):
+            raise typer.Exit(NOT_MIGRATED)
 
 
 @app.command()
@@ -116,6 +160,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     try:
         app(args=argv)
+    except CracktradeError as error:
+        # A migration refusal, chiefly. These are user-facing by construction and carry the
+        # fix in their message, so a traceback would add nothing but noise.
+        err_console.print(f"[bold red]error:[/bold red] {error}")
+        return DATABASE_ERROR
     except KeyboardInterrupt:
         err_console.print("[yellow]interrupted[/yellow]")
         return INTERRUPTED

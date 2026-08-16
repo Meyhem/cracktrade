@@ -2,7 +2,9 @@
 
 **Status: proposal for review, not yet normative.** Once approved, the decisions here get
 recorded in `docs/ENGINE_SPEC.md` (the only normative document) and this file becomes the
-implementation reference. Companion: [`docs/DB_SCHEMA.sql`](DB_SCHEMA.sql).
+implementation reference. The schema it is served by is
+[`0001_initial.sql`](../src/cracktrade/api/db/migrations/0001_initial.sql), with its semantics
+normative in `docs/ENGINE_SPEC.md` §14.
 
 Scope: every endpoint the Claude-Design UI (`Cracktrade.dc.html`) needs — no more. The UI is a
 React + TypeScript + Mantine SPA; the API is a thin interface over the library, per the

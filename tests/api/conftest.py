@@ -22,8 +22,10 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.rows import TupleRow
 from pydantic_settings import SettingsConfigDict
 
+from cracktrade.api.db.migrate import migrate
 from cracktrade.api.settings import DEFAULT_DATABASE_URL, ApiSettings
 
 #: Where the db-marked tests look for a server. Defaults to the compose database, so a fresh
@@ -101,14 +103,15 @@ def db_server_url() -> str:
     return url
 
 
-def _provision_template(connection: psycopg.Connection[tuple[object, ...]]) -> None:
-    """Put the schema into the template database.
+def _provision_template(connection: psycopg.Connection[TupleRow]) -> None:
+    """Put the schema into the template database by running the real migration chain.
 
-    Phase 2 replaces the body with a call to the migration engine, so that every db-marked test
-    runs against exactly the schema `cracktrade-api db migrate` produces -- a fixture that
-    built the schema its own way would let the two drift, and the tests would then be checking
-    a schema nobody deploys.
+    Deliberately not a hand-maintained DDL fixture: every db-marked test then runs against
+    exactly the schema ``cracktrade-api db migrate`` produces. A fixture that built the schema
+    its own way would be free to drift, and the suite would be checking a schema nobody
+    deploys.
     """
+    migrate(connection)
 
 
 @pytest.fixture(scope="session")
@@ -123,10 +126,10 @@ def db_template(db_server_url: str) -> Iterator[str]:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     try:
         # Provisioning runs on its own connection, which is then closed: PostgreSQL refuses to
-        # clone a database while anything is connected to it.
-        with psycopg.connect(_with_database(db_server_url, name)) as connection:
+        # clone a database while anything is connected to it. Autocommit because the migration
+        # engine owns its transaction boundaries and refuses a connection that does not.
+        with psycopg.connect(_with_database(db_server_url, name), autocommit=True) as connection:
             _provision_template(connection)
-            connection.commit()
         yield name
     finally:
         with psycopg.connect(db_server_url, autocommit=True) as admin:
@@ -157,7 +160,7 @@ def db_url(db_server_url: str, db_template: str) -> Iterator[str]:
 
 
 @pytest.fixture
-def db(db_url: str) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
+def db(db_url: str) -> Iterator[psycopg.Connection[TupleRow]]:
     """An open connection to this test's own database."""
     with psycopg.connect(db_url) as connection:
         yield connection

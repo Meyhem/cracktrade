@@ -5,7 +5,8 @@ document exists for the duration of the build and is deleted once the build fini
 decision that must outlive it gets recorded in `docs/ENGINE_SPEC.md` in the same commit as the
 code that implements it (Phase 0 and per-phase spec updates below).
 
-Inputs: [`docs/DB_SCHEMA.sql`](DB_SCHEMA.sql) (draft v1, validated against live Postgres) and
+Inputs: the reviewed schema draft (now
+[`0001_initial.sql`](../src/cracktrade/api/db/migrations/0001_initial.sql)) and
 [`docs/API.md`](API.md) (draft v1). Requesting this plan is taken as approval of both, with the
 API.md §10 open questions resolved to their proposed defaults — flagged in §1 below; object to
 any of them before Phase 0 lands.
@@ -158,10 +159,24 @@ seam Phase 2 fills with the real migration run.
 - Done when: fresh clone → `docker compose up -d` → `uv run pytest -m db` runs (against a
   trivial connectivity test) rather than skips.
 
-### Phase 2 — Migration engine, from scratch
+### Phase 2 — Migration engine, from scratch — **DONE**
 
 Goal: schema changes are ordered, verified, and refuse to lie. This is its own phase because
 everything after it trusts it.
+
+Landed as planned, plus a fourth refusal that was not in the plan because the failure it
+prevents was not known until it happened: **the engine rejects a non-autocommit connection.**
+Probing psycopg 3.3 showed that on such a connection the first statement opens an implicit
+transaction which is never closed, so `Connection.transaction()` issues a *savepoint* instead
+of a transaction — migrations appear to apply, the ledger records them, and `close()` rolls
+every one of them back. The first `db migrate` did exactly that, and `db status` reporting the
+chain still pending is what exposed it. A silent failure of that shape deserves a refusal, not
+a docstring, so `_require_autocommit` is now checked on every entry point and pinned by a test.
+
+Also unplanned: the repo-wide dynamic-evaluation guard flagged `re.compile` in the new engine.
+Fixed by making the guard precise — a named `(receiver, name)` allowlist containing exactly
+`("re", "compile")` — rather than by renaming around it. Verified afterwards that `pd.eval`,
+bare `eval`, and bare `compile` are all still caught.
 
 Engine (`db/migrate.py`), deliberately small — files, a ledger, and refusals:
 

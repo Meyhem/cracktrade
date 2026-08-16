@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import psycopg
 import pytest
+from psycopg.rows import TupleRow
 
 pytestmark = pytest.mark.db
 
 
-def test_the_server_is_a_real_postgres(db: psycopg.Connection[tuple[object, ...]]) -> None:
+def test_the_server_is_a_real_postgres(db: psycopg.Connection[TupleRow]) -> None:
     row = db.execute("SELECT version()").fetchone()
     assert row is not None
     assert "PostgreSQL" in str(row[0])
 
 
-def test_supported_server_version(db: psycopg.Connection[tuple[object, ...]]) -> None:
+def test_supported_server_version(db: psycopg.Connection[TupleRow]) -> None:
     """Spec section 14 requires 15+.
 
     ``DROP DATABASE ... WITH (FORCE)`` (used by these fixtures) and ``gen_random_uuid()``
@@ -29,7 +30,7 @@ def test_supported_server_version(db: psycopg.Connection[tuple[object, ...]]) ->
     assert db.info.server_version >= 150000
 
 
-def test_each_test_gets_its_own_database(db: psycopg.Connection[tuple[object, ...]]) -> None:
+def test_each_test_gets_its_own_database(db: psycopg.Connection[TupleRow]) -> None:
     """First half of the isolation proof: write a table into this test's database."""
     db.execute("CREATE TABLE leak_check (id int)")
     db.execute("INSERT INTO leak_check VALUES (1)")
@@ -39,7 +40,7 @@ def test_each_test_gets_its_own_database(db: psycopg.Connection[tuple[object, ..
     assert row[0] == 1
 
 
-def test_nothing_leaks_from_the_previous_test(db: psycopg.Connection[tuple[object, ...]]) -> None:
+def test_nothing_leaks_from_the_previous_test(db: psycopg.Connection[TupleRow]) -> None:
     """Second half: the table the previous test created is not visible here.
 
     Ordering-dependent by construction -- it has to be, since it asserts the absence of a
@@ -51,7 +52,7 @@ def test_nothing_leaks_from_the_previous_test(db: psycopg.Connection[tuple[objec
 
 
 def test_the_maintenance_database_is_untouched(
-    db_server_url: str, db: psycopg.Connection[tuple[object, ...]]
+    db_server_url: str, db: psycopg.Connection[TupleRow]
 ) -> None:
     """The database named in the connection URL is a connection target, not a workspace."""
     db.execute("CREATE TABLE should_not_appear_on_the_server (id int)")

@@ -458,6 +458,13 @@ def test_no_blind_excepts_in_the_engine() -> None:
     assert not offenders, f"bare 'except:' found at {offenders}"
 
 
+#: Calls named like dynamic evaluation but categorically unrelated to it, as
+#: ``module.attribute`` pairs. Deliberately an allowlist of exact receivers rather than a
+#: relaxation of the rule: ``re.compile`` builds a regular expression and cannot evaluate a
+#: Python expression against a price series, while a bare ``compile(...)`` still can.
+DYNAMIC_EVALUATION_ALLOWED = frozenset({("re", "compile")})
+
+
 def test_no_dynamic_evaluation_in_the_engine() -> None:
     """``pd.eval`` permits attribute access, which is how the legacy engine let .shift(-1) in."""
     forbidden = {"eval", "exec", "compile"}
@@ -474,6 +481,25 @@ def test_no_dynamic_evaluation_in_the_engine() -> None:
                 if isinstance(called, ast.Name)
                 else None
             )
-            if name in forbidden:
-                offenders.append(f"{path.relative_to(SRC_ROOT)}:{node.lineno} calls {name}")
+            if name not in forbidden:
+                continue
+            receiver = (
+                called.value.id
+                if isinstance(called, ast.Attribute) and isinstance(called.value, ast.Name)
+                else None
+            )
+            if (receiver, name) in DYNAMIC_EVALUATION_ALLOWED:
+                continue
+            offenders.append(f"{path.relative_to(SRC_ROOT)}:{node.lineno} calls {name}")
     assert not offenders, f"dynamic evaluation found: {offenders}"
+
+
+def test_the_dynamic_evaluation_allowlist_is_narrow() -> None:
+    """The allowlist must not quietly become an escape hatch.
+
+    Entries are ``(receiver, name)`` pairs, so a bare ``compile(...)`` -- which has no receiver
+    -- can never match one, and neither can ``compile`` on some other object. That leaves this
+    assertion to defend the only thing still at risk: that the list stays one entry long.
+    """
+    assert set(DYNAMIC_EVALUATION_ALLOWED) == {("re", "compile")}
+    assert ("pd", "eval") not in DYNAMIC_EVALUATION_ALLOWED

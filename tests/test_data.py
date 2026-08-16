@@ -179,6 +179,29 @@ def test_contract_rejects_inconsistent_high() -> None:
         validate_frame(frame)
 
 
+def test_sub_ulp_high_low_noise_is_repaired() -> None:
+    """A High one ulp below Close -- a yfinance auto_adjust artifact -- must not fail."""
+    raw = make_ohlcv(20)
+    victim = raw.index[5]
+    close = raw.loc[victim, "Close"]
+    nudged_high = np.nextafter(close, -np.inf)
+    raw.loc[victim, "High"] = nudged_high
+    assert nudged_high < close  # sanity: still "violates" pre-repair
+
+    frame, _ = prepare_history(raw, ticker=TICKER, today=date(2030, 1, 1))
+
+    assert frame.loc[victim, "High"] == frame.loc[victim, ["Open", "Close"]].max()
+
+
+def test_genuinely_wrong_high_is_not_repaired() -> None:
+    raw = make_ohlcv(20)
+    victim = raw.index[5]
+    raw.loc[victim, "High"] = raw.loc[victim, "Close"] * 0.5  # not float noise -- a real error
+
+    with pytest.raises(DataContractError, match="High is not the highest"):
+        prepare_history(raw, ticker=TICKER, today=date(2030, 1, 1))
+
+
 def test_contract_rejects_negative_volume() -> None:
     frame = prepare_frame(make_ohlcv(20), ticker=TICKER, today=date(2030, 1, 1))
     frame.loc[frame.index[3], "Volume"] = -1.0

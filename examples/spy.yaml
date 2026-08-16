@@ -1,0 +1,45 @@
+strategy:
+  name: spy_trend_pullback_swing_v1
+
+universe:
+  ticker: SPY
+  start_date: "2018-01-01"
+  end_date: "2026-08-16"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+  risk_free_rate: 0.04
+
+indicators:
+  - name: sma_trend
+    type: sma
+    source: close
+    window: 150
+  - name: rsi_ind
+    type: rsi
+    source: close
+    window: 14
+
+entry_variants:
+  - name: frequent_pullback
+    signal: "(close > sma_trend) & (rsi_ind < 55)"
+  - name: moderate_pullback
+    signal: "(close > sma_trend) & (rsi_ind < 45)"
+  - name: deep_pullback
+    signal: "(close > sma_trend) & (rsi_ind < 35)"
+
+exit_variants:
+  - name: trend_break_with_trailing
+    signal: "close < sma_trend"
+    trailing_stop_pct: 6.0
+    take_profit_pct: 12.0
+  - name: atr_time_exit
+    atr_stop_multiplier: 2.5
+    take_profit_pct: 10.0
+    max_holding_days: 15
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0

@@ -590,6 +590,11 @@ class MarketDataProvider(Protocol):
 4. If the surviving history is shorter than `max(indicator warmup) + 30` bars, raise. A backtest that
    cannot warm up its indicators has no valid region.
 5. Any NaN remaining after step 1-3 is an error, not a fill.
+6. **[NEW]** yfinance's `auto_adjust` occasionally leaves High/Low a few ulps on the wrong side of
+   Open/Close on the same bar — adjustment arithmetic noise, not a bad print (§10 D16). Repaired by
+   snapping the offending value onto the bracket only when the discrepancy is within `1e-8` relative
+   tolerance, orders of magnitude tighter than any plausible real error; a bar outside that
+   tolerance is left alone and still fails the §4.1 contract.
 
 ### 4.4 Incomplete bars
 
@@ -1317,6 +1322,18 @@ by error — a plausible strategy trades on undefined data for most of its histo
 quieter failure is that `close > psar_psarl` is silently `False` on 61% of bars, so the strategy
 under test is not the one the user wrote and nothing reports the difference.
 **Target:** the §6.2 defined mask, plus `defined_pct` in the output.
+
+**D16 — Sub-ulp High/Low noise from yfinance's `auto_adjust`, rejected as a bad bar.** **[NEW —
+found live on 2026-08-16, `examples/spy.yaml`.]** `auto_adjust=True` retro-adjusts Open, High, Low
+and Close independently. On an intermittent bar the adjusted High comes back a few ulps below the
+adjusted Close (observed: `High=246.1731262207031` vs `Close=246.17312622070312`, a ~1e-12 relative
+gap) — float noise from the adjustment arithmetic, not a data error, and only present on some
+fetches of the same range because Yahoo's adjustment recomputes from the current split/dividend
+table each call. §4.1's strict `Low <= Open, Close <= High` correctly rejected it, which is right
+for a genuine bad print but made the whole backtest intermittently fail on good data.
+**Target:** repaired at the data-preparation boundary (§4.3), not by loosening the §4.1 contract —
+a real bad bar (wrong by orders of magnitude more than adjustment noise) must still be rejected
+there.
 
 ---
 

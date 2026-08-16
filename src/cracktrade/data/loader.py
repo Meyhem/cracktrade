@@ -13,11 +13,12 @@ rest, and both are causality rules rather than tidiness:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
+import numpy as np
 import pandas as pd
 
-from cracktrade.data.contract import DTYPE, OHLCV_COLUMNS, MarketData, validate_frame
+from cracktrade.data.contract import DTYPE, OHLCV_COLUMNS, PRICE_COLUMNS, MarketData, validate_frame
 from cracktrade.errors import DataContractError, DataQualityError, InsufficientHistoryError
 from cracktrade.log import get_logger
 
@@ -27,6 +28,13 @@ if TYPE_CHECKING:
     from cracktrade.data.provider import MarketDataProvider
 
 logger = get_logger(__name__)
+
+#: yfinance's split/dividend adjustment computes each OHLC column independently, which
+#: occasionally leaves the adjusted High a few ulps below the adjusted Close (or Low a few ulps
+#: above Open) on the same bar -- a ~1e-12 relative discrepancy, nowhere near a real pricing
+#: error. Repaired here with a tolerance far tighter than any plausible real error, rather than
+#: loosening validate_frame's strict bound, so a genuinely malformed bar is still rejected there.
+_ADJUSTMENT_NOISE_RTOL: Final = 1e-8
 
 
 def load_history(
@@ -174,8 +182,38 @@ def prepare_history(
     # the leading ones were dropped rather than filled and must not be counted here.
     filled = incomplete.reindex(frame.index).fillna(value=False).astype(bool)
 
+    frame = _repair_adjustment_noise(frame, ticker)
+
     validate_frame(frame)
     return frame, filled
+
+
+def _repair_adjustment_noise(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """Snap High/Low back onto the bar's other prices when they differ by float noise only.
+
+    A bar where the discrepancy exceeds the tolerance is left untouched -- that is a real data
+    problem and must still fail :func:`validate_frame`.
+    """
+    price = frame[list(PRICE_COLUMNS)]
+    highest = price.max(axis=1)
+    lowest = price.min(axis=1)
+
+    high_noise = (frame["High"] < highest) & np.isclose(
+        frame["High"], highest, rtol=_ADJUSTMENT_NOISE_RTOL, atol=0.0
+    )
+    low_noise = (frame["Low"] > lowest) & np.isclose(
+        frame["Low"], lowest, rtol=_ADJUSTMENT_NOISE_RTOL, atol=0.0
+    )
+
+    repaired = int(high_noise.sum() + low_noise.sum())
+    if not repaired:
+        return frame
+
+    frame = frame.copy()
+    frame.loc[high_noise, "High"] = highest[high_noise]
+    frame.loc[low_noise, "Low"] = lowest[low_noise]
+    logger.debug("%s: repaired sub-ulp High/Low adjustment noise on %d bar(s)", ticker, repaired)
+    return frame
 
 
 def _utc_today() -> date:

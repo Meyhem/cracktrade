@@ -13,6 +13,7 @@ a single byte of market data is downloaded.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -102,3 +103,72 @@ def _apply_semantic_checks(strategy: Strategy) -> Strategy:
     if issues:
         raise StrategyValidationError(issues)
     return strategy
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigWarning:
+    """A problem worth telling the user about that does not make the config invalid.
+
+    Spec section 3.7: a shadowed stop is configured, accepted, and has no effect. Refusing the
+    file would be wrong -- it is a valid strategy -- but so would silence, because the user
+    wrote a stop and will assume it fires.
+
+    Structured rather than logged, because two interfaces need to place it: the CLI prints it
+    beside the run, and the editor attaches it to the field that caused it.
+    """
+
+    path: str
+    message: str
+
+
+def strategy_warnings(strategy: Strategy) -> tuple[ConfigWarning, ...]:
+    """Everything accepted-but-suspect about a valid strategy.
+
+    Warnings never block. A caller that ignores them still gets the run the user asked for,
+    which is the difference between this and :class:`StrategyValidationError`.
+    """
+    warnings: list[ConfigWarning] = []
+
+    active = strategy.exit.active_stop
+    for field_name in strategy.exit.shadowed_stops:
+        warnings.append(
+            ConfigWarning(
+                path=f"exit.{field_name}",
+                message=(
+                    f"{field_name} is set but has no effect: the stop priority chain is won by "
+                    f"{_ACTIVE_STOP_FIELD[active]} (spec section 3.7). Remove it, or drop the "
+                    f"stop that outranks it."
+                ),
+            )
+        )
+
+    for indicator in strategy.indicators:
+        if indicator.source is not None and not _uses_source(indicator.type):
+            warnings.append(
+                ConfigWarning(
+                    path=f"indicators.{indicator.name}.source",
+                    message=(
+                        f"source has no effect on a {indicator.type} indicator: it always "
+                        f"receives the series it needs regardless of this setting."
+                    ),
+                )
+            )
+
+    return tuple(warnings)
+
+
+#: Which YAML field each ``active_stop`` value corresponds to.
+_ACTIVE_STOP_FIELD: Mapping[str | None, str] = {
+    "atr": "atr_stop_multiplier",
+    "trailing": "trailing_stop_pct",
+    "fixed": "stop_loss_pct",
+    None: "no stop",
+}
+
+
+def _uses_source(indicator_type: str) -> bool:
+    import importlib
+
+    registry = importlib.import_module("cracktrade.indicators.registry")
+    importlib.import_module("cracktrade.indicators.compute").registry_installed()
+    return bool(registry.get(indicator_type).uses_source)

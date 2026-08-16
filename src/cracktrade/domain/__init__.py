@@ -295,6 +295,35 @@ class FoldResult:
 
 
 @dataclass(frozen=True, slots=True)
+class Check:
+    """One robustness check, with the numbers behind it and what it means.
+
+    The verdict is a conjunction of these (spec section 12), and this is the only place that
+    conjunction is expressed. Interfaces render checks; they never recompute pass or fail from
+    the underlying statistics, because a second implementation of the verdict is a second
+    verdict, and eventually the two disagree in public.
+
+    Attributes:
+        name: stable identifier, safe to branch on. Never shown to a user.
+        label: the check's name in words.
+        passed: whether the strategy cleared this bar.
+        plain: what the check asks, in one sentence, for a reader who does not know the
+            statistic. Part of the output rather than documentation: a failure nobody
+            understands is a failure nobody acts on.
+        stat: the numbers, formatted. Shown whether the check passed or failed.
+        detail: one sentence stating the outcome. Failed checks contribute theirs to
+            :attr:`ValidationReport.failures`, which is what the verdict banner lists.
+    """
+
+    name: str
+    label: str
+    passed: bool
+    plain: str
+    stat: str
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class ValidationReport:
     """A walk-forward run and the statistics that judge it.
 
@@ -378,38 +407,142 @@ class ValidationReport:
         return sum(fold.metrics.total_trades for fold in self.folds)
 
     @property
+    def checks(self) -> tuple[Check, ...]:
+        """Every robustness check, passed or failed, in the reporting order of spec 12.8.
+
+        The single definition of the verdict. :attr:`failures` and :attr:`is_credible` are both
+        derived from this, so there is exactly one place where "did this strategy hold up" is
+        decided, and every interface reports the same answer.
+        """
+        folds = len(self.folds)
+        return (
+            Check(
+                name="benchmark",
+                label="Benchmark",
+                passed=self.beats_buy_and_hold,
+                plain=(
+                    "Combined out-of-sample return against simply owning the ticker over the "
+                    "same window."
+                ),
+                stat=(
+                    f"{self.combined_return_pct:+.1f}% against "
+                    f"{self.benchmark.total_return_pct:+.1f}%"
+                ),
+                detail=(
+                    f"returned {self.combined_return_pct:+.1f}% out of sample against "
+                    f"{self.benchmark.total_return_pct:+.1f}% for buy-and-hold"
+                ),
+            ),
+            Check(
+                name="fold_results",
+                label="Fold results",
+                passed=self.fold_win_rate >= 0.5,
+                plain=(
+                    f"Ran the whole exercise {folds} times on different slices of history. "
+                    "Each slice re-optimized from scratch and was judged on data that slice "
+                    "never saw."
+                ),
+                stat=f"profitable in {self.profitable_folds} of {folds} folds",
+                detail=f"profitable in only {self.profitable_folds} of {folds} folds",
+            ),
+            Check(
+                name="deflated_sharpe",
+                label="Deflated Sharpe",
+                passed=self.deflated.is_significant,
+                plain=(
+                    f"A search of {self.trials} trials produces a good-looking Sharpe from no "
+                    "edge at all. This asks whether the observed one beats that luck."
+                ),
+                stat=f"P={self.deflated.probability:.2f}, bar is {SIGNIFICANCE:.2f}",
+                detail=(
+                    f"deflated Sharpe P={self.deflated.probability:.2f}, below the "
+                    f"{SIGNIFICANCE:.2f} bar for {self.trials} trials"
+                ),
+            ),
+            Check(
+                name="overfitting",
+                label="Probability of backtest overfitting",
+                passed=self.overfitting.is_acceptable,
+                plain=(
+                    "Above 0.5 the way this result was selected is worse than choosing a "
+                    "configuration at random."
+                ),
+                stat=f"PBO {self.overfitting.probability:.2f}",
+                detail=(
+                    f"probability of backtest overfitting {self.overfitting.probability:.2f}, "
+                    f"so selection is no better than choosing at random"
+                ),
+            ),
+            Check(
+                name="stability",
+                label="Parameter stability",
+                passed=self.stability.is_stable,
+                plain=(
+                    "The winning parameters nudged by 10% and 20%. A real edge sits on a "
+                    "plateau; a curve fit sits on a needle."
+                ),
+                stat=(
+                    f"worst 10% nudge costs "
+                    f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
+                ),
+                detail=(
+                    f"a 10% parameter nudge destroys "
+                    f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
+                ),
+            ),
+            Check(
+                name="costs",
+                label="Cost sensitivity",
+                passed=self.costs.survives_double_costs,
+                plain=(
+                    "The headline recomputed at twice and three times the configured "
+                    "commission and slippage. An edge that dies when costs double belongs to "
+                    "the broker."
+                ),
+                stat=self._cost_stat(),
+                detail="unprofitable at twice the configured slippage",
+            ),
+            Check(
+                name="intervals",
+                label="Confidence intervals",
+                passed=self.mean_return_interval.excludes_zero,
+                plain=(
+                    "Bootstrap intervals for the fold returns. An interval that straddles zero "
+                    "is not distinguishable from luck."
+                ),
+                stat=(
+                    f"mean interval {self.mean_return_interval.low:+.1f}% … "
+                    f"{self.mean_return_interval.high:+.1f}%"
+                ),
+                detail=(
+                    f"the 95% interval on mean fold return, "
+                    f"{self.mean_return_interval.low:+.1f}% to "
+                    f"{self.mean_return_interval.high:+.1f}%, straddles zero"
+                ),
+            ),
+            Check(
+                name="trade_count",
+                label="Out-of-sample trades",
+                passed=self.total_trades >= MIN_TRADES_TO_JUDGE,
+                plain=(
+                    f"Below {MIN_TRADES_TO_JUDGE} closed trades no figure on this screen means "
+                    "anything."
+                ),
+                stat=f"{self.total_trades} of {MIN_TRADES_TO_JUDGE} needed",
+                detail=f"only {self.total_trades} out-of-sample trades in total",
+            ),
+        )
+
+    def _cost_stat(self) -> str:
+        multiple = self.costs.break_even_multiple
+        if multiple is None:
+            return "still profitable at every tested multiple"
+        return f"break-even at {multiple:.1f}x costs"
+
+    @property
     def failures(self) -> tuple[str, ...]:
         """Every robustness check the strategy did not pass, in plain words."""
-        problems: list[str] = []
-        if self.fold_win_rate < 0.5:
-            problems.append(
-                f"profitable in only {self.profitable_folds} of {len(self.folds)} folds"
-            )
-        if not self.deflated.is_significant:
-            problems.append(
-                f"deflated Sharpe P={self.deflated.probability:.2f}, below the 0.95 bar for "
-                f"{self.trials} trials"
-            )
-        if not self.overfitting.is_acceptable:
-            problems.append(
-                f"probability of backtest overfitting {self.overfitting.probability:.2f}, so "
-                f"selection is no better than choosing at random"
-            )
-        if not self.stability.is_stable:
-            problems.append(
-                f"a 10% parameter nudge destroys "
-                f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
-            )
-        if not self.costs.survives_double_costs:
-            problems.append("unprofitable at twice the configured slippage")
-        if self.total_trades < MIN_TRADES_TO_JUDGE:
-            problems.append(f"only {self.total_trades} out-of-sample trades in total")
-        if not self.beats_buy_and_hold:
-            problems.append(
-                f"returned {self.combined_return_pct:+.1f}% out of sample against "
-                f"{self.benchmark.total_return_pct:+.1f}% for buy-and-hold"
-            )
-        return tuple(problems)
+        return tuple(check.detail for check in self.checks if not check.passed)
 
     @property
     def is_credible(self) -> bool:
@@ -419,7 +552,7 @@ class ValidationReport:
         not something to put money behind, and averaging the checks would let a strong headline
         return paper over a failed overfitting test.
         """
-        return not self.failures
+        return all(check.passed for check in self.checks)
 
 
 def _median(values: tuple[float, ...]) -> float:

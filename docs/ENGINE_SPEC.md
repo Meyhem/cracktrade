@@ -1535,6 +1535,13 @@ A 20% test window may hold six trades. Six trades support no conclusion, but a p
 printed to two decimal places implies one. Below `min_trades` (§9.3) the headline verdict is
 **suppressed** rather than qualified.
 
+**[NEW — decided 2026-08-16.]** An interval on mean fold return that **straddles zero is a
+failed check** and therefore blocks credibility. This is the same standard §12.3 already
+applies through the deflated Sharpe — a result that cannot be distinguished from no edge is
+not a result — and it was previously computed and displayed without being allowed to affect
+the verdict. Note the direction: this makes credibility *harder* to obtain, never easier. No
+check is ever added in the other direction without saying so here.
+
 ### 12.7 Cost sensitivity
 
 The headline metrics are recomputed at 1×, 2× and 3× the configured `slippage_pct`. Modelling
@@ -1542,9 +1549,19 @@ liquidity- and volatility-dependent slippage properly is out of scope; establish
 survives a tripling of costs is three extra backtests and answers the question that matters. An edge
 that dies at 2× costs is not tradeable.
 
-### 12.8 Reporting order
+### 12.8 The checks, and reporting order
 
-The CLI leads with the verdict, not the equity curve:
+**[NEW — decided 2026-08-16.]** The checks are a **structured, contractual part of the result**:
+`ValidationReport.checks` is a tuple of `Check(name, label, passed, plain, stat, detail)`, and
+`failures` and `is_credible` are both *derived* from it.
+
+This is the single definition of the verdict. Interfaces render checks; none of them recomputes
+pass or fail from the underlying statistics. A second implementation of the verdict is a second
+verdict, and the two eventually disagree — in public, on the screen someone is using to decide
+where to put money. `name` is a stable identifier interfaces may branch on; `plain` is part of
+the output, not documentation, because a failure nobody understands is a failure nobody acts on.
+
+The tuple is emitted in the order below. The CLI leads with the verdict, not the equity curve:
 
 1. benchmark comparison (§8) — did it beat buy-and-hold;
 2. fold dispersion (§12.2) — was it consistent;

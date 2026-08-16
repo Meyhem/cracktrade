@@ -21,6 +21,7 @@ import pytest
 from cracktrade.domain import ValidationReport
 from cracktrade.errors import OptimizationError
 from cracktrade.optimize import discover_parameters
+from cracktrade.serialize import to_dict
 from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from cracktrade.validate import (
     FoldScheme,
@@ -414,3 +415,57 @@ def test_a_walk_forward_run_is_reproducible() -> None:
 
     assert first.returns == second.returns
     assert first.deflated.probability == second.deflated.probability
+
+
+# ------------------------------------------------------------------ the checks are the verdict
+
+
+def test_the_verdict_is_the_conjunction_of_its_checks(report: ValidationReport) -> None:
+    """One definition, not three.
+
+    ``is_credible`` and ``failures`` are both derived from ``checks``. If they were computed
+    separately -- as they were before phase 4 -- a banner could say NOT CREDIBLE while the
+    check table showed eight passes, and nobody would know which to believe.
+    """
+    assert report.is_credible == all(check.passed for check in report.checks)
+    assert report.failures == tuple(c.detail for c in report.checks if not c.passed)
+
+
+def test_every_check_is_reportable(report: ValidationReport) -> None:
+    """Each field has a job on screen, so none of them may be blank."""
+    for check in report.checks:
+        assert check.name and check.name.islower()
+        assert check.label
+        assert check.plain.endswith(".")
+        assert check.stat
+        assert check.detail
+
+
+def test_check_names_are_unique_and_stable(report: ValidationReport) -> None:
+    """Interfaces branch on these, so they are an API, not a label."""
+    names = [check.name for check in report.checks]
+    assert len(names) == len(set(names))
+    assert set(names) == {
+        "benchmark",
+        "fold_results",
+        "deflated_sharpe",
+        "overfitting",
+        "stability",
+        "costs",
+        "intervals",
+        "trade_count",
+    }
+
+
+def test_a_straddling_interval_is_a_failed_check(report: ValidationReport) -> None:
+    """Spec 12.6 made explicit: an interval containing zero is not distinguishable from luck."""
+    intervals = next(check for check in report.checks if check.name == "intervals")
+    assert intervals.passed == report.mean_return_interval.excludes_zero
+
+
+def test_checks_survive_serialisation(report: ValidationReport) -> None:
+    """The UI's check table reads this, so it is contractual output rather than a property."""
+    payload = to_dict(report)
+    checks = payload["checks"]
+    assert len(checks) == len(report.checks)
+    assert set(checks[0]) == {"name", "label", "passed", "plain", "stat", "detail"}

@@ -10,6 +10,7 @@ from rich.table import Table
 
 from cracktrade.indicators import registry
 from cracktrade.indicators.catalogue import install
+from cracktrade.indicators.describe import describe_catalogue
 
 console = Console()
 
@@ -31,14 +32,14 @@ def indicators(
 
     needle = search.lower() if search else None
     shown = 0
-    for spec in registry.all_specs():
-        if needle and needle not in spec.type:
+    for indicator in describe_catalogue():
+        if needle and needle not in indicator.type:
             continue
         parameters = ", ".join(
-            f"{name}={field.default}" for name, field in spec.params.model_fields.items()
+            f"{parameter.name}={parameter.default}" for parameter in indicator.parameters
         )
-        produces = ", ".join(spec.output_names("<name>")) if spec.is_multi_output else "<name>"
-        table.add_row(spec.type, parameters or "-", produces, spec.description)
+        produces = ", ".join(indicator.namespace_names("<name>"))
+        table.add_row(indicator.type, parameters or "-", produces, indicator.description)
         shown += 1
 
     if not shown:

@@ -53,7 +53,9 @@ _EXPOSED_PROPERTIES: dict[str, tuple[str, ...]] = {
     ),
     "CostSensitivity": ("survives_double_costs", "break_even_multiple"),
     "Interval": ("excludes_zero",),
+    "Check": (),
     "ValidationReport": (
+        "checks",
         "combined_return_pct",
         "beats_buy_and_hold",
         "returns",

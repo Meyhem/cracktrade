@@ -11,8 +11,10 @@ substance lives in the library; interfaces only parse and render.
 
 **`docs/ENGINE_SPEC.md` is the contract.** It is normative, not a summary. If the code and the
 spec disagree, one of them is a bug — decide which, fix it, and record the decision in the spec.
-Never let them drift silently. `docs/AUDIT.md` records the financial/technical review and the
-reasoning behind the Phase 5.5 and 8.5 additions; `PLAN.md` tracks phase status.
+Never let them drift silently. It is also the only normative document: the phased build plan and
+the reverse-engineering spec that preceded it were deleted once the build finished, so a decision
+that is not in the spec is not recorded anywhere. `docs/AUDIT.md` is a dated review, kept as
+history rather than as a live checklist.
 
 **Verify library behaviour, never assume it.** Several defaults in vectorbt 1.0.0 are actively
 wrong for this engine and were found only by probing: `signals.clean` deletes an exit that collides
@@ -61,6 +63,6 @@ Commit and push at the end of every completed phase, feature, or fix — no need
 - Commit message: a short imperative subject, then a body explaining *why*, including any design
   that was tried and rejected and the reason. End with:
   `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
-- Update `PLAN.md` phase status and any affected spec section in the same commit as the code.
+- Update any affected spec section in the same commit as the code, never in a follow-up.
 - Push to `main` (`git@github.com:Meyhem/cracktrade.git`).
 - Work in progress mid-phase does not need committing; a phase boundary does.

@@ -2,6 +2,13 @@
 
 Date: 2026-08-16. Audited against the code at Phase 5 completion (Phases 6–9 unbuilt).
 
+**This is a dated record, not a live document.** It is kept because the reasoning behind the
+validation phase is not derivable from the code that reasoning produced. Every finding in it is
+implemented. Two things in it no longer describe the engine: the state table in §0 is the state
+at audit time, and the §5 example output predates the removal of entry/exit variants (spec §7.1),
+which changed both the example strategies and the trial count that the deflated Sharpe deflates
+by. The argument the example makes is unaffected.
+
 The question this document answers is not "is the code clean" — it is **"if a user optimizes a
 strategy with this and puts real money behind the output, what could make that decision wrong?"**
 

@@ -1,6 +1,6 @@
 """The backtest engine: holding rules, simulation, and metrics.
 
-vectorbt is imported only inside this package (see ``PLAN.md``), so the layers above it depend
+vectorbt is imported only inside this package (spec section 1.1), so the layers above it depend
 on the frozen value objects in :mod:`cracktrade.domain` rather than on a third-party portfolio
 object. :func:`run_backtest` is the boundary.
 """

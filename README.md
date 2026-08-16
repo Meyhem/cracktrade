@@ -159,7 +159,7 @@ before anything is considered done.
 
 `docs/ENGINE_SPEC.md` is the normative contract — behaviour is specified there first and the
 code follows. `docs/AUDIT.md` records the financial and technical review that produced the
-validation phase, including the mistakes found along the way. `PLAN.md` tracks phase status.
+validation phase, including the mistakes found along the way.
 
 ## Status
 

@@ -84,7 +84,7 @@ the future API will use.
 | 5.5 | Correctness patch: definedness mask (D15), fill provenance, UTC cutoff, float equality | done |
 | 6 | Backtest engine | done |
 | 7 | Metrics, benchmark, result models | done |
-| 8 | Optimizer | |
+| 8 | Optimizer | done |
 | 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | |
 | 9 | CLI output polish | |
 

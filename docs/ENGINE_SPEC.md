@@ -1081,7 +1081,22 @@ scope for this pass.
 Evaluation budget ≈ `(epochs + 1) × popsize × dim`.
 
 **[FIX] Reproducibility.** Legacy passed no `seed` while using `workers=-1` (§10 D12), so no run was
-reproducible. Target: `seed` is always passed. With `updating='deferred'` the population is evaluated
+reproducible. Target: `seed` is always passed.
+
+**[NEW] The fitness function is an object, not a closure.** A closure cannot be pickled, so
+`workers=-1` fails outright with *"Can't get local object"* — which means the worker-independence
+assertion below could not even run against a closure-based implementation. It is a module-level
+class with `__call__`.
+
+**[NEW] Failure tallies are not exact under parallel search.** Child processes mutate *copies* of
+the fitness object, so its counters do not return. `evaluations` is taken from scipy's own `nfev`,
+which is authoritative regardless; `failures` and `infeasible` are marked `counts_exact = False`
+and the report says they are unavailable rather than printing a confident zero for a run that may
+have failed throughout.
+
+**[NEW] The test window is sized for the widest candidate**, not the baseline. Bounds are ±50%, so a
+200-bar window can grow to 300; sizing the warm-up prefix from the baseline would let such a
+candidate have its signals suppressed *inside* the scored region, quietly losing test bars. With `updating='deferred'` the population is evaluated
 synchronously per generation, so results are identical regardless of worker count — this is asserted
 by a test running the same optimization at `workers=1` and `workers=-1` and comparing the best
 parameter vector exactly.

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from cracktrade.backtest.portfolio import YEAR_FREQ
+from cracktrade.backtest.portfolio import FREQ, YEAR_FREQ
 from cracktrade.domain import Metrics, Trade, YearReturn
 from cracktrade.settings import TRADING_DAYS_PER_YEAR
 
@@ -49,10 +49,23 @@ def per_period_risk_free(annual_rate: float) -> float:
     return float((1.0 + annual_rate) ** (1.0 / TRADING_DAYS_PER_YEAR) - 1.0)
 
 
-def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float) -> Metrics:
-    """Compute the full metric set for one simulated portfolio."""
+def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float, offset: int = 0) -> Metrics:
+    """Compute the full metric set for one simulated portfolio.
+
+    ``offset`` discards the first ``offset`` bars from every statistic. It exists for the
+    optimizer's test window, whose indicators must warm up on *train* bars: the simulation runs
+    over the warm-up prefix plus the test region, and the prefix is then excluded from scoring.
+    Leaving it in would count bars on which nothing could trade -- deflating the annualised
+    return and, worse, damping the volatility that Sharpe divides by.
+
+    Metrics come from the returns accessor rather than the ``Portfolio`` methods so that offset
+    and non-offset runs share one code path. At ``offset=0`` the two agree exactly, which is
+    asserted by a test.
+    """
     rf = per_period_risk_free(risk_free_rate)
     records = portfolio.trades.records
+    if offset:
+        records = records[records["entry_idx"] >= offset]
     closed = records[records["status"] == _CLOSED]
 
     pnl = closed["pnl"].to_numpy() if not closed.empty else np.zeros(0)
@@ -60,7 +73,8 @@ def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float) -> Metri
     losses = float(-pnl[pnl < 0].sum()) if pnl.size else 0.0
     holding = (closed["exit_idx"] - closed["entry_idx"]).to_numpy() if not closed.empty else None
 
-    returns = portfolio.returns()
+    returns = portfolio.returns().iloc[offset:]
+    accessor = returns.vbt.returns(freq=FREQ, year_freq=YEAR_FREQ)
 
     return Metrics(
         total_trades=len(closed),
@@ -68,13 +82,13 @@ def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float) -> Metri
         profit_factor=_profit_factor(gains, losses),
         total_pnl=float(pnl.sum()) if pnl.size else 0.0,
         final_equity=_scalar(portfolio.final_value()),
-        total_return_pct=100.0 * _scalar(portfolio.total_return()),
-        cagr_pct=100.0 * _scalar(portfolio.annualized_return(year_freq=YEAR_FREQ), default=0.0),
-        max_drawdown_pct=100.0 * _scalar(portfolio.max_drawdown(), default=0.0),
-        sharpe_ratio=_scalar(portfolio.sharpe_ratio(risk_free=rf, year_freq=YEAR_FREQ)),
-        sortino_ratio=_scalar(portfolio.sortino_ratio(required_return=rf, year_freq=YEAR_FREQ)),
-        calmar_ratio=_scalar(portfolio.calmar_ratio(year_freq=YEAR_FREQ)),
-        exposure_pct=100.0 * float(portfolio.position_mask().to_numpy().mean()),
+        total_return_pct=100.0 * _scalar(accessor.total()),
+        cagr_pct=100.0 * _scalar(accessor.annualized(), default=0.0),
+        max_drawdown_pct=100.0 * _scalar(accessor.max_drawdown(), default=0.0),
+        sharpe_ratio=_scalar(accessor.sharpe_ratio(risk_free=rf)),
+        sortino_ratio=_scalar(accessor.sortino_ratio(required_return=rf)),
+        calmar_ratio=_scalar(accessor.calmar_ratio()),
+        exposure_pct=100.0 * float(portfolio.position_mask().to_numpy()[offset:].mean()),
         avg_holding_days=float(holding.mean()) if holding is not None and holding.size else 0.0,
         best_trade_pnl=float(pnl.max()) if pnl.size else 0.0,
         worst_trade_pnl=float(pnl.min()) if pnl.size else 0.0,

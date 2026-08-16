@@ -14,10 +14,13 @@ from dataclasses import dataclass
 from datetime import date
 
 __all__ = [
+    "MIN_TRADES_TO_JUDGE",
     "BacktestResult",
     "BenchmarkComparison",
     "DataVintage",
     "Metrics",
+    "OptimizationResult",
+    "ParameterChange",
     "Trade",
     "VariantResult",
     "YearReturn",
@@ -184,3 +187,91 @@ class BacktestResult:
         a selection step and it inflates the winner; spec section 12 is what quantifies it.
         """
         return max(self.variants, key=lambda variant: variant.metrics.total_pnl)
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterChange:
+    """One parameter the search moved, and the range it was allowed to move within."""
+
+    path: str
+    old_value: float
+    new_value: float
+    low: float
+    high: float
+
+    @property
+    def moved(self) -> bool:
+        """Whether the search settled somewhere other than the configured value."""
+        return self.new_value != self.old_value
+
+    @property
+    def at_bound(self) -> bool:
+        """Whether the optimum sits on the edge of its search range.
+
+        A parameter pinned to its bound usually means the true optimum lies outside it, so the
+        range was the binding constraint rather than the data. Worth widening and re-running.
+        """
+        return self.new_value in (self.low, self.high)
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizationResult:
+    """Everything one optimization run produced.
+
+    ``test_metrics`` are the only out-of-sample numbers. ``train_metrics`` are reported beside
+    them deliberately: the gap between the two is the cheapest overfitting diagnostic there is,
+    and a report that showed only the flattering half would be misleading by omission.
+    """
+
+    strategy_name: str
+    ticker: str
+    objective: str
+    optimized_yaml: str
+    entry_name: str
+    exit_name: str
+    test_metrics: Metrics
+    train_metrics: Metrics
+    baseline_test_metrics: Metrics
+    changes: tuple[ParameterChange, ...]
+    trades: tuple[Trade, ...]
+    train_bars: int
+    test_bars: int
+    evaluations: int
+    failures: int
+    infeasible: int
+    counts_exact: bool
+    trials: int
+    budget: int
+    seed: int
+    elapsed_seconds: float
+    convergence_message: str
+    most_common_failure: str | None
+
+    @property
+    def label(self) -> str:
+        """The surviving entry/exit pair."""
+        return f"{self.entry_name} / {self.exit_name}"
+
+    @property
+    def improvement_pct(self) -> float:
+        """Out-of-sample gain over the unoptimized configuration.
+
+        Both sides are measured on the *test* window, so this compares like with like. Legacy
+        compared an in-sample optimized figure against an in-sample baseline, which was at least
+        consistent but inflated both.
+        """
+        return self.test_metrics.total_return_pct - self.baseline_test_metrics.total_return_pct
+
+    @property
+    def overfitting_gap_pct(self) -> float:
+        """How much better the strategy looked in-sample than out.
+
+        A large positive gap is the signature of a curve fit. It is not proof of one -- windows
+        differ -- but it is the first thing to look at.
+        """
+        return self.train_metrics.cagr_pct - self.test_metrics.cagr_pct
+
+    @property
+    def parameters_at_bound(self) -> tuple[ParameterChange, ...]:
+        """Parameters whose optimum sits on the edge of its search range."""
+        return tuple(change for change in self.changes if change.at_bound)

@@ -16,11 +16,22 @@ from rich.console import Console
 from rich.table import Table
 
 if TYPE_CHECKING:
-    from cracktrade.domain import BacktestResult, Metrics, VariantResult
+    from cracktrade.domain import (
+        BacktestResult,
+        Metrics,
+        OptimizationResult,
+        VariantResult,
+    )
 
 #: Below this, a signal is undefined often enough that the strategy under test is not the one
 #: its author believes they wrote.
 _DEFINEDNESS_WARNING = 95.0
+
+#: In-sample CAGR exceeding out-of-sample by more than this many points reads as a curve fit.
+_OVERFIT_GAP_WARNING = 10.0
+
+#: Share of failed candidates above which the search was not really searching.
+_FAILURE_WARNING_PCT = 20.0
 
 
 def render_result(result: BacktestResult, console: Console) -> None:
@@ -183,3 +194,113 @@ def _render_vintage(result: BacktestResult, console: Console) -> None:
 def _ratio(value: float) -> str:
     """Format a ratio that may legitimately be infinite."""
     return "∞" if value == float("inf") else f"{value:.2f}"
+
+
+def render_optimization(result: OptimizationResult, console: Console) -> None:
+    """Print an optimization report.
+
+    Out-of-sample numbers lead. The in-sample figures appear beside them rather than instead of
+    them, because the gap between the two is the cheapest overfitting diagnostic there is and a
+    report showing only the flattering half would mislead by omission.
+    """
+    console.print(
+        f"[bold]{result.strategy_name}[/bold] on [bold]{result.ticker}[/bold] — "
+        f"optimized on {result.train_bars} bars, reported on {result.test_bars} unseen bars"
+    )
+    console.print(f"  surviving variant [bold]{result.label}[/bold], objective {result.objective}")
+
+    improvement = result.improvement_pct
+    colour = "green" if improvement > 0 else "red"
+    console.print(
+        f"  out-of-sample return [bold]{result.test_metrics.total_return_pct:+.2f}%[/bold] "
+        f"vs [bold]{result.baseline_test_metrics.total_return_pct:+.2f}%[/bold] unoptimized "
+        f"([{colour}]{improvement:+.2f} pp[/{colour}])"
+    )
+
+    _render_optimizer_warnings(result, console)
+    console.print()
+
+    table = Table(title="Out-of-sample vs in-sample", title_justify="left", header_style="bold")
+    table.add_column("")
+    table.add_column("Test (unseen)", justify="right")
+    table.add_column("Train (fitted)", justify="right")
+    test, train = result.test_metrics, result.train_metrics
+    for label, left, right in [
+        ("Total return", f"{test.total_return_pct:+.2f}%", f"{train.total_return_pct:+.2f}%"),
+        ("CAGR", f"{test.cagr_pct:+.2f}%", f"{train.cagr_pct:+.2f}%"),
+        ("Max drawdown", f"{test.max_drawdown_pct:.2f}%", f"{train.max_drawdown_pct:.2f}%"),
+        ("Sharpe", f"{test.sharpe_ratio:.2f}", f"{train.sharpe_ratio:.2f}"),
+        ("Calmar", f"{test.calmar_ratio:.2f}", f"{train.calmar_ratio:.2f}"),
+        ("Trades", str(test.total_trades), str(train.total_trades)),
+    ]:
+        table.add_row(label, left, right)
+    console.print(table)
+
+    _render_changes(result, console)
+    _render_diagnostics(result, console)
+
+
+def _render_optimizer_warnings(result: OptimizationResult, console: Console) -> None:
+    if not result.test_metrics.has_enough_trades_to_judge:
+        console.print(
+            f"  [yellow]! only {result.test_metrics.total_trades} out-of-sample trade(s) — "
+            f"too few to support a conclusion[/yellow]"
+        )
+    if result.overfitting_gap_pct > _OVERFIT_GAP_WARNING:
+        console.print(
+            f"  [yellow]! in-sample CAGR exceeds out-of-sample by "
+            f"{result.overfitting_gap_pct:.1f} pp — the hallmark of a curve fit[/yellow]"
+        )
+    for change in result.parameters_at_bound:
+        console.print(
+            f"  [yellow]! {change.path} settled on its search bound "
+            f"({change.new_value:g}); the range was the binding constraint, not the data"
+            f"[/yellow]"
+        )
+    if result.counts_exact and result.failures and result.evaluations:
+        share = 100.0 * result.failures / result.evaluations
+        if share > _FAILURE_WARNING_PCT:
+            console.print(
+                f"  [yellow]! {share:.0f}% of candidates failed "
+                f"(most often {result.most_common_failure}); the search explored far less than "
+                f"it appears to[/yellow]"
+            )
+
+
+def _render_changes(result: OptimizationResult, console: Console) -> None:
+    if not result.changes:
+        return
+    table = Table(title="Parameters", title_justify="left", header_style="bold")
+    table.add_column("Path")
+    table.add_column("From", justify="right")
+    table.add_column("To", justify="right")
+    table.add_column("Range", justify="right")
+    for change in result.changes:
+        arrow = f"{change.new_value:g}"
+        if change.at_bound:
+            arrow = f"[yellow]{arrow}[/yellow]"
+        table.add_row(
+            change.path,
+            f"{change.old_value:g}",
+            arrow,
+            f"[{change.low:g}, {change.high:g}]",
+        )
+    console.print(table)
+
+
+def _render_diagnostics(result: OptimizationResult, console: Console) -> None:
+    console.print()
+    counts = (
+        f"{result.failures} failed, {result.infeasible} infeasible"
+        if result.counts_exact
+        else "failure counts unavailable (parallel run)"
+    )
+    console.print(
+        f"[dim]{result.evaluations} evaluations ({counts}), {result.trials} configurations "
+        f"scored in total, seed {result.seed}, {result.elapsed_seconds:.1f}s — "
+        f"{result.convergence_message}[/dim]"
+    )
+    console.print(
+        "[dim]One split, evaluated once. The maximum over many trials is inflated even with no "
+        "edge; walk-forward folds and a deflated Sharpe land in the next phase.[/dim]"
+    )

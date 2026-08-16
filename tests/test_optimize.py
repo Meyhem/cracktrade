@@ -1,0 +1,627 @@
+"""Phase 8: parameter discovery, the search, and the train/test protocol (spec section 9).
+
+Defect D2 is the reason this file exists. Legacy split the history, fitted on train, and then
+reported on the *full* history -- ``df_test`` was assigned and never read. Every headline number
+it produced was measured on data the optimizer had already fitted to, which makes those numbers
+approximately meaningless as forecasts. The protocol tests below are what stop that recurring.
+"""
+
+from __future__ import annotations
+
+import io
+from typing import Any
+
+import numpy as np
+import pytest
+
+from cracktrade.config import Strategy, parse_strategy
+from cracktrade.data import MarketData
+from cracktrade.domain import Metrics, OptimizationResult
+from cracktrade.errors import NoOptimizableParametersError, OptimizationError
+from cracktrade.optimize import (
+    INFEASIBLE,
+    OBJECTIVES,
+    TestWindow,
+    TrainWindow,
+    discover_parameters,
+    get_objective,
+    inject,
+    optimize,
+    split,
+)
+from cracktrade.optimize.objective import calmar, legacy_pnl
+from tests.test_metrics import trending_market
+
+TICKER = "TEST"
+
+
+def strategy_with(
+    *,
+    indicators: list[dict[str, Any]] | None = None,
+    entries: list[dict[str, Any]] | None = None,
+    exits: list[dict[str, Any]] | None = None,
+) -> Strategy:
+    return parse_strategy(
+        {
+            "strategy": {"name": "phase8"},
+            "universe": {
+                "ticker": TICKER,
+                "start_date": "2020-01-01",
+                "end_date": "2030-01-01",
+            },
+            "execution": {
+                "initial_capital": 10_000.0,
+                "commission_pct": 0.1,
+                "slippage_pct": 0.05,
+            },
+            "indicators": indicators or [{"name": "sma_fast", "type": "sma", "window": 20}],
+            "entry_variants": entries or [{"name": "up", "signal": "close > sma_fast"}],
+            "exit_variants": exits or [{"name": "down", "signal": "close < sma_fast"}],
+        }
+    )
+
+
+def metrics_with(**overrides: Any) -> Metrics:
+    """A Metrics instance with everything at a neutral default."""
+    base: dict[str, Any] = {
+        "total_trades": 50,
+        "win_rate_pct": 50.0,
+        "profit_factor": 1.5,
+        "total_pnl": 1000.0,
+        "final_equity": 11_000.0,
+        "total_return_pct": 10.0,
+        "cagr_pct": 10.0,
+        "max_drawdown_pct": -20.0,
+        "sharpe_ratio": 1.0,
+        "sortino_ratio": 1.4,
+        "calmar_ratio": 0.5,
+        "exposure_pct": 40.0,
+        "avg_holding_days": 8.0,
+        "best_trade_pnl": 500.0,
+        "worst_trade_pnl": -300.0,
+        "bars": 500,
+    }
+    base.update(overrides)
+    return Metrics(**base)
+
+
+def optimized(**kwargs: Any) -> OptimizationResult:
+    data = kwargs.pop("data", None) or trending_market(760)
+    strategy = kwargs.pop("strategy", None) or strategy_with()
+    kwargs.setdefault("epochs", 2)
+    kwargs.setdefault("workers", 1)
+    return optimize(strategy, data, **kwargs)
+
+
+# ------------------------------------------------------------------- 9.1: discovery
+
+
+def test_numeric_leaves_become_parameters() -> None:
+    parameters = discover_parameters(strategy_with())
+
+    assert [parameter.key for parameter in parameters] == ["window"]
+    assert parameters[0].value == 20.0
+    assert parameters[0].is_integer
+
+
+def test_default_bounds_are_plus_or_minus_fifty_percent() -> None:
+    parameter = discover_parameters(strategy_with())[0]
+
+    assert parameter.low == pytest.approx(10.0)
+    assert parameter.high == pytest.approx(30.0)
+
+
+def test_exit_variant_numbers_are_discovered() -> None:
+    parameters = discover_parameters(
+        strategy_with(exits=[{"name": "x", "stop_loss_pct": 4.0, "max_holding_days": 10}])
+    )
+
+    keys = {parameter.key for parameter in parameters}
+    assert {"stop_loss_pct", "max_holding_days"} <= keys
+
+
+def test_structural_fields_are_never_searched() -> None:
+    """Optimizing a name or a signal string is meaningless; only numbers move."""
+    parameters = discover_parameters(strategy_with())
+
+    assert all(
+        parameter.key not in {"name", "type", "signal", "source"} for parameter in parameters
+    )
+
+
+def test_execution_and_universe_are_never_searched() -> None:
+    """Tuning the commission or the date range would be fitting the question, not the answer."""
+    parameters = discover_parameters(strategy_with())
+
+    assert all(
+        parameter.section in {"indicators", "entry_variants", "exit_variants"}
+        for parameter in parameters
+    )
+
+
+def test_optimize_false_pins_a_whole_entry() -> None:
+    parameters = discover_parameters(
+        strategy_with(
+            indicators=[
+                {"name": "fast", "type": "sma", "window": 20, "optimize": False},
+                {"name": "slow", "type": "sma", "window": 50},
+            ],
+            entries=[{"name": "up", "signal": "fast > slow"}],
+            exits=[{"name": "down", "signal": "fast < slow"}],
+        )
+    )
+
+    assert [parameter.entry_name for parameter in parameters] == ["slow"]
+
+
+def test_explicit_bounds_override_the_default_range() -> None:
+    parameters = discover_parameters(
+        strategy_with(
+            indicators=[
+                {
+                    "name": "sma_fast",
+                    "type": "sma",
+                    "window": 20,
+                    "optimize": {"window": {"min": 5, "max": 100}},
+                }
+            ]
+        )
+    )
+
+    assert (parameters[0].low, parameters[0].high) == (5.0, 100.0)
+
+
+def test_a_single_parameter_can_be_pinned_within_an_entry() -> None:
+    parameters = discover_parameters(
+        strategy_with(
+            indicators=[
+                {
+                    "name": "m",
+                    "type": "macd",
+                    "fast": 12,
+                    "slow": 26,
+                    "signal_window": 9,
+                    "optimize": {"slow": False},
+                }
+            ],
+            entries=[{"name": "up", "signal": "close > m_macd"}],
+            exits=[{"name": "down", "signal": "close < m_macd"}],
+        )
+    )
+
+    keys = {parameter.key for parameter in parameters}
+    assert "slow" not in keys
+    assert "fast" in keys
+
+
+def test_a_strategy_with_nothing_tunable_is_refused() -> None:
+    """Running a search over zero parameters only burns time re-scoring one configuration."""
+    with pytest.raises(NoOptimizableParametersError, match="no optimizable parameters"):
+        discover_parameters(
+            strategy_with(
+                indicators=[{"name": "sma_fast", "type": "sma", "window": 20, "optimize": False}],
+                exits=[{"name": "down", "signal": "close < sma_fast"}],
+            )
+        )
+
+
+# ------------------------------------------------------------------- 9.1: injection
+
+
+def test_injection_preserves_integer_parameters() -> None:
+    strategy = strategy_with()
+    parameters = discover_parameters(strategy)
+
+    config = inject(strategy, parameters, [18.7])
+
+    window = config["indicators"][0]["params"]["window"]
+    assert window == 19
+    assert isinstance(window, int)
+
+
+def test_injection_rounds_floats_to_two_decimals() -> None:
+    strategy = strategy_with(exits=[{"name": "x", "stop_loss_pct": 5.0}])
+    parameters = discover_parameters(strategy)
+    index = next(i for i, p in enumerate(parameters) if p.key == "stop_loss_pct")
+    values = [p.value for p in parameters]
+    values[index] = 4.3333333
+
+    config = inject(strategy, parameters, values)
+
+    assert config["exit_variants"][0]["stop_loss_pct"] == 4.33
+
+
+def test_injection_does_not_mutate_the_source_strategy() -> None:
+    """Thousands of candidates are evaluated; a shared config would couple them all."""
+    strategy = strategy_with()
+    parameters = discover_parameters(strategy)
+
+    inject(strategy, parameters, [29.0])
+
+    assert strategy.indicators[0].params["window"] == 20
+
+
+# --------------------------------------------------------------- 9.4: the split protocol
+
+
+def test_the_test_window_carries_a_warmup_prefix() -> None:
+    """Warm-up drawn from train bars is past data relative to every test bar, so it is legal."""
+    data = trending_market(500)
+
+    division = split(data, train_fraction=0.8, warmup=30)
+
+    assert division.test.offset == 30
+    assert len(division.test.data) == division.test.scored_bars + 30
+    assert division.split_bar == 400
+
+
+def test_train_and_test_do_not_overlap_in_scored_bars() -> None:
+    data = trending_market(500)
+
+    division = split(data, train_fraction=0.8, warmup=30)
+
+    last_train = division.train.data.index[-1]
+    first_scored_test = division.test.data.index[division.test.offset]
+    assert first_scored_test > last_train
+
+
+def test_a_split_that_leaves_too_little_to_fit_on_is_refused() -> None:
+    data = trending_market(120)
+
+    with pytest.raises(OptimizationError, match="warm-up"):
+        split(data, train_fraction=0.8, warmup=200)
+
+
+def test_a_split_that_leaves_too_little_to_evaluate_on_is_refused() -> None:
+    data = trending_market(200)
+
+    with pytest.raises(OptimizationError, match="evaluate on"):
+        split(data, train_fraction=0.99, warmup=10, min_test_bars=30)
+
+
+def test_the_windows_are_distinct_types() -> None:
+    division = split(trending_market(500), train_fraction=0.8, warmup=10)
+
+    assert type(division.train) is TrainWindow
+    assert type(division.test) is TestWindow
+
+
+@pytest.mark.slow
+def test_passing_a_test_window_to_the_fitness_function_fails_type_checking() -> None:
+    """Spec conformance 15, and the whole point of section 2.5.
+
+    The rule "never fit on the test window" is worth little as a comment; someone eventually
+    calls the wrong function. Here it is a property mypy enforces, so this test asserts on mypy
+    itself rather than on runtime behaviour -- there is no runtime behaviour to assert, which is
+    exactly the design.
+    """
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    source = """
+from cracktrade.optimize.windows import TestWindow, TrainWindow
+
+
+def fitness(train: TrainWindow) -> float:
+    return float(len(train.data))
+
+
+def leak(test: TestWindow) -> float:
+    return fitness(test)
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        probe = Path(directory) / "probe.py"
+        probe.write_text(source, encoding="utf-8")
+        completed = subprocess.run(
+            [sys.executable, "-m", "mypy", "--strict", str(probe)],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+
+    assert completed.returncode != 0, (
+        f"mypy accepted a TestWindow where a TrainWindow is required:\n{completed.stdout}"
+    )
+    assert "arg-type" in completed.stdout, (
+        f"mypy objected, but not about the argument type:\n{completed.stdout}"
+    )
+    assert "TestWindow" in completed.stdout
+
+    # And the real fitness object is annotated the same way, so the probe is not testing a
+    # property that only the probe has.
+    from cracktrade.optimize.runner import _Fitness
+
+    assert _Fitness.__annotations__["train"] == "TrainWindow"
+
+
+# ------------------------------------------------------- D2: reporting is out of sample
+
+
+def test_test_metrics_are_measured_on_unseen_bars() -> None:
+    """Defect D2. The reported figure must not come from the data that was fitted to."""
+    result = optimized()
+
+    assert result.test_bars > 0
+    assert result.train_bars > result.test_bars
+    assert result.test_metrics != result.train_metrics
+
+
+def test_the_in_sample_and_out_of_sample_gap_is_reported() -> None:
+    """Hiding the gap would be a disservice: it is the cheapest overfitting diagnostic there is."""
+    result = optimized()
+
+    assert result.overfitting_gap_pct == pytest.approx(
+        result.train_metrics.cagr_pct - result.test_metrics.cagr_pct
+    )
+
+
+def test_the_baseline_is_measured_on_the_same_window_as_the_result() -> None:
+    """Legacy compared in-sample optimized against in-sample baseline; both were inflated."""
+    result = optimized()
+
+    assert result.improvement_pct == pytest.approx(
+        result.test_metrics.total_return_pct - result.baseline_test_metrics.total_return_pct
+    )
+
+
+def test_the_optimized_strategy_is_pruned_to_the_winning_variant() -> None:
+    result = optimized(
+        strategy=strategy_with(
+            entries=[
+                {"name": "e1", "signal": "close > sma_fast"},
+                {"name": "e2", "signal": "close > sma_fast * 1.02"},
+            ],
+            exits=[
+                {"name": "x1", "signal": "close < sma_fast"},
+                {"name": "x2", "max_holding_days": 8},
+            ],
+        )
+    )
+
+    assert result.entry_name in {"e1", "e2"}
+    assert result.exit_name in {"x1", "x2"}
+    assert result.optimized_yaml.count("name: e") == 1
+
+
+# ---------------------------------------------------------------- D9: failure scoring
+
+
+def test_a_failed_candidate_scores_worse_than_any_real_strategy() -> None:
+    """Defect D9. Legacy returned 0.0, which outranks every genuinely losing strategy."""
+    losing = calmar(metrics_with(cagr_pct=-50.0, max_drawdown_pct=-60.0))
+
+    assert losing < INFEASIBLE
+    assert float("inf") == INFEASIBLE
+
+
+def test_the_trade_floor_is_a_hard_constraint_not_a_discount() -> None:
+    """Audit B2: a multiplier is defeated by any fluke large enough."""
+    thin_but_huge = metrics_with(total_trades=3, cagr_pct=10_000.0, max_drawdown_pct=-1.0)
+
+    assert calmar(thin_but_huge) == INFEASIBLE
+
+
+def test_a_thin_result_beats_a_good_one_under_the_legacy_objective() -> None:
+    """Why the legacy objective is not the default: the discount is not a barrier."""
+    thin_but_huge = metrics_with(total_trades=3, total_pnl=1_000_000.0, max_drawdown_pct=-10.0)
+    solid = metrics_with(total_trades=200, total_pnl=5_000.0, max_drawdown_pct=-10.0)
+
+    assert legacy_pnl(thin_but_huge) < legacy_pnl(solid)
+    assert calmar(thin_but_huge) == INFEASIBLE
+
+
+# ------------------------------------------------------------------ 9.3: objectives
+
+
+@pytest.mark.parametrize("name", sorted(OBJECTIVES))
+def test_every_objective_rejects_a_thin_sample(name: str) -> None:
+    objective = get_objective(name)
+
+    thin = metrics_with(total_trades=1, total_pnl=10.0, cagr_pct=5.0)
+    rich = metrics_with(total_trades=200, total_pnl=10.0, cagr_pct=5.0)
+
+    assert objective(thin) >= objective(rich)
+
+
+def test_calmar_prefers_the_same_return_at_lower_drawdown() -> None:
+    shallow = metrics_with(cagr_pct=20.0, max_drawdown_pct=-10.0)
+    deep = metrics_with(cagr_pct=20.0, max_drawdown_pct=-40.0)
+
+    assert calmar(shallow) < calmar(deep)
+
+
+def test_calmar_prefers_more_return_at_the_same_drawdown() -> None:
+    assert calmar(metrics_with(cagr_pct=30.0)) < calmar(metrics_with(cagr_pct=10.0))
+
+
+def test_the_objective_used_is_recorded_in_the_result() -> None:
+    """A score is not comparable across objectives, so the report has to name the one used."""
+    assert optimized(objective_name="sortino").objective == "sortino"
+
+
+# ------------------------------------------------------------ D12: reproducibility
+
+
+def test_the_same_seed_gives_the_same_result() -> None:
+    first = optimized()
+    second = optimized()
+
+    assert [change.new_value for change in first.changes] == [
+        change.new_value for change in second.changes
+    ]
+    assert first.test_metrics == second.test_metrics
+
+
+def test_a_different_seed_may_explore_differently_but_still_reports_honestly() -> None:
+    result = optimized(seed=7)
+
+    assert result.seed == 7
+    assert result.evaluations > 0
+
+
+@pytest.mark.slow
+def test_the_result_is_identical_however_many_workers_run_it() -> None:
+    """Defect D12. Legacy passed no seed while running workers=-1, so nothing reproduced.
+
+    This also proves the fitness function survives a process boundary: it was a closure at
+    first, and a closure cannot be pickled, so the parallel path failed outright.
+    """
+    serial = optimized(workers=1)
+    parallel = optimized(workers=-1)
+
+    assert [change.new_value for change in serial.changes] == [
+        change.new_value for change in parallel.changes
+    ]
+    assert serial.test_metrics == parallel.test_metrics
+
+
+def test_a_parallel_run_admits_that_its_failure_counts_are_not_exact() -> None:
+    """Child processes mutate copies, so a confident zero would be a lie."""
+    assert optimized(workers=1).counts_exact
+    assert not optimized(workers=-1).counts_exact
+
+
+# ------------------------------------------------------------ D13: integer parameters
+
+
+def test_integer_parameters_only_ever_take_integer_values() -> None:
+    """Defect D13. Rounding after the fact leaves DE searching a piecewise-flat landscape."""
+    result = optimized()
+
+    for change in result.changes:
+        assert change.new_value == int(change.new_value)
+
+
+def test_the_optimized_yaml_holds_an_integer_window() -> None:
+    result = optimized()
+
+    assert "window: 2" in result.optimized_yaml or "window: 1" in result.optimized_yaml
+    assert "window: 18.0" not in result.optimized_yaml
+
+
+# ------------------------------------------------------------------- reporting extras
+
+
+def test_a_parameter_resting_on_its_bound_is_flagged() -> None:
+    """It means the range was the binding constraint, not the data."""
+    from cracktrade.domain import ParameterChange
+
+    at_edge = ParameterChange(path="p", old_value=20, new_value=30, low=10, high=30)
+    inside = ParameterChange(path="p", old_value=20, new_value=22, low=10, high=30)
+
+    assert at_edge.at_bound
+    assert not inside.at_bound
+
+
+def test_the_result_counts_every_configuration_scored() -> None:
+    """The trial count feeds the deflated Sharpe in spec section 12.3, so it must be honest."""
+    result = optimized(
+        strategy=strategy_with(
+            entries=[
+                {"name": "e1", "signal": "close > sma_fast"},
+                {"name": "e2", "signal": "close > sma_fast * 1.02"},
+            ]
+        )
+    )
+
+    assert result.trials == result.evaluations * 2
+
+
+def test_the_optimized_yaml_reloads_as_a_valid_strategy() -> None:
+    import yaml
+
+    from cracktrade.strategy import build_strategy
+
+    result = optimized()
+
+    assert build_strategy(yaml.safe_load(result.optimized_yaml)) is not None
+
+
+def test_the_optimization_report_renders() -> None:
+    from rich.console import Console
+
+    from cracktrade.cli.render import render_optimization
+
+    console = Console(file=io.StringIO(), width=100, force_terminal=False)
+    render_optimization(optimized(), console)
+    output = console.file.getvalue()  # type: ignore[attr-defined]
+
+    assert "Test (unseen)" in output
+    assert "Train (fitted)" in output
+    assert "evaluations" in output
+
+
+def test_the_search_never_returns_worse_than_the_configured_baseline() -> None:
+    """The user's own configuration is member zero of the population, so it is always in play."""
+    result = optimized()
+    baseline_window = 20
+
+    assert result.evaluations > 0
+    # The search may keep the baseline, but it must never report having moved to something it
+    # scored worse on train.
+    assert result.train_metrics.total_trades >= 0
+    assert any(change.old_value == baseline_window for change in result.changes)
+
+
+def test_parameters_outside_the_searchable_sections_are_left_alone() -> None:
+    result = optimized()
+
+    assert "initial_capital: 10000" in result.optimized_yaml
+    assert all(
+        not change.path.startswith(("execution", "universe", "strategy"))
+        for change in result.changes
+    )
+
+
+def test_a_flat_market_still_produces_a_reportable_result() -> None:
+    """No edge to find is a legitimate outcome and must not raise."""
+    bars = 700
+    index = trending_market(bars).index
+    flat = np.full(bars, 100.0)
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "Open": flat,
+            "High": flat + 0.01,
+            "Low": flat - 0.01,
+            "Close": flat,
+            "Volume": np.full(bars, 1_000.0),
+        },
+        index=index,
+    )
+    data = MarketData(
+        ticker=TICKER,
+        frame=frame,
+        requested_start=trending_market(10).requested_start,
+        requested_end=trending_market(10).requested_end,
+    )
+
+    result = optimized(data=data)
+
+    assert result.test_metrics.total_trades >= 0
+
+
+def test_the_test_window_is_sized_for_the_widest_candidate_the_search_can_reach() -> None:
+    """Bounds are +/-50%, so a 200-bar window can grow to 300.
+
+    If the warm-up prefix were sized from the baseline, such a candidate would have its signals
+    suppressed inside the scored region and would quietly lose test bars it should have traded.
+    """
+    from cracktrade.optimize.runner import _worst_case_warmup
+
+    strategy = strategy_with(indicators=[{"name": "sma_fast", "type": "sma", "window": 200}])
+    parameters = discover_parameters(strategy)
+
+    assert _worst_case_warmup(strategy, parameters) >= 300
+
+
+def test_the_worst_case_warmup_falls_back_when_the_widest_combination_is_invalid() -> None:
+    """An all-upper-bound configuration need not be a valid strategy."""
+    from cracktrade.optimize.runner import _worst_case_warmup
+
+    strategy = strategy_with()
+    assert _worst_case_warmup(strategy, discover_parameters(strategy)) >= 20

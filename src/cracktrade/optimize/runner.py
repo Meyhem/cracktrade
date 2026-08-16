@@ -20,10 +20,16 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from cracktrade.backtest import extract_metrics, extract_trades, run_simulation
+from cracktrade.backtest import (
+    buy_and_hold_portfolio,
+    extract_metrics,
+    extract_trades,
+    run_simulation,
+)
+from cracktrade.backtest.series import capture
 from cracktrade.config import dump_strategy
 from cracktrade.control import NO_CONTROL, RunControl
-from cracktrade.domain import Metrics, OptimizationResult, ParameterChange
+from cracktrade.domain import Metrics, OptimizationResult, ParameterChange, RunSeries
 from cracktrade.errors import CracktradeError
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import Parameter, discover_parameters, inject
@@ -63,6 +69,7 @@ def optimize(
     min_test_bars: int = 30,
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
+    capture_series: bool = False,
 ) -> OptimizationResult:
     """Search ``strategy``'s parameters on train data and report on unseen test data.
 
@@ -85,6 +92,7 @@ def optimize(
         objective_name=objective_name,
         on_generation=on_generation,
         control=control,
+        capture_series=capture_series,
     ).result
 
 
@@ -120,6 +128,7 @@ def optimize_split(
     objective_name: str = DEFAULT_OBJECTIVE,
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
+    capture_series: bool = False,
 ) -> SplitOutcome:
     """Run the full protocol over one already-computed train/test division.
 
@@ -165,6 +174,7 @@ def optimize_split(
     _warn_if_unhealthy(diagnostics)
 
     test_metrics, test_returns = _evaluate(optimized, division.test)
+    series = _capture_test_series(optimized, division.test) if capture_series else None
 
     result = OptimizationResult(
         strategy_name=strategy.strategy.name,
@@ -188,6 +198,7 @@ def optimize_split(
         elapsed_seconds=diagnostics.elapsed_seconds,
         convergence_message=diagnostics.message,
         most_common_failure=diagnostics.most_common_failure,
+        series=series,
     )
 
     return SplitOutcome(
@@ -365,3 +376,22 @@ def _warn_if_unhealthy(diagnostics: SearchDiagnostics) -> None:
             100 * diagnostics.failure_fraction,
             diagnostics.most_common_failure,
         )
+
+
+def _capture_test_series(strategy: Strategy, test: TestWindow) -> RunSeries:
+    """Chart series for the out-of-sample window, and only for it.
+
+    An optimization run's charts must describe the window the search never saw. Capturing over
+    the train window too would draw a curve whose early half was fitted, presented beside
+    numbers that were not.
+    """
+    simulation = run_simulation(strategy, test.data)
+    benchmark = buy_and_hold_portfolio(
+        test.data, strategy.execution, strategy.position_sizing, start_bar=test.offset
+    )
+    return capture(
+        portfolio=simulation.portfolio,
+        benchmark=benchmark,
+        data=test.data,
+        offset=test.offset,
+    )

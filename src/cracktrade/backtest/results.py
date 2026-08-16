@@ -15,6 +15,7 @@ import pandas as pd
 from cracktrade.backtest.benchmark import buy_and_hold_portfolio, compare
 from cracktrade.backtest.metrics import extract_metrics, extract_trades
 from cracktrade.backtest.runner import run_simulation
+from cracktrade.backtest.series import capture
 from cracktrade.domain import BacktestResult, DataVintage, Metrics
 from cracktrade.log import get_logger
 
@@ -25,8 +26,17 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def run_backtest(strategy: Strategy, data: MarketData, *, seed: int = 0) -> BacktestResult:
+def run_backtest(
+    strategy: Strategy,
+    data: MarketData,
+    *,
+    seed: int = 0,
+    capture_series: bool = False,
+) -> BacktestResult:
     """Simulate ``strategy`` over ``data`` and report it.
+
+    ``capture_series`` additionally records the per-bar series a chart is drawn from. Off by
+    default: the CLI prints numbers and would only pay to build curves nobody asked for.
 
     Raises:
         BacktestError: the history is not daily bars.
@@ -68,6 +78,11 @@ def run_backtest(strategy: Strategy, data: MarketData, *, seed: int = 0) -> Back
         ),
         risk_free_rate=risk_free,
         warmup_bars=warmup,
+        series=(
+            capture(portfolio=simulation.portfolio, benchmark=benchmark_portfolio, data=data)
+            if capture_series
+            else None
+        ),
     )
 
     _log_verdict(result, benchmark_metrics)

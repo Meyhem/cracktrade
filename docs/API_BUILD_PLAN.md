@@ -236,7 +236,15 @@ produced the right answer and the test expectation was what needed correcting.
 - Done when: every repo method has a `db` test; mutation-rejection tests prove the taxonomy
   mapping (not just that Postgres refused).
 
-### Phase 4 — Engine extensions (library work, spec §-updates in the same commits)
+### Phase 4 — Engine extensions — **DONE**
+
+Landed across three commits (checks/catalogue/warnings, control hooks, series). Two findings.
+The dynamic-evaluation guard and then the `.shift` guard both caught the new code, and both
+were right to: the fix for the second was to route the rolling-return window through
+`causal_shift`, the engine's single alignment path, so a forward-looking chart window is now
+unexpressible rather than merely discouraged. And `walk_forward` deliberately captures **per
+fold with no combined curve** — each fold re-optimizes, so splicing them would draw one
+strategy that was never traded.
 
 Goal: everything API.md §9 needs from the library, plus the two run-control hooks D-2/D-9
 imply. No HTTP code in this phase; the library stays independently testable.

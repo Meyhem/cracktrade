@@ -61,6 +61,7 @@ def walk_forward(
     train_fraction: float = 0.5,
     min_test_bars: int = 30,
     control: RunControl = NO_CONTROL,
+    capture_series: bool = False,
 ) -> ValidationReport:
     """Optimize and evaluate ``strategy`` across successive walk-forward folds.
 
@@ -100,6 +101,7 @@ def walk_forward(
                 # Each fold's search reports within its own share of the whole run, so the
                 # percentage advances monotonically rather than restarting per fold.
                 control=_fold_control(control, index, len(splits)),
+                capture_series=capture_series,
             )
         )
     elapsed = time.perf_counter() - started
@@ -161,6 +163,11 @@ def walk_forward(
         trials=trials,
         seed=seed,
         elapsed_seconds=elapsed,
+        # Per fold, never spliced into one curve. Each fold re-optimizes, so the folds are
+        # different strategies; joining their equity curves would draw one nobody traded.
+        fold_series=tuple(
+            outcome.result.series for outcome in outcomes if outcome.result.series is not None
+        ),
     )
 
     _log_verdict(report)

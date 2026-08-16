@@ -28,15 +28,61 @@ __all__ = [
     "FoldResult",
     "Interval",
     "Metrics",
+    "MonthlyReturns",
     "OptimizationResult",
     "OverfittingProbability",
     "ParameterChange",
+    "RunSeries",
+    "Series",
     "StabilityPoint",
     "StabilityReport",
     "Trade",
     "ValidationReport",
     "YearReturn",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class Series:
+    """One dated series. Columnar, because that is how a chart and a CSV both want it."""
+
+    dates: tuple[date, ...]
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.dates) != len(self.values):
+            raise ValueError("a series must have one value per date")
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyReturns:
+    """Calendar-month returns, and whether the strategy held anything that month.
+
+    ``in_market`` is the point. A month with no position and a month that happened to end flat
+    are different facts, and a heatmap colouring both as zero overstates how consistently a
+    strategy was working.
+    """
+
+    months: tuple[str, ...]
+    values: tuple[float, ...]
+    in_market: tuple[bool, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RunSeries:
+    """Everything the chart tab draws for one run, or one walk-forward fold.
+
+    Captured while the run executed and never recomputed: prices are retroactively adjusted, so
+    a curve rebuilt later would describe different data than the metrics and the vintage block
+    recorded beside it (spec section 8.1).
+    """
+
+    equity: Series
+    benchmark_equity: Series
+    drawdown: Series
+    close: Series
+    monthly_returns: MonthlyReturns
+    rolling_12m_return: Series
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +239,10 @@ class BacktestResult:
     risk_free_rate: float
     warmup_bars: int
 
+    #: Per-bar chart series, present only when the caller asked for them. Captured while the
+    #: run executed, never recomputed -- see :mod:`cracktrade.backtest.series`.
+    series: RunSeries | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ParameterChange:
@@ -249,6 +299,9 @@ class OptimizationResult:
     elapsed_seconds: float
     convergence_message: str
     most_common_failure: str | None
+
+    #: Test-window chart series, present only when the caller asked for them.
+    series: RunSeries | None = None
 
     @property
     def improvement_pct(self) -> float:
@@ -350,6 +403,11 @@ class ValidationReport:
     trials: int
     seed: int
     elapsed_seconds: float
+
+    #: One entry per fold, in fold order, when the caller asked for series. There is
+    #: deliberately no combined curve: each fold re-optimizes, so the folds are different
+    #: strategies and splicing their equity curves would draw one that was never traded.
+    fold_series: tuple[RunSeries, ...] = ()
 
     @property
     def combined_return_pct(self) -> float:

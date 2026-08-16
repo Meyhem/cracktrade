@@ -1045,6 +1045,37 @@ do not leak into the public API.
 
 ---
 
+### 8.1 Per-bar series
+
+**[NEW — decided 2026-08-16.]** `run_backtest`, `optimize` and `walk_forward` take
+`capture_series=False`. When true they additionally return `RunSeries`: equity, benchmark
+equity, drawdown, close, calendar-month returns with an `in_market` flag per month, and the
+trailing twelve-month return.
+
+**Captured while the run executes, never recomputed.** The provider retroactively adjusts
+history for splits and dividends (§4.1, D10), so a curve rebuilt later would describe different
+prices than the metrics and the vintage block recorded beside it. A chart that disagrees with
+the numbers under it is worse than no chart, and the only way to guarantee agreement is to take
+both from one simulation.
+
+Consequences that follow from that, and are tested:
+
+- drawdown is derived from the captured equity curve, so its minimum **is**
+  `Metrics.max_drawdown_pct` rather than a second opinion about it;
+- every series shares one date index, because the charts share an x-axis;
+- the rolling window is **trailing**. A centred window would place future bars at *t* — §2's
+  failure mode, in a chart rather than in a metric;
+- `optimize` captures the **test window only**. Charts for a search must describe the window it
+  never saw, not the half it fitted;
+- `walk_forward` captures **per fold and does not splice**. Each fold re-optimizes, so the folds
+  are different strategies, and a continuous line through them would depict a strategy nobody
+  traded.
+
+Capture is opt-in because the CLI prints numbers. Turning it on must not change a result, which
+is asserted the same way the progress hooks are.
+
+---
+
 ## 9. Optimization engine
 
 ### 9.1 Parameter discovery

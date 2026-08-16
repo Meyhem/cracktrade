@@ -31,14 +31,26 @@ def test_help_exits_zero() -> None:
     assert main(["--help"]) == 0
 
 
-@pytest.mark.parametrize("argv", [["serve"], ["worker"]])
+@pytest.mark.parametrize("argv", [["worker"]])
 def test_registered_but_unbuilt_subcommands_fail(argv: list[str]) -> None:
     """An unimplemented command reports failure rather than a quiet success.
 
-    The ``db`` subcommands were on this list until phase 2 built them; their behaviour is now
-    covered by ``test_migrate.py`` against a real database.
+    The list shrinks as phases land: ``db`` left it in phase 2 and ``serve`` in phase 5. Both
+    are now covered by tests that exercise what they actually do.
     """
     assert main(argv) == NOT_IMPLEMENTED
+
+
+def test_serve_refuses_an_unmigrated_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It must decide *before* binding a port.
+
+    Two things at once. A server started against half a schema fails later, inside a request,
+    and less clearly than it does here. And the check has to happen before ``uvicorn.run``,
+    which never returns -- otherwise this test hangs instead of failing, which is exactly how
+    the gap that prompted it was found.
+    """
+    monkeypatch.setenv("CRACKTRADE_API_DATABASE_URL", "postgresql://nobody@localhost:59999/nope")
+    assert main(["serve"]) == DATABASE_ERROR
 
 
 @pytest.mark.parametrize("argv", [["db", "migrate"], ["db", "status"], ["db", "verify"]])

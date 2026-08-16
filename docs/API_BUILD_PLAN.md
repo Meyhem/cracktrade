@@ -266,7 +266,18 @@ imply. No HTTP code in this phase; the library stays independently testable.
    Cancellation raises a typed `RunCancelled`. Determinism test: same seed with and without
    callbacks → identical results (D12 discipline).
 
-### Phase 5 — Services and the read/write endpoints (no runs yet)
+### Phase 5 — Services and the read/write endpoints — **DONE**
+
+Landed with three fixes the tests forced. The routes originally took their unit-of-work
+dependency from `app`, which `app` imports back to mount them — a circular import mypy accepted
+and the interpreter refused; the fix is a leaf `dependencies` module, plus an import-smoke test
+so the next one fails in the suite rather than at start-up. The layering test then caught routes
+reaching into repositories directly, fixed by adding the service functions that were missing
+rather than by relaxing the rule; `schemas` is now allowed to import rows and service results,
+since mapping them is its job, guarded by a new test that nothing below imports a wire schema.
+And the Phase-0 test asserting `serve` is unimplemented started a real uvicorn server once it
+was implemented, hanging the suite — it now asserts that `serve` refuses an unmigrated database
+*before* binding a port.
 
 Goal: everything the UI needs before anything executes: `GET /meta`, `POST /config/validate`,
 strategies (list/create/import/fork/get), versions (list/get/save/restore/diff).

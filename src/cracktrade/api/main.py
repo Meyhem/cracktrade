@@ -20,11 +20,14 @@ from contextlib import contextmanager
 
 import psycopg
 import typer
+import uvicorn
 from psycopg.rows import TupleRow
 from rich.console import Console
 
 from cracktrade import __version__
+from cracktrade.api.app import API_PREFIX
 from cracktrade.api.db.console import render_migrate, render_status, render_verify
+from cracktrade.api.db.migrate import plan
 from cracktrade.api.settings import load_api_settings
 from cracktrade.errors import CracktradeError
 from cracktrade.log import configure
@@ -104,9 +107,32 @@ def main_callback(
 
 
 @app.command()
-def serve() -> None:
-    """Run the HTTP server."""
-    _unimplemented("serve", "phase 5")
+def serve(
+    reload: bool = typer.Option(False, "--reload", help="Restart on code changes."),
+) -> None:
+    """Run the HTTP server.
+
+    Refuses to start against a database with pending migrations. A server serving requests
+    against half a schema fails later, in a request, and less clearly than it would here.
+    """
+    settings = load_api_settings()
+    with _database() as connection:
+        if not plan(connection).is_up_to_date:
+            err_console.print(
+                "[bold red]the database is not fully migrated[/bold red] "
+                "-- run `cracktrade-api db migrate` first."
+            )
+            raise typer.Exit(NOT_MIGRATED)
+
+    err_console.print(f"serving on http://{settings.host}:{settings.port}{API_PREFIX}")
+    uvicorn.run(
+        "cracktrade.api.app:create_app",
+        factory=True,
+        host=settings.host,
+        port=settings.port,
+        reload=reload,
+        log_config=None,
+    )
 
 
 @app.command()

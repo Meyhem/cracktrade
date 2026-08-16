@@ -1,0 +1,134 @@
+"""Strategies: listing, creating, importing, forking, and config validation."""
+
+from __future__ import annotations
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Query, status
+
+from cracktrade.api.dependencies import Work
+from cracktrade.api.schemas.requests import (
+    CreateStrategyRequest,
+    ForkStrategyRequest,
+    ImportStrategyRequest,
+    ValidateRequest,
+)
+from cracktrade.api.schemas.responses import (
+    CreatedStrategy,
+    Issue,
+    StrategyDetail,
+    StrategyList,
+    StrategySummary,
+    ValidateResponse,
+    strategy_detail,
+)
+from cracktrade.api.services.config import review_mapping, review_yaml
+from cracktrade.api.services.strategies import (
+    Created,
+    create_strategy,
+    fork_strategy,
+    import_strategy,
+    strategy_details,
+)
+from cracktrade.api.services.strategies import (
+    list_strategies as list_strategies_service,
+)
+from cracktrade.errors import ConfigError
+
+router = APIRouter(tags=["strategies"])
+
+
+def _detail(work: Work, strategy_id: UUID) -> StrategyDetail:
+    details = strategy_details(work, strategy_id)
+    return strategy_detail(details.strategy, details.overview, details.head)
+
+
+def _created(work: Work, created: Created) -> CreatedStrategy:
+    review = review_mapping(created.version.config)
+    return CreatedStrategy(
+        strategy=_detail(work, created.strategy.id),
+        warnings=[Issue.of(warning) for warning in review.warnings],
+    )
+
+
+# --------------------------------------------------------------------------- validation
+
+
+@router.post("/config/validate", response_model=ValidateResponse)
+def validate_config(body: ValidateRequest) -> ValidateResponse:
+    """Check a configuration without storing or running anything.
+
+    Always 200: a config the user is halfway through typing is what this exists for, and
+    invalidity is the answer rather than a transport failure.
+    """
+    if (body.config is None) == (body.yaml is None):
+        raise ConfigError("supply exactly one of `config` or `yaml`")
+    if body.yaml is not None:
+        return ValidateResponse.of(review_yaml(body.yaml))
+    assert body.config is not None
+    return ValidateResponse.of(review_mapping(body.config))
+
+
+# --------------------------------------------------------------------------- reading
+
+
+@router.get("/strategies", response_model=StrategyList)
+def list_strategies(
+    work: Work,
+    search: Annotated[str | None, Query(max_length=100)] = None,
+    verdict: Annotated[str | None, Query()] = None,
+) -> StrategyList:
+    """The list screen. ``search`` matches name or ticker; ``verdict`` is the filter chips."""
+    listing = list_strategies_service(work, search=search, verdict=verdict)
+    return StrategyList(
+        strategies=[StrategySummary.of(row) for row in listing.rows],
+        totals=listing.totals,
+    )
+
+
+@router.get("/strategies/{strategy_id}", response_model=StrategyDetail)
+def get_strategy(strategy_id: UUID, work: Work) -> StrategyDetail:
+    """The detail header and the head configuration."""
+    return _detail(work, strategy_id)
+
+
+# --------------------------------------------------------------------------- creating
+
+
+@router.post("/strategies", response_model=CreatedStrategy, status_code=status.HTTP_201_CREATED)
+def post_strategy(body: CreateStrategyRequest, work: Work) -> CreatedStrategy:
+    """Create a strategy and its v1. No run is launched; it starts never-run."""
+    created = create_strategy(
+        work,
+        name=body.name,
+        ticker=body.ticker,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        minimal=body.seed == "minimal",
+    )
+    return _created(work, created)
+
+
+@router.post(
+    "/strategies/import", response_model=CreatedStrategy, status_code=status.HTTP_201_CREATED
+)
+def post_import(body: ImportStrategyRequest, work: Work) -> CreatedStrategy:
+    """Import a configuration file, stored exactly as written.
+
+    Warnings ride along on the success: they never block, so an import with a shadowed stop
+    still produces the strategy the file describes.
+    """
+    created = import_strategy(work, yaml_text=body.yaml, filename=body.filename)
+    return _created(work, created)
+
+
+@router.post(
+    "/strategies/{strategy_id}/fork",
+    response_model=CreatedStrategy,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_fork(strategy_id: UUID, body: ForkStrategyRequest, work: Work) -> CreatedStrategy:
+    """Copy a strategy at some version into a new one starting at v1."""
+    created = fork_strategy(work, source_id=strategy_id, name=body.name, version=body.version)
+    return _created(work, created)

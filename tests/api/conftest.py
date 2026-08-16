@@ -20,11 +20,13 @@ from collections.abc import Iterator
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import TupleRow
 from pydantic_settings import SettingsConfigDict
 
+from cracktrade.api.app import create_app
 from cracktrade.api.db.migrate import migrate
 from cracktrade.api.settings import DEFAULT_DATABASE_URL, ApiSettings
 
@@ -164,3 +166,16 @@ def db(db_url: str) -> Iterator[psycopg.Connection[TupleRow]]:
     """An open connection to this test's own database."""
     with psycopg.connect(db_url) as connection:
         yield connection
+
+
+@pytest.fixture
+def client(db_url: str) -> Iterator[TestClient]:
+    """The application, wired to this test's own database.
+
+    Exercised through the real ASGI stack rather than by calling route functions: the pieces
+    most worth testing here -- the problem+json handler, the dependency that opens a
+    transaction, status codes -- only exist once a request goes through it.
+    """
+    application = create_app(ApiSettings(database_url=db_url))
+    with TestClient(application, raise_server_exceptions=False) as running:
+        yield running

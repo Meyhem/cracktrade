@@ -22,10 +22,13 @@ API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "cracktrade" 
 #: from itself, and every layer may use ``errors`` and ``settings``, which are leaves.
 ALLOWED_WITHIN_API: dict[str, frozenset[str]] = {
     "routes": frozenset({"schemas", "services"}),
-    "services": frozenset({"repos", "schemas", "db"}),
+    "services": frozenset({"repos", "db"}),
     "repos": frozenset({"db"}),
     "db": frozenset(),
-    "schemas": frozenset(),
+    # `schemas` is the mapping at the edge, not a step in the flow: its whole job is turning
+    # rows and service results into wire shapes, so it has to know what it maps from. The
+    # direction still holds, because nothing below imports it -- asserted just below.
+    "schemas": frozenset({"repos", "services"}),
     "worker": frozenset({"repos", "db", "events"}),
     "events": frozenset({"db"}),
 }
@@ -36,7 +39,7 @@ ALLOWED_WITHIN_API: dict[str, frozenset[str]] = {
 MAY_IMPORT_ENGINE = frozenset({"services", "worker", "schemas", "routes"})
 
 #: Leaf modules every layer may depend on.
-UNIVERSAL = frozenset({"errors", "settings"})
+UNIVERSAL = frozenset({"errors", "settings", "dependencies"})
 
 ENGINE_PACKAGES = frozenset(
     {
@@ -121,3 +124,36 @@ def test_the_scan_actually_sees_imports() -> None:
     assert any(_imported_names(module) for module in modules), (
         "no cracktrade imports found in any api module -- the import parser is broken"
     )
+
+
+def test_every_api_module_actually_imports() -> None:
+    """A cheap guard against a circular import, which type checking does not catch.
+
+    Phase 5 had one: the routes imported the app for its unit-of-work dependency while the app
+    imported the routes to mount them. mypy accepted it and the interpreter did not. The fix
+    was a leaf ``dependencies`` module; this makes the next one fail here rather than at
+    start-up.
+    """
+    import importlib
+
+    for module in _api_modules():
+        relative = module.relative_to(API_ROOT).with_suffix("")
+        importlib.import_module("cracktrade.api." + ".".join(relative.parts))
+
+
+def test_nothing_below_the_edge_imports_schemas() -> None:
+    """What keeps the ``schemas`` allowance from being a hole.
+
+    ``schemas`` may import rows and service results because mapping them to the wire is its
+    job. That stays a one-way dependency only while nothing underneath reaches back up for a
+    DTO -- the moment a service returns a response model, the storage shape and the wire shape
+    are welded together and neither can change alone.
+    """
+    for module in _api_modules():
+        layer = _layer_of(module)
+        if layer not in {"services", "repos", "db", "worker", "events"}:
+            continue
+        for name in _imported_names(module):
+            parts = name.split(".")
+            if len(parts) >= 3 and parts[1] == "api" and parts[2] == "schemas":
+                pytest.fail(f"{module.name} ({layer}) imports a wire schema")

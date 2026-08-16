@@ -1781,6 +1781,7 @@ eventually exist in two versions that disagree.
 | D-9 | Two processes, one codebase: API server and worker. The database is the queue; no broker. |
 | D-10 | Live progress via Postgres `LISTEN`/`NOTIFY` relayed as SSE; polling is the documented fallback. |
 | D-11 | FastAPI. Pydantic DTOs at the edge only; internal types are frozen dataclasses, as in the engine. |
+| D-13 | The data layer is synchronous, and routes are `def` so Starlette runs them in its threadpool. One repository implementation serves both the server and the worker; an async server plus a sync worker would require two, and two descriptions of one fact eventually disagree. The `LISTEN`/`NOTIFY` relay is the exception and owns its own async connection. |
 | D-12 | Separate `cracktrade-api` entry point (`serve`, `worker`, `db`). The `cracktrade` CLI is untouched. |
 | D-5 | No authentication. Single user, bound to localhost. Revisit only if that changes. |
 

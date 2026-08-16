@@ -32,7 +32,8 @@ New decisions this plan introduces:
 | D-6 | Data access | **psycopg 3, raw SQL, no ORM.** The schema is hand-written SQL, results are stored verbatim jsonb, and an ORM is a second description of the schema that can drift from the first. Async pool (`psycopg_pool`) in the API process; plain sync connections in the worker. |
 | D-7 | Migrations | **Hand-rolled engine** (user requirement): ordered SQL files, checksum-verified, forward-only. No down migrations — rollback of applied DDL on a database whose whole design is append-only would be a fiction; recovery is a new forward migration. |
 | D-8 | Canonical DDL | The migration chain is the single source of truth. `docs/DB_SCHEMA.sql` becomes `migrations/0001_initial.sql` (plus §2.1 deltas) and the docs file is deleted once the spec records the schema — same rule as everywhere: one normative home per fact. |
-| D-9 | Process model | Two processes from one codebase: the API server (FastAPI, async) and the worker (sync, claims runs from Postgres with `FOR UPDATE SKIP LOCKED`). The database is the queue; no broker. |
+| D-9 | Process model | Two processes from one codebase: the API server (FastAPI) and the worker (claims runs from Postgres with `FOR UPDATE SKIP LOCKED`). The database is the queue; no broker. |
+| D-13 | Sync data layer | **Amends D-9/D-11, decided in phase 3.** Repositories, services and the worker are all plain synchronous code, and FastAPI routes are `def` so Starlette runs them in its threadpool. An async pool for the server plus sync connections for the worker would mean *two* implementations of every repository — and two descriptions of one fact disagreeing eventually is the failure this project exists to prevent. The load is a single local user issuing short queries while minutes-long engine work happens in another process, so the threadpool costs nothing real. The one genuinely async component, the `LISTEN`/`NOTIFY` relay behind SSE, uses its own async connection in `events/` and needs no repository. |
 | D-10 | Live updates | Worker → Postgres `NOTIFY` → API `LISTEN` → SSE fan-out. Client polling stays the documented fallback. |
 | D-11 | Web framework | FastAPI + uvicorn. Pydantic DTOs at the edge only; internal types are frozen dataclasses like the engine's. |
 | D-12 | Entry point | New console script `cracktrade-api` with `serve`, `worker`, and `db migrate|status|verify` subcommands. The existing `cracktrade` CLI stays untouched — two interfaces, one library. |
@@ -201,9 +202,26 @@ processes → one applies, both exit clean; the Phase-1 fixture now provisions d
 running the real migration chain. Port the schema smoke assertions from the draft review
 (verdict/staleness views, all twelve rejected mutations) into permanent tests here.
 
-### Phase 3 — Data layer: pool, unit of work, repositories
+### Phase 3 — Data layer: pool, unit of work, repositories — **DONE**
 
 Goal: typed, transactional access; SQL lives here and nowhere above.
+
+Landed with one architectural change, D-13 above: the data layer is **synchronous**, so the
+server and the worker share one repository implementation instead of needing an async and a
+sync copy. Two copies of the same SQL is exactly the drift this project is built to avoid, and
+a single local user issuing short queries does not need an event loop to serve them.
+
+The unit of work deliberately does not hand out repositories — that would make `db` depend on
+`repos` and invert the layering the spec states. Services build repositories on
+`uow.connection` instead.
+
+Two findings worth keeping. The concurrency test for version numbering deadlocked when written
+inline, because the second save legitimately blocks on the unique index while the first holds
+it open; it now runs on a thread with a `lock_timeout` safety net so a regression fails rather
+than hangs. And writing a duplicate chart series turned out to be an *invariant violation*
+rather than a conflict: only the worker writes series, once, so a duplicate is a worker that
+landed twice. The translation layer's default — an unlisted constraint is a bug, not a race —
+produced the right answer and the test expectation was what needed correcting.
 
 - `pool.py` (async pool with lifespan hooks; sync connector for the worker), `uow.py` (async
   context manager owning one transaction; services compose repos inside exactly one).

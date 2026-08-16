@@ -1,4 +1,4 @@
-"""Turning an exit variant's stop fields into the arrays vectorbt takes.
+"""Turning the exit rule's stop fields into the arrays vectorbt takes.
 
 Normative reference: ``docs/ENGINE_SPEC.md`` sections 3.7 and 7.4.
 
@@ -25,7 +25,7 @@ from cracktrade.indicators.compute import registry_installed
 from cracktrade.signals.alignment import causal_shift
 
 if TYPE_CHECKING:
-    from cracktrade.config import ExitVariant
+    from cracktrade.config import ExitRule
     from cracktrade.data import MarketData
 
 #: The ATR window is fixed. Legacy hardcoded it (`src/execution/portfolio.py:21`) and the spec
@@ -35,7 +35,7 @@ ATR_WINDOW: Final = 14
 
 @dataclass(frozen=True, slots=True)
 class StopConfiguration:
-    """The stop arguments for one exit variant.
+    """The stop arguments for one exit rule.
 
     Attributes:
         sl_stop: stop distance as a fraction. A scalar for percentage stops, a per-bar series
@@ -60,38 +60,38 @@ class StopConfiguration:
         return not np.isnan(self.sl_stop)
 
 
-def build_stops(variant: ExitVariant, data: MarketData) -> StopConfiguration:
-    """Resolve ``variant``'s stop fields into vectorbt arguments.
+def build_stops(rule: ExitRule, data: MarketData) -> StopConfiguration:
+    """Resolve ``rule``'s stop fields into vectorbt arguments.
 
     Exactly one stop type is active, per the section 3.7 priority chain: ATR, then trailing,
     then fixed. The others are reported as shadowed rather than silently dropped.
     """
-    active = variant.active_stop
+    active = rule.active_stop
 
     if active == "atr":
-        assert variant.atr_stop_multiplier is not None  # guaranteed by active_stop
-        sl_stop: pd.Series | float = atr_stop_series(data, variant.atr_stop_multiplier)
+        assert rule.atr_stop_multiplier is not None  # guaranteed by active_stop
+        sl_stop: pd.Series | float = atr_stop_series(data, rule.atr_stop_multiplier)
         sl_trail = False
     elif active == "trailing":
-        assert variant.trailing_stop_pct is not None
-        sl_stop = variant.trailing_stop_pct / 100.0
+        assert rule.trailing_stop_pct is not None
+        sl_stop = rule.trailing_stop_pct / 100.0
         sl_trail = True
     elif active == "fixed":
-        assert variant.stop_loss_pct is not None
-        sl_stop = variant.stop_loss_pct / 100.0
+        assert rule.stop_loss_pct is not None
+        sl_stop = rule.stop_loss_pct / 100.0
         sl_trail = False
     else:
         sl_stop = np.nan
         sl_trail = False
 
-    take_profit = np.nan if variant.take_profit_pct is None else variant.take_profit_pct / 100.0
+    take_profit = np.nan if rule.take_profit_pct is None else rule.take_profit_pct / 100.0
 
     return StopConfiguration(
         sl_stop=sl_stop,
         sl_trail=sl_trail,
         tp_stop=take_profit,
         active_stop=active,
-        shadowed_stops=variant.shadowed_stops,
+        shadowed_stops=rule.shadowed_stops,
     )
 
 

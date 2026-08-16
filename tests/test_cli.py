@@ -67,7 +67,7 @@ def test_a_result_serialises_to_parseable_json() -> None:
     parsed = json.loads(to_json(result))
 
     assert parsed["ticker"] == "TEST"
-    assert len(parsed["variants"]) == 1
+    assert "metrics" in parsed
     assert "benchmark" in parsed
 
 
@@ -86,8 +86,8 @@ def test_computed_verdicts_survive_serialization() -> None:
     parsed = to_dict(run_backtest(strategy_with(), trending_market(760)))
 
     assert "beats_buy_and_hold" in parsed["benchmark"]
-    assert "has_enough_trades_to_judge" in parsed["variants"][0]["metrics"]
-    assert "label" in parsed["best"]
+    assert "has_enough_trades_to_judge" in parsed["metrics"]
+    assert "is_winner" in parsed["trades"][0]
 
 
 def test_an_infinite_profit_factor_becomes_null_rather_than_invalid_json() -> None:
@@ -115,8 +115,8 @@ def test_tuples_become_lists_so_json_and_yaml_agree() -> None:
 
     parsed = to_dict(run_backtest(strategy_with(), trending_market(760)))
 
-    assert isinstance(parsed["variants"], list)
-    assert isinstance(parsed["variants"][0]["metrics"]["yearly_returns"], list)
+    assert isinstance(parsed["trades"], list)
+    assert isinstance(parsed["metrics"]["yearly_returns"], list)
 
 
 # ------------------------------------------------------------------------ log routing
@@ -259,10 +259,8 @@ indicators:
   - name: sma_fast
     type: sma
     window: 20
-entry_variants:
-  - name: up
-    signal: close > sma_fast
-exit_variants:
-  - name: down
-    signal: close < sma_fast
+entry:
+  signal: close > sma_fast
+exit:
+  signal: close < sma_fast
 """

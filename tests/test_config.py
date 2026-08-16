@@ -43,8 +43,8 @@ def minimal() -> dict[str, Any]:
             "commission_pct": 0.05,
         },
         "indicators": [{"name": "sma_long", "type": "sma", "window": 200}],
-        "entry_variants": [{"name": "entry", "signal": "close > sma_long"}],
-        "exit_variants": [{"name": "exit", "max_holding_days": 20}],
+        "entry": {"signal": "close > sma_long"},
+        "exit": {"max_holding_days": 20},
     }
 
 
@@ -62,8 +62,8 @@ def issues_from(data: dict[str, Any]) -> list[str]:
 def test_shipped_examples_validate(name: str) -> None:
     strategy = read_strategy_file(EXAMPLES / name)
     assert strategy.universe.ticker
-    assert strategy.entry_variants
-    assert strategy.exit_variants
+    assert strategy.entry.signal
+    assert strategy.exit.max_holding_days or strategy.exit.signal
 
 
 def test_parses_into_typed_values() -> None:
@@ -163,13 +163,33 @@ def test_integer_capital_is_accepted() -> None:
     assert parse_strategy(data).execution.initial_capital == pytest.approx(10000.0)
 
 
+def test_the_old_variant_schema_is_rejected_and_names_what_replaced_it() -> None:
+    """Every strategy file written before variants were removed uses the old keys.
+
+    The rejection has to be legible on its own, because the user's first encounter with this
+    change is a file that used to work. ``extra="forbid"`` names the unknown key and lists the
+    accepted ones, which is where ``entry`` and ``exit`` appear.
+    """
+    data = minimal()
+    del data["entry"]
+    del data["exit"]
+    data["entry_variants"] = [{"name": "e", "signal": "close > sma_long"}]
+    data["exit_variants"] = [{"name": "x", "max_holding_days": 20}]
+
+    issues = issues_from(data)
+
+    assert any("entry_variants" in issue and "unknown field" in issue for issue in issues)
+    assert any("exit_variants" in issue and "unknown field" in issue for issue in issues)
+    assert any(issue.startswith("entry:") and "required" in issue for issue in issues)
+    assert any(issue.startswith("exit:") and "required" in issue for issue in issues)
+
+
 # ------------------------------------------------------------------ defect D14: list vs dict
 
 
-@pytest.mark.parametrize("section", ["indicators", "entry_variants", "exit_variants"])
-def test_mapping_shaped_sections_are_rejected(section: str) -> None:
+def test_mapping_shaped_indicators_are_rejected() -> None:
     data = minimal()
-    data[section] = {"some_name": {"type": "sma", "window": 200}}
+    data["indicators"] = {"some_name": {"type": "sma", "window": 200}}
     assert any("must be a list" in issue for issue in issues_from(data))
 
 
@@ -212,42 +232,43 @@ def test_duplicate_indicator_names_are_rejected() -> None:
     assert any("duplicate" in issue for issue in issues_from(data))
 
 
-# ------------------------------------------------------------------ exit variants
+# ------------------------------------------------------------------ the exit rule
 
 
-def test_exit_variant_must_offer_a_way_out() -> None:
+def test_exit_rule_must_offer_a_way_out() -> None:
     data = minimal()
-    data["exit_variants"] = [{"name": "never"}]
+    data["exit"] = {}
     assert any("no way to exit" in issue for issue in issues_from(data))
 
 
 def test_holding_bounds_must_be_ordered() -> None:
     data = minimal()
-    data["exit_variants"] = [{"name": "x", "min_holding_days": 10, "max_holding_days": 5}]
+    data["exit"] = {"min_holding_days": 10, "max_holding_days": 5}
     assert any("min_holding_days" in issue for issue in issues_from(data))
 
 
-def test_stop_priority_chain() -> None:
+@pytest.mark.parametrize(
+    ("fields", "active", "shadowed"),
+    [
+        ({"atr_stop_multiplier": 2.0, "trailing_stop_pct": 5.0}, "atr", ("trailing_stop_pct",)),
+        ({"trailing_stop_pct": 5.0, "stop_loss_pct": 3.0}, "trailing", ("stop_loss_pct",)),
+        ({"stop_loss_pct": 3.0}, "fixed", ()),
+        ({"max_holding_days": 5}, None, ()),
+    ],
+)
+def test_stop_priority_chain(
+    fields: dict[str, Any], active: str | None, shadowed: tuple[str, ...]
+) -> None:
     data = minimal()
-    data["exit_variants"] = [
-        {"name": "atr_wins", "atr_stop_multiplier": 2.0, "trailing_stop_pct": 5.0},
-        {"name": "trailing_wins", "trailing_stop_pct": 5.0, "stop_loss_pct": 3.0},
-        {"name": "fixed_only", "stop_loss_pct": 3.0},
-        {"name": "no_stop", "max_holding_days": 5},
-    ]
-    variants = parse_strategy(data).exit_variants
-    assert variants[0].active_stop == "atr"
-    assert variants[0].shadowed_stops == ("trailing_stop_pct",)
-    assert variants[1].active_stop == "trailing"
-    assert variants[1].shadowed_stops == ("stop_loss_pct",)
-    assert variants[2].active_stop == "fixed"
-    assert variants[3].active_stop is None
-    assert variants[3].shadowed_stops == ()
+    data["exit"] = fields
+    rule = parse_strategy(data).exit
+    assert rule.active_stop == active
+    assert rule.shadowed_stops == shadowed
 
 
 def test_negative_stop_is_rejected() -> None:
     data = minimal()
-    data["exit_variants"] = [{"name": "x", "stop_loss_pct": -5.0}]
+    data["exit"] = {"stop_loss_pct": -5.0}
     assert issues_from(data)
 
 
@@ -281,23 +302,17 @@ def test_valid_position_sizing() -> None:
 # ------------------------------------------------------------------ required sections
 
 
-@pytest.mark.parametrize("section", ["strategy", "universe", "execution", "entry_variants"])
+@pytest.mark.parametrize("section", ["strategy", "universe", "execution", "entry", "exit"])
 def test_required_sections(section: str) -> None:
     data = minimal()
     del data[section]
     assert any("required" in issue for issue in issues_from(data))
 
 
-def test_variant_lists_may_not_be_empty() -> None:
-    data = minimal()
-    data["entry_variants"] = []
-    assert issues_from(data)
-
-
 def test_indicators_may_be_omitted() -> None:
     data = minimal()
     del data["indicators"]
-    data["entry_variants"] = [{"name": "e", "signal": "close > open"}]
+    data["entry"] = {"signal": "close > open"}
     assert parse_strategy(data).indicators == ()
 
 
@@ -308,7 +323,7 @@ def test_all_problems_are_reported_at_once() -> None:
     data = minimal()
     del data["strategy"]
     data["execution"]["initial_capital"] = -1.0
-    data["exit_variants"] = [{"name": "never"}]
+    data["exit"] = {}
     assert len(issues_from(data)) >= 3
 
 
@@ -327,12 +342,10 @@ def test_errors_carry_yaml_line_numbers(tmp_path: Path) -> None:
                 "  initial_capital: 10000.0",
                 "  slippage_pct: 0.1",
                 "  commission_pct: 0.05",
-                "entry_variants:",
-                "  - name: e",
-                "    signal: 'close > open'",
-                "exit_variants:",
-                "  - name: x",
-                "    max_holding_days: 20",
+                "entry:",
+                "  signal: 'close > open'",
+                "exit:",
+                "  max_holding_days: 20",
             ]
         ),
         encoding="utf-8",

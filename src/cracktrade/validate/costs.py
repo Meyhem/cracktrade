@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cracktrade.backtest import extract_metrics, run_variants
+from cracktrade.backtest import extract_metrics, run_simulation
 from cracktrade.domain import CostScenario, CostSensitivity
 from cracktrade.strategy import build_strategy
 
@@ -48,7 +48,7 @@ def cost_sensitivity(
         config["execution"]["slippage_pct"] = strategy.execution.slippage_pct * multiple
         candidate = build_strategy(config)
 
-        simulation = run_variants(candidate, test.data)[0]
+        simulation = run_simulation(candidate, test.data)
         scenarios.append(
             CostScenario(
                 multiple=multiple,

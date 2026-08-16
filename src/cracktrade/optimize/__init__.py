@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from cracktrade.optimize.discovery import (
-    SEARCHABLE_SECTIONS,
+    LIST_SECTIONS,
+    SINGLE_SECTIONS,
     Parameter,
     discover_parameters,
     inject,
@@ -28,9 +29,10 @@ from cracktrade.optimize.windows import Split, TestWindow, TrainWindow, split
 __all__ = [
     "DEFAULT_OBJECTIVE",
     "INFEASIBLE",
+    "LIST_SECTIONS",
     "OBJECTIVES",
     "POPSIZE",
-    "SEARCHABLE_SECTIONS",
+    "SINGLE_SECTIONS",
     "Objective",
     "Parameter",
     "SearchDiagnostics",

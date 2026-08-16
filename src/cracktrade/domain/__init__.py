@@ -35,7 +35,6 @@ __all__ = [
     "StabilityReport",
     "Trade",
     "ValidationReport",
-    "VariantResult",
     "YearReturn",
 ]
 
@@ -171,44 +170,28 @@ class DataVintage:
 
 
 @dataclass(frozen=True, slots=True)
-class VariantResult:
-    """One entry/exit variant pair, evaluated."""
+class BacktestResult:
+    """Everything one backtest produced.
 
-    entry_name: str
-    exit_name: str
+    A strategy has exactly one entry rule and one exit rule, so this is one simulation and one
+    set of numbers. The engine previously crossed E entry variants with X exit variants and
+    reported the best of E*X on the same data -- a selection step that inflated the winner and
+    that nothing downstream corrected for. Removing it removes the inflation at the source
+    rather than measuring it afterwards; see spec section 7.1.
+    """
+
+    strategy_name: str
+    ticker: str
+    vintage: DataVintage
     metrics: Metrics
     trades: tuple[Trade, ...]
     entry_defined_pct: float
     exit_defined_pct: float | None
     active_stop: str | None
     shadowed_stops: tuple[str, ...]
-
-    @property
-    def label(self) -> str:
-        """How this pair is named in output."""
-        return f"{self.entry_name} / {self.exit_name}"
-
-
-@dataclass(frozen=True, slots=True)
-class BacktestResult:
-    """Everything one backtest produced."""
-
-    strategy_name: str
-    ticker: str
-    vintage: DataVintage
-    variants: tuple[VariantResult, ...]
     benchmark: BenchmarkComparison
     risk_free_rate: float
     warmup_bars: int
-
-    @property
-    def best(self) -> VariantResult:
-        """The variant with the highest total PnL.
-
-        Selection on a single metric, over the same data every variant was measured on. That is
-        a selection step and it inflates the winner; spec section 12 is what quantifies it.
-        """
-        return max(self.variants, key=lambda variant: variant.metrics.total_pnl)
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,8 +232,6 @@ class OptimizationResult:
     ticker: str
     objective: str
     optimized_yaml: str
-    entry_name: str
-    exit_name: str
     test_metrics: Metrics
     train_metrics: Metrics
     baseline_test_metrics: Metrics
@@ -268,11 +249,6 @@ class OptimizationResult:
     elapsed_seconds: float
     convergence_message: str
     most_common_failure: str | None
-
-    @property
-    def label(self) -> str:
-        """The surviving entry/exit pair."""
-        return f"{self.entry_name} / {self.exit_name}"
 
     @property
     def improvement_pct(self) -> float:
@@ -308,16 +284,9 @@ class FoldResult:
     test_bars: int
     first_test_bar: date
     last_test_bar: date
-    entry_name: str
-    exit_name: str
     metrics: Metrics
     train_metrics: Metrics
     parameters: dict[str, float]
-
-    @property
-    def label(self) -> str:
-        """The variant pair this fold selected."""
-        return f"{self.entry_name} / {self.exit_name}"
 
     @property
     def was_profitable(self) -> bool:

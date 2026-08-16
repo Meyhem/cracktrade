@@ -44,8 +44,8 @@ def strategy_for(start: str = "2020-01-01", end: str = "2024-01-01") -> Strategy
                 "slippage_pct": 0.0,
                 "commission_pct": 0.0,
             },
-            "entry_variants": [{"name": "e", "signal": "close > open"}],
-            "exit_variants": [{"name": "x", "max_holding_days": 5}],
+            "entry": {"signal": "close > open"},
+            "exit": {"max_holding_days": 5},
         }
     )
 

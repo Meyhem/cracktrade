@@ -6,11 +6,14 @@ The default was changed from the legacy objective after the audit (finding B2). 
 
     fitness = pnl * (1 +/- max_drawdown),  with  pnl *= 0.1  when trades < 5
 
-which has four independent problems. Raw PnL is scale-dependent and outlier-dominated, so one
+which has three independent problems. Raw PnL is scale-dependent and outlier-dominated, so one
 lucky trade outranks a hundred consistent ones. The small-sample penalty is a *multiplier*, so
-any fluke bigger than ten times defeats it. The drawdown term scales a typical -20% drawdown by
-0.8, which barely disciplines risk at all. And the maximum is taken across variants inside every
-evaluation, so the in-sample optimum is the best of ``evaluations x entries x exits`` draws.
+any fluke bigger than ten times defeats it. And the drawdown term scales a typical -20% drawdown
+by 0.8, which barely disciplines risk at all.
+
+Legacy's fourth problem -- taking the maximum across entry/exit variants inside every evaluation,
+making the in-sample optimum the best of ``evaluations x entries x exits`` draws -- is gone by
+construction: a strategy now has one entry rule and one exit rule, so an evaluation is one draw.
 
 The default here is Calmar -- annualised return over maximum drawdown -- with the trade-count
 floor as a **hard feasibility constraint** rather than a discount. A three-trade result carries

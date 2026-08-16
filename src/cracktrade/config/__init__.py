@@ -12,9 +12,9 @@ from __future__ import annotations
 from cracktrade.config.loader import dump_strategy, parse_strategy, read_strategy_file
 from cracktrade.config.models import (
     PRICE_SERIES_NAMES,
-    EntryVariant,
+    EntryRule,
     ExecutionConfig,
-    ExitVariant,
+    ExitRule,
     IndicatorConfig,
     OptimizeBounds,
     PositionSizing,
@@ -27,9 +27,9 @@ from cracktrade.config.models import (
 
 __all__ = [
     "PRICE_SERIES_NAMES",
-    "EntryVariant",
+    "EntryRule",
     "ExecutionConfig",
-    "ExitVariant",
+    "ExitRule",
     "IndicatorConfig",
     "OptimizeBounds",
     "PositionSizing",

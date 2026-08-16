@@ -241,23 +241,21 @@ class IndicatorConfig(_Base):
         return _coerce_enum(value, PriceSeries)
 
 
-class EntryVariant(_Base):
-    """One entry rule. The engine tests every entry against every exit (spec section 7.1)."""
+class EntryRule(_Base):
+    """The strategy's entry condition. Exactly one per strategy (spec section 7.1)."""
 
-    name: Annotated[str, Field(min_length=1)]
     signal: Annotated[str, Field(min_length=1)]
     optimize: OptimizeSpec = True
 
 
-class ExitVariant(_Base):
-    """One exit rule: a signal, stops, holding-period bounds, or a combination.
+class ExitRule(_Base):
+    """The strategy's exit condition: a signal, stops, holding-period bounds, or a combination.
 
     Stop priority is ``atr_stop_multiplier`` > ``trailing_stop_pct`` > ``stop_loss_pct``; only
     the highest-priority one set is active. ``take_profit_pct`` is orthogonal and always
     applies. See spec section 3.7.
     """
 
-    name: Annotated[str, Field(min_length=1)]
     signal: str | None = None
     stop_loss_pct: Annotated[float, Field(gt=0)] | None = None
     trailing_stop_pct: Annotated[float, Field(gt=0)] | None = None
@@ -294,7 +292,7 @@ class ExitVariant(_Base):
 
     @model_validator(mode="after")
     def _must_be_able_to_exit(self) -> Self:
-        """A variant with no exit mechanism holds its first position forever."""
+        """An exit with no mechanism holds its first position forever."""
         mechanisms = (
             self.signal,
             self.stop_loss_pct,
@@ -352,16 +350,16 @@ class Strategy(_Base):
     universe: Universe
     execution: ExecutionConfig
     indicators: tuple[IndicatorConfig, ...] = ()
-    entry_variants: Annotated[tuple[EntryVariant, ...], Field(min_length=1)]
-    exit_variants: Annotated[tuple[ExitVariant, ...], Field(min_length=1)]
+    entry: EntryRule
+    exit: ExitRule
     position_sizing: PositionSizing | None = None
 
-    @field_validator("indicators", "entry_variants", "exit_variants", mode="before")
+    @field_validator("indicators", mode="before")
     @classmethod
     def _accept_yaml_lists(cls, value: object, /) -> object:
         """Reject the dict shape (defect D14) and accept the list shape YAML produces.
 
-        These sections are stored as tuples so a parsed strategy is a value, but strict mode
+        ``indicators`` is stored as a tuple so a parsed strategy is a value, but strict mode
         will not coerce a list into one, and YAML always hands us a list.
         """
         if isinstance(value, dict):
@@ -377,16 +375,12 @@ class Strategy(_Base):
         return value
 
     @model_validator(mode="after")
-    def _names_are_unique(self) -> Self:
-        for label, names in (
-            ("indicators", [item.name for item in self.indicators]),
-            ("entry_variants", [item.name for item in self.entry_variants]),
-            ("exit_variants", [item.name for item in self.exit_variants]),
-        ):
-            duplicates = sorted({name for name in names if names.count(name) > 1})
-            if duplicates:
-                msg = f"{label} contains duplicate names: {', '.join(duplicates)}"
-                raise ValueError(msg)
+    def _indicator_names_are_unique(self) -> Self:
+        names = [item.name for item in self.indicators]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            msg = f"indicators contains duplicate names: {', '.join(duplicates)}"
+            raise ValueError(msg)
         return self
 
     def indicator(self, name: str) -> IndicatorConfig | None:

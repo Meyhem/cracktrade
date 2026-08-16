@@ -10,7 +10,7 @@ Doing that from outside the simulation is circular -- the exits decide when a po
 which decides which later entries are realised, which is what the rules are computed from. An
 earlier implementation closed the circle by iterating to a fixed point. It was replaced because
 the recursion turns out to be a *chain* rather than a contraction: each pass resolves exactly one
-more trade, so a history with 200 trades needed 200 full simulations per variant. Correct, and
+more trade, so a history with 200 trades needed 200 full simulations. Correct, and
 far too slow to sit inside an optimizer loop.
 
 vectorbt's ``signal_func_nb`` hook removes the circularity instead of iterating around it. The
@@ -33,7 +33,7 @@ from vectorbt.base.reshape_fns import flex_select_auto_nb
 if TYPE_CHECKING:
     import numpy.typing as npt
 
-    from cracktrade.config import ExitVariant
+    from cracktrade.config import ExitRule
 
 #: Sentinel for "the entry bar of the current position is not yet known".
 _UNSET = -1
@@ -96,6 +96,6 @@ def as_signal_column(series: Any) -> npt.NDArray[np.bool_]:
     return np.asarray(series, dtype=np.bool_).reshape(-1, 1)
 
 
-def holding_bounds(variant: ExitVariant) -> tuple[int, int]:
+def holding_bounds(rule: ExitRule) -> tuple[int, int]:
     """``(minimum, maximum)`` holding days, with 0 meaning "no bound"."""
-    return variant.min_holding_days or 0, variant.max_holding_days or 0
+    return rule.min_holding_days or 0, rule.max_holding_days or 0

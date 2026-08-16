@@ -65,8 +65,8 @@ def strategy_with(indicators: list[dict[str, Any]], signal: str = "close > open"
                 "commission_pct": 0.0,
             },
             "indicators": indicators,
-            "entry_variants": [{"name": "e", "signal": signal}],
-            "exit_variants": [{"name": "x", "max_holding_days": 5}],
+            "entry": {"signal": signal},
+            "exit": {"max_holding_days": 5},
         }
     )
 

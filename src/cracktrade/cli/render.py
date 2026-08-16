@@ -21,7 +21,6 @@ if TYPE_CHECKING:
         Metrics,
         OptimizationResult,
         ValidationReport,
-        VariantResult,
     )
 
 #: Below this, a signal is undefined often enough that the strategy under test is not the one
@@ -37,20 +36,16 @@ _FAILURE_WARNING_PCT = 20.0
 
 def render_result(result: BacktestResult, console: Console) -> None:
     """Print a full backtest report, verdict first."""
-    best = result.best
-
     _render_verdict(result, console)
     _render_warnings(result, console)
     console.print()
-    _render_metrics(best, result.benchmark.benchmark, console)
+    _render_metrics(result.metrics, result.benchmark.benchmark, console)
     console.print()
-    _render_yearly(best, console)
-    _render_variants(result, console)
+    _render_yearly(result.metrics, console)
     _render_vintage(result, console)
 
 
 def _render_verdict(result: BacktestResult, console: Console) -> None:
-    best = result.best
     comparison = result.benchmark
     beat = comparison.beats_buy_and_hold
     colour = "green" if beat else "red"
@@ -61,8 +56,7 @@ def _render_verdict(result: BacktestResult, console: Console) -> None:
         f"({result.vintage.first_bar} to {result.vintage.last_bar})"
     )
     console.print(
-        f"  best variant [bold]{best.label}[/bold] returned "
-        f"[bold]{best.metrics.total_return_pct:+.1f}%[/bold] and "
+        f"  returned [bold]{result.metrics.total_return_pct:+.1f}%[/bold] and "
         f"[bold {colour}]{verdict}[/bold {colour}] buy-and-hold at "
         f"{comparison.benchmark.total_return_pct:+.1f}% "
         f"([{colour}]{comparison.excess_return_pct:+.1f} pp[/{colour}])"
@@ -71,27 +65,25 @@ def _render_verdict(result: BacktestResult, console: Console) -> None:
 
 def _render_warnings(result: BacktestResult, console: Console) -> None:
     """Everything that should stop a reader trusting the numbers above."""
-    best = result.best
-
-    if not best.metrics.has_enough_trades_to_judge:
+    if not result.metrics.has_enough_trades_to_judge:
         console.print(
-            f"  [yellow]! only {best.metrics.total_trades} closed trade(s) — too few to "
+            f"  [yellow]! only {result.metrics.total_trades} closed trade(s) — too few to "
             f"support a conclusion[/yellow]"
         )
-    if best.entry_defined_pct < _DEFINEDNESS_WARNING:
+    if result.entry_defined_pct < _DEFINEDNESS_WARNING:
         console.print(
             f"  [yellow]! the entry condition was undefined on "
-            f"{100 - best.entry_defined_pct:.0f}% of bars[/yellow]"
+            f"{100 - result.entry_defined_pct:.0f}% of bars[/yellow]"
         )
-    if best.exit_defined_pct is not None and best.exit_defined_pct < _DEFINEDNESS_WARNING:
+    if result.exit_defined_pct is not None and result.exit_defined_pct < _DEFINEDNESS_WARNING:
         console.print(
             f"  [yellow]! the exit condition was undefined on "
-            f"{100 - best.exit_defined_pct:.0f}% of bars[/yellow]"
+            f"{100 - result.exit_defined_pct:.0f}% of bars[/yellow]"
         )
-    if best.shadowed_stops:
+    if result.shadowed_stops:
         console.print(
-            f"  [yellow]! {', '.join(best.shadowed_stops)} set but inactive; "
-            f"{best.active_stop} wins the stop priority chain[/yellow]"
+            f"  [yellow]! {', '.join(result.shadowed_stops)} set but inactive; "
+            f"{result.active_stop} wins the stop priority chain[/yellow]"
         )
     if result.vintage.filled_bars:
         console.print(
@@ -100,13 +92,12 @@ def _render_warnings(result: BacktestResult, console: Console) -> None:
         )
 
 
-def _render_metrics(best: VariantResult, benchmark: Metrics, console: Console) -> None:
+def _render_metrics(strategy: Metrics, benchmark: Metrics, console: Console) -> None:
     table = Table(title="Performance", title_justify="left", header_style="bold")
     table.add_column("")
     table.add_column("Strategy", justify="right")
     table.add_column("Buy & hold", justify="right")
 
-    strategy = best.metrics
     rows: list[tuple[str, str, str]] = [
         (
             "Total return",
@@ -140,40 +131,16 @@ def _render_metrics(best: VariantResult, benchmark: Metrics, console: Console) -
     console.print(table)
 
 
-def _render_yearly(best: VariantResult, console: Console) -> None:
+def _render_yearly(strategy: Metrics, console: Console) -> None:
     """Per-year returns, because an aggregate hides where the profit actually came from."""
-    if not best.metrics.yearly_returns:
+    if not strategy.yearly_returns:
         return
     table = Table(title="Return by year", title_justify="left", header_style="bold")
     table.add_column("Year")
     table.add_column("Return", justify="right")
-    for year in best.metrics.yearly_returns:
+    for year in strategy.yearly_returns:
         colour = "green" if year.return_pct >= 0 else "red"
         table.add_row(str(year.year), f"[{colour}]{year.return_pct:+.2f}%[/{colour}]")
-    console.print(table)
-
-
-def _render_variants(result: BacktestResult, console: Console) -> None:
-    if len(result.variants) < 2:
-        return
-    console.print()
-    table = Table(title="All variants", title_justify="left", header_style="bold")
-    table.add_column("Variant")
-    table.add_column("Return", justify="right")
-    table.add_column("Max DD", justify="right")
-    table.add_column("Sharpe", justify="right")
-    table.add_column("Trades", justify="right")
-
-    best_label = result.best.label
-    for variant in sorted(result.variants, key=lambda v: v.metrics.total_pnl, reverse=True):
-        marker = " *" if variant.label == best_label else ""
-        table.add_row(
-            f"{variant.label}{marker}",
-            f"{variant.metrics.total_return_pct:+.2f}%",
-            f"{variant.metrics.max_drawdown_pct:.2f}%",
-            f"{variant.metrics.sharpe_ratio:.2f}",
-            str(variant.metrics.total_trades),
-        )
     console.print(table)
 
 
@@ -208,7 +175,7 @@ def render_optimization(result: OptimizationResult, console: Console) -> None:
         f"[bold]{result.strategy_name}[/bold] on [bold]{result.ticker}[/bold] — "
         f"optimized on {result.train_bars} bars, reported on {result.test_bars} unseen bars"
     )
-    console.print(f"  surviving variant [bold]{result.label}[/bold], objective {result.objective}")
+    console.print(f"  objective {result.objective}")
 
     improvement = result.improvement_pct
     colour = "green" if improvement > 0 else "red"
@@ -351,7 +318,6 @@ def _render_folds(report: ValidationReport, console: Console) -> None:
     table.add_column("Return", justify="right")
     table.add_column("Max DD", justify="right")
     table.add_column("Trades", justify="right")
-    table.add_column("Variant")
 
     for fold in report.folds:
         colour = "green" if fold.was_profitable else "red"
@@ -361,7 +327,6 @@ def _render_folds(report: ValidationReport, console: Console) -> None:
             f"[{colour}]{fold.metrics.total_return_pct:+.2f}%[/{colour}]",
             f"{fold.metrics.max_drawdown_pct:.2f}%",
             str(fold.metrics.total_trades),
-            fold.label,
         )
     console.print(table)
     console.print(

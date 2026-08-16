@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cracktrade.backtest import extract_metrics, run_variants
+from cracktrade.backtest import extract_metrics, run_simulation
 from cracktrade.domain import StabilityPoint, StabilityReport
 from cracktrade.errors import CracktradeError
 from cracktrade.optimize.discovery import inject
@@ -96,13 +96,11 @@ def _score(
     try:
         candidate = build_strategy(inject(strategy, parameters, values))
         risk_free = candidate.execution.risk_free_rate
-        scores = [
-            objective(extract_metrics(simulation.portfolio, risk_free_rate=risk_free))
-            for simulation in run_variants(candidate, train.data)
-        ]
+        simulation = run_simulation(candidate, train.data)
+        score = objective(extract_metrics(simulation.portfolio, risk_free_rate=risk_free))
     except CracktradeError:
         return INFEASIBLE
-    return min(scores) if scores else INFEASIBLE
+    return score
 
 
 def _degradation(baseline: float, perturbed: float) -> float:

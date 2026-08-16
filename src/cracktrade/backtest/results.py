@@ -14,8 +14,8 @@ import pandas as pd
 
 from cracktrade.backtest.benchmark import buy_and_hold_portfolio, compare
 from cracktrade.backtest.metrics import extract_metrics, extract_trades
-from cracktrade.backtest.runner import run_variants
-from cracktrade.domain import BacktestResult, DataVintage, Metrics, VariantResult
+from cracktrade.backtest.runner import run_simulation
+from cracktrade.domain import BacktestResult, DataVintage, Metrics
 from cracktrade.log import get_logger
 
 if TYPE_CHECKING:
@@ -26,39 +26,17 @@ logger = get_logger(__name__)
 
 
 def run_backtest(strategy: Strategy, data: MarketData, *, seed: int = 0) -> BacktestResult:
-    """Simulate every variant of ``strategy`` over ``data`` and report it.
+    """Simulate ``strategy`` over ``data`` and report it.
 
     Raises:
         BacktestError: the history is not daily bars.
         IndicatorError: an indicator could not be computed.
         SignalError: a signal expression could not be evaluated.
     """
-    simulations = run_variants(strategy, data, seed=seed)
+    simulation = run_simulation(strategy, data, seed=seed)
     risk_free = strategy.execution.risk_free_rate
-    warmup = simulations[0].warmup
-
-    measured = [
-        (simulation, extract_metrics(simulation.portfolio, risk_free_rate=risk_free))
-        for simulation in simulations
-    ]
-
-    variants = tuple(
-        VariantResult(
-            entry_name=simulation.pair.entry.name,
-            exit_name=simulation.pair.exit.name,
-            metrics=metrics,
-            trades=extract_trades(simulation.portfolio, data.index),
-            entry_defined_pct=simulation.entry_signal.defined_pct,
-            exit_defined_pct=(
-                simulation.exit_signal.defined_pct if simulation.exit_signal else None
-            ),
-            active_stop=simulation.stops.active_stop,
-            shadowed_stops=simulation.stops.shadowed_stops,
-        )
-        for simulation, metrics in measured
-    )
-
-    best_simulation, best_metrics = max(measured, key=lambda pair: pair[1].total_pnl)
+    warmup = simulation.warmup
+    metrics = extract_metrics(simulation.portfolio, risk_free_rate=risk_free)
 
     # The benchmark starts where the strategy could first have acted: one bar after warm-up, the
     # earliest a shifted signal can land. Starting it at bar zero would credit it with return the
@@ -76,11 +54,16 @@ def run_backtest(strategy: Strategy, data: MarketData, *, seed: int = 0) -> Back
         strategy_name=strategy.strategy.name,
         ticker=data.ticker,
         vintage=vintage_of(data),
-        variants=variants,
+        metrics=metrics,
+        trades=extract_trades(simulation.portfolio, data.index),
+        entry_defined_pct=simulation.entry_signal.defined_pct,
+        exit_defined_pct=simulation.exit_signal.defined_pct if simulation.exit_signal else None,
+        active_stop=simulation.stops.active_stop,
+        shadowed_stops=simulation.stops.shadowed_stops,
         benchmark=compare(
-            best_metrics,
+            metrics,
             benchmark_metrics,
-            strategy_returns=best_simulation.portfolio.returns(),
+            strategy_returns=simulation.portfolio.returns(),
             benchmark_returns=benchmark_portfolio.returns(),
         ),
         risk_free_rate=risk_free,
@@ -115,21 +98,19 @@ def frame_digest(frame: pd.DataFrame) -> str:
 
 
 def _log_verdict(result: BacktestResult, benchmark: Metrics) -> None:
-    """Say plainly whether the best variant beat simply holding the ticker."""
-    best = result.best
+    """Say plainly whether the strategy beat simply holding the ticker."""
     verdict = "beats" if result.benchmark.beats_buy_and_hold else "loses to"
     logger.info(
-        "%s on %s: best variant %s returned %.1f%%, which %s buy-and-hold at %.1f%%",
+        "%s on %s: returned %.1f%%, which %s buy-and-hold at %.1f%%",
         result.strategy_name,
         result.ticker,
-        best.label,
-        best.metrics.total_return_pct,
+        result.metrics.total_return_pct,
         verdict,
         benchmark.total_return_pct,
     )
-    if not best.metrics.has_enough_trades_to_judge:
+    if not result.metrics.has_enough_trades_to_judge:
         logger.warning(
             "%s produced only %d closed trade(s); that is too few to draw a conclusion from",
-            best.label,
-            best.metrics.total_trades,
+            result.strategy_name,
+            result.metrics.total_trades,
         )

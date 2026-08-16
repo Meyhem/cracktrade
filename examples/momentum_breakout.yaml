@@ -26,18 +26,13 @@ indicators:
     source: volume
     window: 20
 
-entry_variants:
-  - name: strict_momentum
-    signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
-  - name: relaxed_momentum
-    signal: "(close > sma_long) & (close >= max_high)"
+entry:
+  signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
 
-exit_variants:
-  - name: time_only
-    max_holding_days: 20
-  - name: trail_and_signal
-    trailing_stop_pct: 5.0
-    signal: "close < sma_long"
+exit:
+  signal: "close < sma_long"
+  trailing_stop_pct: 5.0
+  max_holding_days: 20
 
 position_sizing:
   type: fixed_pct

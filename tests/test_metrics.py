@@ -63,8 +63,8 @@ def strategy_with(
     *,
     risk_free_rate: float = 0.04,
     indicators: list[dict[str, Any]] | None = None,
-    entries: list[dict[str, Any]] | None = None,
-    exits: list[dict[str, Any]] | None = None,
+    entry: dict[str, Any] | None = None,
+    exit_rule: dict[str, Any] | None = None,
 ) -> Strategy:
     return parse_strategy(
         {
@@ -81,8 +81,8 @@ def strategy_with(
                 "risk_free_rate": risk_free_rate,
             },
             "indicators": indicators or [{"name": "sma_fast", "type": "sma", "window": 20}],
-            "entry_variants": entries or [{"name": "cross_up", "signal": "close > sma_fast"}],
-            "exit_variants": exits or [{"name": "cross_down", "signal": "close < sma_fast"}],
+            "entry": entry or {"signal": "close > sma_fast"},
+            "exit": exit_rule or {"signal": "close < sma_fast"},
         }
     )
 
@@ -124,16 +124,16 @@ def test_the_per_period_rate_is_far_smaller_than_the_annual_one() -> None:
 
 def test_changing_the_risk_free_rate_changes_sharpe() -> None:
     """Defect D3. Legacy parsed the field and then hardcoded 0.04 at the point of use."""
-    low = result_for(risk_free_rate=0.0).best.metrics.sharpe_ratio
-    high = result_for(risk_free_rate=0.10).best.metrics.sharpe_ratio
+    low = result_for(risk_free_rate=0.0).metrics.sharpe_ratio
+    high = result_for(risk_free_rate=0.10).metrics.sharpe_ratio
 
     assert low != high
     assert low > high, "a higher hurdle must lower the ratio"
 
 
 def test_changing_the_risk_free_rate_changes_sortino() -> None:
-    low = result_for(risk_free_rate=0.0).best.metrics.sortino_ratio
-    high = result_for(risk_free_rate=0.10).best.metrics.sortino_ratio
+    low = result_for(risk_free_rate=0.0).metrics.sortino_ratio
+    high = result_for(risk_free_rate=0.10).metrics.sortino_ratio
 
     assert low > high
 
@@ -151,14 +151,14 @@ def test_annualisation_uses_trading_days_not_calendar_days() -> None:
 
     data = trending_market()
     result = run_backtest(strategy_with(), data)
-    simulation_cagr = result.best.metrics.cagr_pct
+    simulation_cagr = result.metrics.cagr_pct
 
     assert YEAR_FREQ == "252 days"
 
     # Recompute the same figure on the calendar year vectorbt would have used by default.
-    from cracktrade.backtest.runner import run_variants
+    from cracktrade.backtest.runner import run_simulation
 
-    portfolio = run_variants(strategy_with(), data)[0].portfolio
+    portfolio = run_simulation(strategy_with(), data).portfolio
     calendar_cagr = 100.0 * float(portfolio.annualized_return(year_freq="365 days"))
 
     assert simulation_cagr != pytest.approx(calendar_cagr)
@@ -178,7 +178,7 @@ def test_the_global_year_freq_setting_is_never_mutated() -> None:
 
 
 def test_every_metric_is_populated() -> None:
-    metrics = result_for().best.metrics
+    metrics = result_for().metrics
 
     assert metrics.total_trades > 0
     assert metrics.bars > 0
@@ -193,10 +193,10 @@ def test_every_metric_is_populated() -> None:
 def test_a_strategy_that_never_trades_reports_zeros_not_nan() -> None:
     """ "Nothing happened" must not surface as NaN, which reads as a broken run."""
     result = run_backtest(
-        strategy_with(entries=[{"name": "never", "signal": "close > 1000000"}]),
+        strategy_with(entry={"signal": "close > 1000000"}),
         trending_market(),
     )
-    metrics = result.best.metrics
+    metrics = result.metrics
 
     assert metrics.total_trades == 0
     assert metrics.total_pnl == 0.0
@@ -223,7 +223,7 @@ def test_profit_factor_handles_the_degenerate_cases(
 
 def test_exposure_is_reported_beside_the_risk_adjusted_metrics() -> None:
     """Audit B9: the ratios charge a hurdle over the whole period, exposure makes that readable."""
-    metrics = result_for().best.metrics
+    metrics = result_for().metrics
 
     assert 0.0 < metrics.exposure_pct < 100.0
 
@@ -232,7 +232,7 @@ def test_exposure_is_reported_beside_the_risk_adjusted_metrics() -> None:
 
 
 def test_returns_are_broken_down_by_calendar_year() -> None:
-    years = result_for().best.metrics.yearly_returns
+    years = result_for().metrics.yearly_returns
 
     assert len(years) >= 3
     assert [year.year for year in years] == sorted(year.year for year in years)
@@ -309,7 +309,7 @@ def test_the_benchmark_starts_where_the_strategy_could_first_trade() -> None:
 def test_excess_return_is_the_difference_from_buy_and_hold() -> None:
     result = result_for()
 
-    expected = result.best.metrics.total_return_pct - result.benchmark.benchmark.total_return_pct
+    expected = result.metrics.total_return_pct - result.benchmark.benchmark.total_return_pct
     assert result.benchmark.excess_return_pct == pytest.approx(expected)
 
 
@@ -322,7 +322,7 @@ def test_beating_buy_and_hold_is_stated_explicitly() -> None:
 def test_a_losing_strategy_is_reported_as_losing_to_the_benchmark() -> None:
     """A strategy that barely trades cannot beat a rising market, and must not claim to."""
     result = run_backtest(
-        strategy_with(entries=[{"name": "rare", "signal": "close > 100000"}]),
+        strategy_with(entry={"signal": "close > 100000"}),
         trending_market(drift=0.001),
     )
 
@@ -364,7 +364,7 @@ def test_the_digest_is_stable_across_calls() -> None:
 
 
 def test_trades_are_domain_objects_without_vectorbt_column_names() -> None:
-    trades = result_for().best.trades
+    trades = result_for().trades
 
     assert trades
     first = trades[0]
@@ -376,9 +376,9 @@ def test_trades_are_domain_objects_without_vectorbt_column_names() -> None:
 def test_an_open_position_has_no_exit_date() -> None:
     """Its exit_idx points at the last bar, which is a mark to market, not a sale."""
     data = trending_market()
-    result = run_backtest(strategy_with(exits=[{"name": "never", "signal": "close < 0.01"}]), data)
+    result = run_backtest(strategy_with(exit_rule={"signal": "close < 0.01"}), data)
 
-    trades = result.best.trades
+    trades = result.trades
     assert trades
     assert trades[-1].is_open
     assert trades[-1].exit_date is None
@@ -390,19 +390,17 @@ def test_trade_dates_come_from_the_price_index() -> None:
     result = run_backtest(strategy_with(), data)
 
     dates = {bar.date() for bar in data.index}
-    for trade in result.best.trades:
+    for trade in result.trades:
         assert trade.entry_date in dates
         if trade.exit_date is not None:
             assert trade.exit_date in dates
 
 
 def test_extract_trades_on_an_empty_record_set_returns_nothing() -> None:
-    from cracktrade.backtest.runner import run_variants
+    from cracktrade.backtest.runner import run_simulation
 
     data = trending_market()
-    simulation = run_variants(
-        strategy_with(entries=[{"name": "never", "signal": "close > 1000000"}]), data
-    )[0]
+    simulation = run_simulation(strategy_with(entry={"signal": "close > 1000000"}), data)
 
     assert extract_trades(simulation.portfolio, data.index) == ()
 
@@ -413,14 +411,14 @@ def test_extract_trades_on_an_empty_record_set_returns_nothing() -> None:
 def test_a_thin_result_is_flagged_as_unjudgeable() -> None:
     """Audit B7: a point estimate off six trades implies a confidence it does not have."""
     data = trending_market()
-    result = run_backtest(strategy_with(exits=[{"name": "hold", "max_holding_days": 700}]), data)
+    result = run_backtest(strategy_with(exit_rule={"max_holding_days": 700}), data)
 
-    if result.best.metrics.total_trades < MIN_TRADES_TO_JUDGE:
-        assert not result.best.metrics.has_enough_trades_to_judge
+    if result.metrics.total_trades < MIN_TRADES_TO_JUDGE:
+        assert not result.metrics.has_enough_trades_to_judge
 
 
 def test_a_rich_result_is_judgeable() -> None:
-    metrics = result_for().best.metrics
+    metrics = result_for().metrics
 
     assert metrics.total_trades >= MIN_TRADES_TO_JUDGE
     assert metrics.has_enough_trades_to_judge
@@ -429,8 +427,8 @@ def test_a_rich_result_is_judgeable() -> None:
 def test_the_definedness_of_each_signal_reaches_the_result() -> None:
     result = result_for()
 
-    assert result.best.entry_defined_pct == pytest.approx(100.0)
-    assert result.best.exit_defined_pct == pytest.approx(100.0)
+    assert result.entry_defined_pct == pytest.approx(100.0)
+    assert result.exit_defined_pct == pytest.approx(100.0)
 
 
 def test_an_undefined_heavy_signal_is_visible_in_the_result() -> None:
@@ -438,70 +436,35 @@ def test_an_undefined_heavy_signal_is_visible_in_the_result() -> None:
     result = run_backtest(
         strategy_with(
             indicators=[{"name": "sar", "type": "psar"}],
-            entries=[{"name": "trend", "signal": "close > sar_psarl"}],
-            exits=[{"name": "flip", "signal": "close < sar_psars"}],
+            entry={"signal": "close > sar_psarl"},
+            exit_rule={"signal": "close < sar_psars"},
         ),
         trending_market(),
     )
 
-    assert result.best.entry_defined_pct < 90.0
+    assert result.entry_defined_pct < 90.0
 
 
-# ---------------------------------------------------------------- variants and selection
-
-
-def test_every_variant_pair_appears_in_the_result() -> None:
-    result = run_backtest(
-        strategy_with(
-            entries=[
-                {"name": "e1", "signal": "close > sma_fast"},
-                {"name": "e2", "signal": "close > sma_fast * 1.01"},
-            ],
-            exits=[
-                {"name": "x1", "signal": "close < sma_fast"},
-                {"name": "x2", "max_holding_days": 10},
-            ],
-        ),
-        trending_market(),
-    )
-
-    assert len(result.variants) == 4
-    assert len({variant.label for variant in result.variants}) == 4
-
-
-def test_the_best_variant_is_the_one_with_the_highest_pnl() -> None:
-    result = run_backtest(
-        strategy_with(
-            exits=[
-                {"name": "x1", "signal": "close < sma_fast"},
-                {"name": "x2", "max_holding_days": 5},
-            ]
-        ),
-        trending_market(),
-    )
-
-    assert result.best.metrics.total_pnl == max(
-        variant.metrics.total_pnl for variant in result.variants
-    )
+# ------------------------------------------------------------------------ stop reporting
 
 
 def test_the_active_stop_and_its_shadows_reach_the_result() -> None:
     result = run_backtest(
         strategy_with(
-            exits=[{"name": "x", "atr_stop_multiplier": 2.0, "stop_loss_pct": 5.0}],
+            exit_rule={"atr_stop_multiplier": 2.0, "stop_loss_pct": 5.0},
         ),
         trending_market(),
     )
 
-    assert result.best.active_stop == "atr"
-    assert result.best.shadowed_stops == ("stop_loss_pct",)
+    assert result.active_stop == "atr"
+    assert result.shadowed_stops == ("stop_loss_pct",)
 
 
 def test_metrics_are_extractable_without_the_result_wrapper() -> None:
     """The extraction layer is usable directly; Phase 8 calls it per candidate."""
-    from cracktrade.backtest.runner import run_variants
+    from cracktrade.backtest.runner import run_simulation
 
-    simulation = run_variants(strategy_with(), trending_market())[0]
+    simulation = run_simulation(strategy_with(), trending_market())
 
     metrics = extract_metrics(simulation.portfolio, risk_free_rate=0.04)
 
@@ -560,8 +523,8 @@ def test_a_thin_or_undefined_result_is_warned_about_in_the_report() -> None:
         run_backtest(
             strategy_with(
                 indicators=[{"name": "sar", "type": "psar"}],
-                entries=[{"name": "trend", "signal": "close > sar_psarl"}],
-                exits=[{"name": "flip", "signal": "close < sar_psars"}],
+                entry={"signal": "close > sar_psarl"},
+                exit_rule={"signal": "close < sar_psars"},
             ),
             trending_market(),
         ),

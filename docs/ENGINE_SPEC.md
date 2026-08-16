@@ -209,11 +209,11 @@ This harness is a permanent CI gate. It is introduced in Phase 5 and extended in
 
 **[FIX]** See §10 D2. The fitness function's signature accepts only a `TrainWindow`. The test window
 is a distinct type, `TestWindow`, constructible only by the splitter and consumed only by the
-reporting path. Passing test data to fitness, or selecting a variant on test data, is a type error
-caught by mypy — not a convention a developer can forget.
+reporting path. Passing test data to fitness is a type error caught by mypy — not a convention a
+developer can forget.
 
-The test window is evaluated **exactly once**, after parameter search and variant selection are
-final.
+The test window is evaluated **exactly once**, after the parameter search is final. Since §7.1 the
+search is the *only* step that chooses anything, so there is nothing else that could leak.
 
 ### 2.6 Pessimistic conventions
 
@@ -351,24 +351,30 @@ shared model.
 existing strategy files. **[PORT]** — remapped to `length` at the pandas_ta boundary,
 `src/execution/indicators.py:92-96`.
 
-### 3.6 `entry_variants` — required, non-empty
+### 3.6 `entry` — required
+
+A single mapping, not a list.
 
 | Field | Type | Default | Rule |
 | --- | --- | --- | --- |
-| `name` | `str` | — | Unique across the list. |
 | `signal` | `str` | — | Must parse under the §2.1 grammar; every `Name` must resolve in the namespace. |
 
 **[PORT]** `src/core/config.py:73-75, 105-110`.
 
+**[NEW]** One entry rule per strategy. Legacy took a list of named `entry_variants` and crossed
+them with the exit variants; §7.1 records why that was removed. A strategy that used to declare
+several entries becomes several strategies.
+
 **[NEW]** Signal expressions are validated at **config-parse time**, not at first evaluation.
 Undefined names, forbidden syntax, and type errors are reported before any data is downloaded.
 
-### 3.7 `exit_variants` — required, non-empty
+### 3.7 `exit` — required
+
+A single mapping, not a list.
 
 | Field | Type | Default | Rule |
 | --- | --- | --- | --- |
-| `name` | `str` | — | Unique across the list. |
-| `signal` | `str \| None` | `None` | Same grammar as entries. |
+| `signal` | `str \| None` | `None` | Same grammar as the entry. |
 | `stop_loss_pct` | `float \| None` | `None` | `> 0`. Percent from entry price. |
 | `trailing_stop_pct` | `float \| None` | `None` | `> 0`. Percent from peak since entry. |
 | `atr_stop_multiplier` | `float \| None` | `None` | `> 0`. Multiple of ATR(14). |
@@ -378,8 +384,8 @@ Undefined names, forbidden syntax, and type errors are reported before any data 
 
 **[PORT]** `src/core/config.py:77-85`.
 
-Validation **[NEW]**: at least one exit mechanism must be set — a variant with only a `name` never
-exits and produces a single open position. `min_holding_days < max_holding_days` when both are set.
+Validation **[NEW]**: at least one exit mechanism must be set — an empty `exit` never exits and
+produces a single open position. `min_holding_days < max_holding_days` when both are set.
 
 **Stop-loss priority chain [PORT]** (`src/execution/portfolio.py:19-32`): exactly one stop type is
 active, in order
@@ -461,18 +467,13 @@ indicators:
     source: volume
     window: 20
 
-entry_variants:
-  - name: strict_momentum
-    signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
-  - name: relaxed_momentum
-    signal: "(close > sma_long) & (close >= max_high)"
+entry:
+  signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
 
-exit_variants:
-  - name: time_only
-    max_holding_days: 20
-  - name: trail_and_signal
-    trailing_stop_pct: 5.0
-    signal: "close < sma_long"
+exit:
+  signal: "close < sma_long"
+  trailing_stop_pct: 5.0
+  max_holding_days: 20
 
 position_sizing:
   type: fixed_pct
@@ -506,22 +507,14 @@ indicators:
     type: rsi
     window: 14
 
-entry_variants:
-  - name: moderate_uptrend_pullback
-    signal: "(close > sma_long) & (rsi_ind < 45)"
-  - name: deep_uptrend_pullback
-    signal: "(close > sma_long) & (rsi_ind < 38)"
+entry:
+  signal: "(close > sma_long) & (rsi_ind < 45)"
 
-exit_variants:
-  - name: trend_break_with_trailing
-    signal: "close < sma_short"
-    trailing_stop_pct: 7.5
-    take_profit_pct: 15.0
-    max_holding_days: 20
-  - name: dynamic_atr_swing
-    atr_stop_multiplier: 2.5
-    take_profit_pct: 18.0
-    max_holding_days: 15
+exit:
+  signal: "close < sma_short"
+  trailing_stop_pct: 7.5
+  take_profit_pct: 15.0
+  max_holding_days: 20
 
 position_sizing:
   type: fixed_pct
@@ -748,11 +741,32 @@ next-open test.
 
 ## 7. Backtest engine
 
-### 7.1 Variant expansion
+### 7.1 One entry, one exit
 
-**[PORT]** `src/execution/backtester.py:23-26`. The cartesian product of entry variants × exit
-variants. Each pair is simulated independently and reported separately. `E` entries × `X` exits =
-`E·X` simulations per backtest.
+**[FIX] — decided 2026-08-16, replacing the ported behaviour.** A strategy declares exactly one
+`entry` and one `exit`, so a backtest is one simulation producing one set of numbers.
+
+Legacy (**[PORT]** `src/execution/backtester.py:23-26`) took the cartesian product of `E` entry
+variants × `X` exit variants, simulated each pair independently, and reported the best of `E·X`.
+Three problems, in increasing order of seriousness:
+
+1. **The reported winner was selected on the same data every pair was measured on.** That is a
+   selection step, and it inflates whichever pair wins. Nothing in the backtest path corrected for
+   it; only §12.3's deflated Sharpe did, and only for optimizer runs.
+2. **The two selection criteria disagreed.** The search scored candidates by taking the best
+   variant under the configured objective (Calmar by default), while the winner promoted into the
+   reported config was chosen by raw `total_pnl` — the metric §9.3 rejects as "scale-dependent and
+   outlier-dominated". The parameters could therefore be fitted for one pair and the config
+   reported for another.
+3. **The cost compounded.** Each of `evaluations` fitness calls simulated all `E·X` pairs, and the
+   trial count fed to §12.3 had to be multiplied by `E·X` to stay honest — so declaring variants
+   raised the statistical bar the strategy had to clear in exchange for a convenience.
+
+Comparing two entry conditions is still possible and is now explicit: write two strategies and run
+both. The comparison is then visible in the run history rather than hidden inside one number.
+
+Removed with it: `expand_variants`, `VariantPair`, `VariantSimulation`, `VariantResult`,
+`BacktestResult.variants`, `BacktestResult.best`, and the optimizer's variant-pruning step.
 
 ### 7.2 Exit composition
 
@@ -761,10 +775,10 @@ variants. Each pair is simulated independently and reported separately. `E` entr
 
 ```python
 if max_holding_days:
-    variant_exits |= entries.shift(max_holding_days)
+    exits |= entries.shift(max_holding_days)
 if min_holding_days:
     ignore = OR over i in 1..min_holding_days of entries.shift(i)
-    variant_exits &= ~ignore
+    exits &= ~ignore
 ```
 
 Both rules key off **entry signals**, not realised positions. An entry signal that fires while
@@ -804,7 +818,7 @@ iter2: exits@[6]       -> realised@[2 7]
 iter3: exits@[6 11]    -> realised@[2 7 20]
 ```
 
-A history with 200 trades would need 200 full simulations per variant, per optimizer evaluation.
+A history with 200 trades would need 200 full simulations per optimizer evaluation.
 No iteration cap can rescue that; the algorithm is simply wrong for the problem.
 
 *Design 2 — suppress entries that collide with a forced exit.* This was needed because vectorbt
@@ -1017,9 +1031,14 @@ do not leak into the public API.
 
 ### 9.1 Parameter discovery
 
-**[PORT]** `src/optimization/optimizer.py:29-51`. Recursive traversal of `indicators`,
-`entry_variants`, and `exit_variants` only. `strategy`, `universe`, `execution`, and
-`position_sizing` are never optimized. Every non-bool `int`/`float` leaf becomes a parameter.
+**[PORT]** `src/optimization/optimizer.py:29-51`. Recursive traversal of `indicators`, `entry`,
+and `exit` only. `strategy`, `universe`, `execution`, and `position_sizing` are never optimized.
+
+`indicators` is a list, so a parameter from it is qualified by its entry's `name` —
+`indicators.rsi_ind.window`. `entry` and `exit` are single mappings with no name to qualify with,
+so their parameters are `exit.stop_loss_pct` and so on. `entry` holds only `signal`, which is
+structural, so in practice it never yields a parameter: an entry is tuned through the indicators
+its signal references. Every non-bool `int`/`float` leaf becomes a parameter.
 Int-ness is recorded from the YAML literal (`optimizer.py:50`) and re-applied on injection
 (`optimizer.py:59`): ints via `int(round(v))`, floats via `round(v, 2)`.
 
@@ -1032,8 +1051,7 @@ to `[-0.5, 0.5]` (`optimizer.py:44-49`). The `min`/`max` construction handles ne
 
 **[NEW]** Per-parameter bound overrides, because ±50% of a 200-day SMA is a 100-300 range that may
 be far wider or narrower than intended. The `optimize` key is available on every `indicators`,
-`entry_variants`, and `exit_variants` entry, and takes either a boolean or a mapping keyed by
-parameter name:
+`entry`, and `exit`, and takes either a boolean or a mapping keyed by parameter name:
 
 ```yaml
 indicators:
@@ -1128,15 +1146,18 @@ discount is defeated by any fluke bigger than 10×.
 The objective used is recorded in `OptimizationResult`, because a number is not comparable across
 objectives and the report must say which one produced it.
 
-**Trial counting.** The optimizer records the total number of *configurations scored*, which is
-`evaluations × |entry_variants| × |exit_variants|` — the variant maximum below is itself a selection
-step and must be counted as one. This count feeds the Deflated Sharpe Ratio in §12.
+**Trial counting.** The optimizer records the total number of *configurations scored*, which since
+the §7.1 change is simply `evaluations`: one evaluation scores one configuration. While variants
+existed each evaluation took the best of `|entry_variants| × |exit_variants|` simulations, and the
+trial count had to be multiplied by that product because the variant maximum was itself a selection
+step. This count feeds the Deflated Sharpe Ratio in §12.
 
 The legacy objective is retained as a selectable option and specified here for reference. It is
 **not** the default: raw PnL is scale-dependent and outlier-dominated, and its drawdown term scales
 a typical −20% drawdown by only 0.8, so it disciplines risk barely at all.
 
-**[PORT]** `optimizer.py:109-121`, per variant, maximum across variants:
+**[PORT]** `optimizer.py:109-121`, per variant, maximum across variants (§7.1 removed
+the maximum; the formula is reproduced here as legacy reference only):
 
 ```
 if trades < 5:              pnl *= 0.1
@@ -1215,10 +1236,10 @@ recorded in the result, so re-fitting is at least visible in the output.
 
 - the optimized config, as a YAML string with `strategy.name` suffixed `_optimized` — **[PORT]**
   §9 of the legacy plan;
-- the winning entry/exit variant names;
 - test-window metrics, train-window metrics, and baseline test-window metrics;
-- the parameter diff — `path: old → new`, filtered to parameters belonging to the surviving variants
-  (**[PORT]** `optimizer.py:185-196`);
+- the parameter diff — `path: old → new` (**[PORT]** `optimizer.py:185-196`; the legacy filter to
+  parameters belonging to the surviving variants no longer applies, since every discovered
+  parameter belongs to the one strategy);
 - the trade list for the test window;
 - search diagnostics: evaluations performed, failures, wall time, seed, convergence message.
 
@@ -1418,7 +1439,7 @@ Derived from the three legacy test files plus one regression test per defect.
 22. D7 — NaN `sl_stop` opens no stop; `0.0` behaviour asserted against vectorbt 1.0.0.
 23. D8 — no realised position closes earlier than `min_holding_days` *by signal or time exit*, and
     every `max_holding_days` trade lasts exactly that long; a stop still fires inside the window.
-    Plus: the holding rules cost exactly one simulation per variant (§7.2).
+    Plus: the holding rules cost exactly one simulation (§7.2).
 24. D9 — a config that fails to parse scores worse than a losing config.
 25. D10 — no bare `except` in the engine (AST-scanned).
 26. D11 — insufficient history raises.
@@ -1446,8 +1467,8 @@ non-shuffled, strictly ordered windows:
 - **anchored** — train start fixed at the first bar, train end advancing per fold;
 - **rolling** — train window of fixed length sliding forward.
 
-Default 6 folds. Each fold runs the full §9.4 protocol independently: its own search, its own
-variant selection, its own single test evaluation. Warm-up for a test window is drawn from bars
+Default 6 folds. Each fold runs the full §9.4 protocol independently: its own search and its own
+single test evaluation. Warm-up for a test window is drawn from bars
 preceding it, which is past data relative to every test bar.
 
 ### 12.2 Fold dispersion
@@ -1462,7 +1483,7 @@ Bailey & López de Prado. Adjusts the observed Sharpe for the number of trials, 
 and the skew and kurtosis of the return series, yielding the probability that the true Sharpe exceeds
 zero.
 
-The trial count is the one recorded in §9.3 — `evaluations × |entry_variants| × |exit_variants|` —
+The trial count is the one recorded in §9.3 — `evaluations` —
 not the number of DE generations. Understating it understates the deflation.
 
 Motivation: the maximum Sharpe over `N` independent trials on **pure noise** is inflated by roughly

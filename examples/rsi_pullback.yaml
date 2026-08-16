@@ -22,22 +22,14 @@ indicators:
     type: rsi
     window: 14
 
-entry_variants:
-  - name: moderate_uptrend_pullback
-    signal: "(close > sma_long) & (rsi_ind < 45)"
-  - name: deep_uptrend_pullback
-    signal: "(close > sma_long) & (rsi_ind < 38)"
+entry:
+  signal: "(close > sma_long) & (rsi_ind < 45)"
 
-exit_variants:
-  - name: trend_break_with_trailing
-    signal: "close < sma_short"
-    trailing_stop_pct: 7.5
-    take_profit_pct: 15.0
-    max_holding_days: 20
-  - name: dynamic_atr_swing
-    atr_stop_multiplier: 2.5
-    take_profit_pct: 18.0
-    max_holding_days: 15
+exit:
+  signal: "close < sma_short"
+  trailing_stop_pct: 7.5
+  take_profit_pct: 15.0
+  max_holding_days: 20
 
 position_sizing:
   type: fixed_pct

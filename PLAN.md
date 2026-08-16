@@ -16,12 +16,13 @@ API reusing the same core comes later.
 | Look-ahead | Structurally impossible — see "Causality" below. Non-negotiable. |
 | Data source | yfinance behind a `MarketDataProvider` protocol. Disk cache opt-in via `--cache`. |
 | Precision | `float64` (legacy used `float32`) |
-| Train/test | Fit on train, select variant on train, report on test. **Walk-forward is the default protocol** (revised 2026-08-16 after audit; single split kept as a fast mode). |
+| Train/test | Fit on train, report on test. **Walk-forward is the default protocol** (revised 2026-08-16 after audit; single split kept as a fast mode). |
 | Determinism | Seeded RNG + `updating='deferred'`; reproducible even with `workers=-1` |
 | LLM (later) | OpenAI-compatible base URL + model + key from settings; no provider-specific code |
 | Stops vs holding | **Stops always fire.** `min_holding_days` suppresses only signal and time exits (decided 2026-08-16; a stop disabled for N days is not a stop). |
 | Objective | **Calmar on train, with the trade-count floor as a hard feasibility constraint** (`+inf`), not a multiplier. Pluggable; legacy PnL objective selectable. |
 | Selection bias | Treated with the same rigour as look-ahead: benchmark, fold dispersion, deflated Sharpe, PBO, parameter stability, cost sensitivity. Spec section 12. |
+| Entry/exit | **One entry rule and one exit rule per strategy** (decided 2026-08-16). Entry/exit variants and their best-of-`E×X` selection were removed; spec section 7.1 records why. |
 
 ## Causality invariant
 
@@ -60,7 +61,7 @@ src/cracktrade/
   data/          MarketDataProvider protocol + YFinanceProvider + OHLCV contract
   indicators/    IndicatorRegistry, pandas_ta adapters, engine builtins
   signals/       AST-whitelisted evaluation + causal shift
-  backtest/      variant expansion, holding rules (signal_func_nb), vectorbt invocation
+  backtest/      holding rules (signal_func_nb), vectorbt invocation
   optimize/      parameter discovery, search space, DE driver, fitness, train/test
   validate/      walk-forward folds, deflated Sharpe, PBO, stability, cost sensitivity
   cli/           Typer app + render.py — parsing and rendering only
@@ -88,6 +89,7 @@ the future API will use.
 | 8 | Optimizer | done |
 | 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | done |
 | 9 | CLI output polish | done |
+| 9.5 | Remove entry/exit variants — one entry rule, one exit rule per strategy (spec §7.1) | done |
 
 Out of scope this pass: AI strategy generation, charts, persistence, HTTP API, multi-ticker,
 Google Drive, Zulip, watchdog.

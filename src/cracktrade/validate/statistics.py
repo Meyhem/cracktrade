@@ -79,7 +79,7 @@ def deflated_sharpe(
     Args:
         returns: per-bar returns of the reported strategy.
         trials: configurations scored during the search. Understating this understates the
-            deflation, so it counts variant selection too.
+            deflation.
         trial_sharpes: the Sharpe of every candidate, when available. Their variance is the
             right measure of how widely the search ranged. A parallel search cannot report
             them, and the estimator variance is used instead.

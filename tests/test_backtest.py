@@ -21,9 +21,8 @@ from cracktrade.backtest import (
     ATR_WINDOW,
     atr_stop_series,
     build_stops,
-    expand_variants,
     require_daily_bars,
-    run_variants,
+    run_simulation,
 )
 from cracktrade.backtest.portfolio import _resolve_size
 from cracktrade.config import Strategy, parse_strategy
@@ -79,9 +78,8 @@ def market(frame: pd.DataFrame) -> MarketData:
 def strategy_with(
     *,
     entry: str = "close > 30",
-    exits: list[dict[str, Any]] | None = None,
+    exit_rule: dict[str, Any] | None = None,
     indicators: list[dict[str, Any]] | None = None,
-    entries: list[dict[str, Any]] | None = None,
     sizing: dict[str, Any] | None = None,
 ) -> Strategy:
     config: dict[str, Any] = {
@@ -97,8 +95,8 @@ def strategy_with(
             "slippage_pct": 0.0,
         },
         "indicators": indicators or [],
-        "entry_variants": entries or [{"name": "e", "signal": entry}],
-        "exit_variants": exits or [{"name": "x", "max_holding_days": 500}],
+        "entry": {"signal": entry},
+        "exit": exit_rule or {"max_holding_days": 500},
     }
     if sizing is not None:
         config["position_sizing"] = sizing
@@ -124,7 +122,7 @@ def test_a_signal_at_bar_20_enters_at_bar_21() -> None:
     close[20:] = 40.0
     data = market(make_frame(close))
 
-    simulation = run_variants(strategy_with(), data)[0]
+    simulation = run_simulation(strategy_with(), data)
 
     record = trades(simulation).iloc[0]
     assert int(record["entry_idx"]) == 21
@@ -136,7 +134,7 @@ def test_the_entry_never_fills_at_the_bar_that_produced_it() -> None:
     close[20:] = 40.0
     data = market(make_frame(close))
 
-    simulation = run_variants(strategy_with(), data)[0]
+    simulation = run_simulation(strategy_with(), data)
 
     entry_bar = int(trades(simulation).iloc[0]["entry_idx"])
     signalling_bar = 20
@@ -166,10 +164,10 @@ def test_a_bar_touching_both_stops_exits_at_the_stop_loss() -> None:
     data = market(touch_both_stops_frame())
     strategy = strategy_with(
         entry="close > 99",
-        exits=[{"name": "x", "stop_loss_pct": 10.0, "take_profit_pct": 10.0}],
+        exit_rule={"stop_loss_pct": 10.0, "take_profit_pct": 10.0},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     record = trades(simulation).iloc[0]
     assert float(record["exit_price"]) == pytest.approx(90.0)
@@ -187,10 +185,10 @@ def test_a_gap_through_the_stop_fills_at_the_open_not_the_stop_level() -> None:
     data = market(frame)
     strategy = strategy_with(
         entry="close > 99",
-        exits=[{"name": "x", "stop_loss_pct": 10.0}],
+        exit_rule={"stop_loss_pct": 10.0},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     record = trades(simulation).iloc[0]
     assert float(record["exit_price"]) == pytest.approx(70.0)
@@ -296,10 +294,10 @@ def test_no_realised_position_closes_before_min_holding_days() -> None:
     data = oscillating_market()
     strategy = strategy_with(
         entry="close > 100",
-        exits=[{"name": "x", "signal": "close < 100", "min_holding_days": 6}],
+        exit_rule={"signal": "close < 100", "min_holding_days": 6},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     closed = trades(simulation)
     closed = closed[closed["status"] == 1]
@@ -312,10 +310,10 @@ def test_max_holding_days_forces_an_exit_that_many_bars_after_a_realised_entry()
     data = oscillating_market()
     strategy = strategy_with(
         entry="close > 100",
-        exits=[{"name": "x", "max_holding_days": 4}],
+        exit_rule={"max_holding_days": 4},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     closed = trades(simulation)
     closed = closed[closed["status"] == 1]
@@ -334,10 +332,10 @@ def test_a_stop_still_fires_inside_the_minimum_holding_window() -> None:
     data = market(make_frame(close))
     strategy = strategy_with(
         entry="close > 99",
-        exits=[{"name": "x", "stop_loss_pct": 3.0, "min_holding_days": 20}],
+        exit_rule={"stop_loss_pct": 3.0, "min_holding_days": 20},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     closed = trades(simulation)
     closed = closed[closed["status"] == 1]
@@ -346,41 +344,7 @@ def test_a_stop_still_fires_inside_the_minimum_holding_window() -> None:
     assert int(held.min()) < 20, "the stop must outrank min_holding_days"
 
 
-# ------------------------------------------------------------------ variants and sizing
-
-
-def test_every_entry_is_crossed_with_every_exit() -> None:
-    strategy = strategy_with(
-        entries=[
-            {"name": "e1", "signal": "close > 30"},
-            {"name": "e2", "signal": "close > 40"},
-            {"name": "e3", "signal": "close > 50"},
-        ],
-        exits=[
-            {"name": "x1", "max_holding_days": 5},
-            {"name": "x2", "stop_loss_pct": 2.0},
-        ],
-    )
-
-    pairs = expand_variants(strategy)
-
-    assert len(pairs) == 6
-    assert {pair.label for pair in pairs} == {
-        f"{entry} / {exit_}" for entry in ("e1", "e2", "e3") for exit_ in ("x1", "x2")
-    }
-
-
-def test_each_variant_pair_is_simulated_independently() -> None:
-    data = oscillating_market()
-    strategy = strategy_with(
-        entries=[{"name": "e1", "signal": "close > 100"}, {"name": "e2", "signal": "close > 105"}],
-        exits=[{"name": "x1", "max_holding_days": 5}, {"name": "x2", "max_holding_days": 20}],
-    )
-
-    simulations = run_variants(strategy, data)
-
-    assert len(simulations) == 4
-    assert len({simulation.label for simulation in simulations}) == 4
+# ----------------------------------------------------------------------------- sizing
 
 
 @pytest.mark.parametrize(
@@ -417,9 +381,9 @@ def test_the_stop_priority_chain_selects_one_stop(
     fields: dict[str, float], active: str, trailing: bool
 ) -> None:
     data = market(make_frame(np.linspace(100, 140, 60)))
-    variant = strategy_with(exits=[{"name": "x", **fields}]).exit_variants[0]
+    rule = strategy_with(exit_rule=dict(fields)).exit
 
-    stops = build_stops(variant, data)
+    stops = build_stops(rule, data)
 
     assert stops.active_stop == active
     assert stops.sl_trail is trailing
@@ -427,20 +391,18 @@ def test_the_stop_priority_chain_selects_one_stop(
 
 def test_shadowed_stops_are_reported_not_silently_dropped() -> None:
     data = market(make_frame(np.linspace(100, 140, 60)))
-    variant = strategy_with(
-        exits=[{"name": "x", "atr_stop_multiplier": 2.0, "stop_loss_pct": 5.0}]
-    ).exit_variants[0]
+    rule = strategy_with(exit_rule={"atr_stop_multiplier": 2.0, "stop_loss_pct": 5.0}).exit
 
-    stops = build_stops(variant, data)
+    stops = build_stops(rule, data)
 
     assert stops.shadowed_stops == ("stop_loss_pct",)
 
 
-def test_a_variant_with_no_stop_has_no_stop_distance() -> None:
+def test_an_exit_with_no_stop_has_no_stop_distance() -> None:
     data = market(make_frame(np.linspace(100, 140, 60)))
-    variant = strategy_with(exits=[{"name": "x", "max_holding_days": 5}]).exit_variants[0]
+    rule = strategy_with(exit_rule={"max_holding_days": 5}).exit
 
-    stops = build_stops(variant, data)
+    stops = build_stops(rule, data)
 
     assert stops.active_stop is None
     assert not stops.has_stop
@@ -448,11 +410,9 @@ def test_a_variant_with_no_stop_has_no_stop_distance() -> None:
 
 def test_percentages_become_fractions() -> None:
     data = market(make_frame(np.linspace(100, 140, 60)))
-    variant = strategy_with(
-        exits=[{"name": "x", "stop_loss_pct": 7.5, "take_profit_pct": 20.0}]
-    ).exit_variants[0]
+    rule = strategy_with(exit_rule={"stop_loss_pct": 7.5, "take_profit_pct": 20.0}).exit
 
-    stops = build_stops(variant, data)
+    stops = build_stops(rule, data)
 
     assert stops.sl_stop == pytest.approx(0.075)
     assert stops.tp_stop == pytest.approx(0.20)
@@ -484,9 +444,9 @@ def test_business_days_with_weekend_gaps_are_accepted() -> None:
 
 def test_a_simulation_carries_the_signal_definedness_record() -> None:
     data = oscillating_market()
-    strategy = strategy_with(entry="close > 100", exits=[{"name": "x", "max_holding_days": 5}])
+    strategy = strategy_with(entry="close > 100", exit_rule={"max_holding_days": 5})
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     assert simulation.entry_signal.defined_pct == pytest.approx(100.0)
     assert simulation.exit_signal is None
@@ -495,14 +455,14 @@ def test_a_simulation_carries_the_signal_definedness_record() -> None:
 # ------------------------------------------------- holding rules are applied in one pass
 
 
-def test_holding_rules_cost_exactly_one_simulation_per_variant(
+def test_holding_rules_cost_exactly_one_simulation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A performance property with correctness consequences, so it is pinned by a test.
 
     The first implementation evaluated the holding rules by iterating exits and realised
     positions to a fixed point. It was correct, but the recursion resolves one trade per pass,
-    so a history with 200 trades needed 200 simulations per variant -- far too slow to sit
+    so a history with 200 trades needed 200 simulations -- far too slow to sit
     inside an optimizer loop. Applying the rules inside ``signal_func_nb`` makes it one pass.
     """
     from cracktrade.backtest.portfolio import simulate as real_simulate
@@ -510,9 +470,7 @@ def test_holding_rules_cost_exactly_one_simulation_per_variant(
     data = oscillating_market(400)
     strategy = strategy_with(
         entry="close > 100",
-        exits=[
-            {"name": "x", "signal": "close < 100", "min_holding_days": 2, "max_holding_days": 9}
-        ],
+        exit_rule={"signal": "close < 100", "min_holding_days": 2, "max_holding_days": 9},
     )
 
     calls = 0
@@ -523,7 +481,7 @@ def test_holding_rules_cost_exactly_one_simulation_per_variant(
         return real_simulate(*args, **kwargs)
 
     monkeypatch.setattr("cracktrade.backtest.runner.simulate", counting)
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     assert calls == 1
     closed = trades(simulation)
@@ -538,12 +496,10 @@ def test_both_holding_bounds_bind_together() -> None:
     data = oscillating_market(300)
     strategy = strategy_with(
         entry="close > 100",
-        exits=[
-            {"name": "x", "signal": "close < 102", "min_holding_days": 3, "max_holding_days": 7}
-        ],
+        exit_rule={"signal": "close < 102", "min_holding_days": 3, "max_holding_days": 7},
     )
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     closed = trades(simulation)
     closed = closed[closed["status"] == 1]
@@ -556,9 +512,9 @@ def test_both_holding_bounds_bind_together() -> None:
 def test_a_forced_exit_does_not_re_enter_on_the_same_bar() -> None:
     """The exit and a re-entry cannot both happen at one open; the re-entry waits a bar."""
     data = oscillating_market(200)
-    strategy = strategy_with(entry="close > 100", exits=[{"name": "x", "max_holding_days": 3}])
+    strategy = strategy_with(entry="close > 100", exit_rule={"max_holding_days": 3})
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     records = trades(simulation).sort_values("entry_idx")
     exits = records["exit_idx"].to_numpy()[:-1]
@@ -574,9 +530,9 @@ def test_holding_rules_key_off_realised_positions_not_signals() -> None:
     positions early and producing shorter trades.
     """
     data = oscillating_market(200)
-    strategy = strategy_with(entry="close > 100", exits=[{"name": "x", "max_holding_days": 3}])
+    strategy = strategy_with(entry="close > 100", exit_rule={"max_holding_days": 3})
 
-    simulation = run_variants(strategy, data)[0]
+    simulation = run_simulation(strategy, data)
 
     closed = trades(simulation)
     closed = closed[closed["status"] == 1]

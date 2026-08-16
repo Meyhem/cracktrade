@@ -16,9 +16,9 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from cracktrade.config.models import (
-    EntryVariant,
+    EntryRule,
     ExecutionConfig,
-    ExitVariant,
+    ExitRule,
     IndicatorConfig,
     PositionSizing,
     Strategy,
@@ -34,8 +34,8 @@ _SECTION_MODELS: Mapping[str, type[BaseModel]] = {
     "universe": Universe,
     "execution": ExecutionConfig,
     "indicators": IndicatorConfig,
-    "entry_variants": EntryVariant,
-    "exit_variants": ExitVariant,
+    "entry": EntryRule,
+    "exit": ExitRule,
     "position_sizing": PositionSizing,
 }
 
@@ -98,10 +98,9 @@ def dump_strategy(strategy: Strategy) -> str:
     payload["indicators"] = [_flatten_indicator(item) for item in payload.get("indicators", [])]
     if not payload["indicators"]:
         del payload["indicators"]
-    for section in ("indicators", "entry_variants", "exit_variants"):
-        for item in payload.get(section, []):
-            if item.get("optimize") is True:
-                del item["optimize"]
+    for item in (*payload.get("indicators", []), payload["entry"], payload["exit"]):
+        if item.get("optimize") is True:
+            del item["optimize"]
     return yaml.safe_dump(payload, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
@@ -118,7 +117,7 @@ def _format_errors(error: ValidationError, source: str | None) -> list[str]:
     """Turn pydantic's error list into user-facing messages."""
     node = _compose(source) if source else None
     messages: list[str] = []
-    for raw in _without_cascades(error.errors()):
+    for raw in error.errors():
         loc = raw["loc"]
         path = ".".join(str(part) for part in loc)
         message = _message_for(raw)
@@ -126,27 +125,6 @@ def _format_errors(error: ValidationError, source: str | None) -> list[str]:
         location = f"{path} (line {line})" if line is not None else path
         messages.append(f"{location}: {message}")
     return messages
-
-
-def _without_cascades(raws: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Drop errors that are only consequences of another error already reported.
-
-    A single invalid entry in ``exit_variants`` also empties the list, producing a "needs at
-    least one entry" error alongside the real one. Reporting both invites the user to fix the
-    wrong thing.
-    """
-    sections_with_entry_errors = {
-        str(raw["loc"][0]) for raw in raws if len(raw["loc"]) > 1 and raw["loc"][0]
-    }
-    return [
-        raw
-        for raw in raws
-        if not (
-            raw["type"] == "too_short"
-            and len(raw["loc"]) == 1
-            and str(raw["loc"][0]) in sections_with_entry_errors
-        )
-    ]
 
 
 def _message_for(raw: Mapping[str, Any]) -> str:

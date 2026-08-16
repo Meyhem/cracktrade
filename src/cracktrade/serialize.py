@@ -36,16 +36,13 @@ _EXPOSED_PROPERTIES: dict[str, tuple[str, ...]] = {
     "Trade": ("is_winner",),
     "BenchmarkComparison": ("beats_buy_and_hold",),
     "DataVintage": ("filled_pct",),
-    "VariantResult": ("label",),
-    "BacktestResult": ("best",),
     "ParameterChange": ("moved", "at_bound"),
     "OptimizationResult": (
-        "label",
         "improvement_pct",
         "overfitting_gap_pct",
         "parameters_at_bound",
     ),
-    "FoldResult": ("label", "was_profitable"),
+    "FoldResult": ("was_profitable",),
     "DeflatedSharpe": ("is_significant", "beats_the_lucky_threshold"),
     "OverfittingProbability": ("is_acceptable",),
     "StabilityReport": (

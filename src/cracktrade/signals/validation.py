@@ -37,18 +37,12 @@ def available_names(strategy: Strategy) -> set[str]:
 
 
 def validate_signals(strategy: Strategy) -> list[str]:
-    """Check every entry and exit signal parses and resolves."""
+    """Check the entry and exit signals parse and resolve."""
     names = available_names(strategy)
-    issues: list[str] = []
+    issues = _check("entry.signal", strategy.entry.signal, names)
 
-    for variant in strategy.entry_variants:
-        issues.extend(_check(f"entry_variants.{variant.name}.signal", variant.signal, names))
-
-    for exit_variant in strategy.exit_variants:
-        if exit_variant.signal is not None:
-            issues.extend(
-                _check(f"exit_variants.{exit_variant.name}.signal", exit_variant.signal, names)
-            )
+    if strategy.exit.signal is not None:
+        issues.extend(_check("exit.signal", strategy.exit.signal, names))
 
     return issues
 

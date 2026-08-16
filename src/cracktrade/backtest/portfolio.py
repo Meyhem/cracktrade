@@ -32,14 +32,18 @@ from cracktrade.backtest.holding import (
     holding_signal_nb,
     holding_state,
 )
-from cracktrade.backtest.variants import BarPositions
 from cracktrade.config import PositionSizingType
 from cracktrade.errors import BacktestError
 
 if TYPE_CHECKING:
+    import numpy.typing as npt
+
     from cracktrade.backtest.stops import StopConfiguration
     from cracktrade.config import ExecutionConfig, PositionSizing
     from cracktrade.data import MarketData
+
+#: Integer bar positions at which positions were opened.
+type BarPositions = npt.NDArray[np.int64]
 
 #: Fill convention for stop orders. Verified: fills at the stop level when the bar reaches it,
 #: and at the open when the bar gaps past it.

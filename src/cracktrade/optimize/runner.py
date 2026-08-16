@@ -1,11 +1,11 @@
-"""The optimization protocol: fit on train, select on train, report on test once.
+"""The optimization protocol: fit on train, report on test once.
 
 Normative reference: ``docs/ENGINE_SPEC.md`` section 9.4.
 
-The ordering here is the whole point, and it is the fix for defect D2. Every step that *chooses*
-something -- the parameter search, and then the entry/exit variant -- happens on the train
-window. The test window is touched exactly once, after both choices are final, and its numbers
-are the only ones reported as out-of-sample.
+The ordering here is the whole point, and it is the fix for defect D2. The one step that
+*chooses* something -- the parameter search -- happens on the train window. The test window is
+touched exactly once, after that choice is final, and its numbers are the only ones reported as
+out-of-sample.
 
 Train metrics are reported too, labelled in-sample. The gap between them is the single most
 useful overfitting diagnostic available for free, and hiding it would be a disservice.
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from cracktrade.backtest import extract_metrics, extract_trades, run_variants
+from cracktrade.backtest import extract_metrics, extract_trades, run_simulation
 from cracktrade.config import dump_strategy
 from cracktrade.domain import Metrics, OptimizationResult, ParameterChange
 from cracktrade.errors import CracktradeError
@@ -91,7 +91,7 @@ class SplitOutcome:
 
     Attributes:
         result: the reported result.
-        pruned: the optimized strategy, collapsed to its winning variant pair.
+        optimized: the strategy with the winning parameter vector substituted in.
         parameters: the tunable parameters that were searched.
         values: the winning parameter vector.
         trial_sharpes: Sharpe of every candidate scored, empty for a parallel search.
@@ -99,7 +99,7 @@ class SplitOutcome:
     """
 
     result: OptimizationResult
-    pruned: Strategy
+    optimized: Strategy
     parameters: tuple[Parameter, ...]
     values: tuple[float, ...]
     trial_sharpes: tuple[float, ...]
@@ -157,33 +157,27 @@ def optimize_split(
 
     optimized = build_strategy(inject(strategy, parameters, outcome.values))
 
-    # Variant selection is a *choice*, so it happens on train like every other choice.
-    winner = _best_variant_name(optimized, division.train)
-    pruned = _prune_to(optimized, winner)
-
     _warn_if_unhealthy(diagnostics)
 
-    test_metrics, test_returns = _evaluate(pruned, division.test)
+    test_metrics, test_returns = _evaluate(optimized, division.test)
 
     result = OptimizationResult(
         strategy_name=strategy.strategy.name,
         ticker=ticker,
         objective=objective_name,
-        optimized_yaml=dump_strategy(pruned),
-        entry_name=winner[0],
-        exit_name=winner[1],
+        optimized_yaml=dump_strategy(optimized),
         test_metrics=test_metrics,
-        train_metrics=_evaluate_train(pruned, division.train),
-        baseline_test_metrics=_evaluate(_prune_to(strategy, winner), division.test)[0],
+        train_metrics=_evaluate_train(optimized, division.train),
+        baseline_test_metrics=_evaluate(strategy, division.test)[0],
         changes=_changes(parameters, outcome.values),
-        trades=_test_trades(pruned, division.test),
+        trades=_test_trades(optimized, division.test),
         train_bars=len(division.train.data),
         test_bars=division.test.scored_bars,
         evaluations=diagnostics.evaluations,
         failures=diagnostics.failures,
         infeasible=diagnostics.infeasible,
         counts_exact=diagnostics.counts_exact,
-        trials=diagnostics.evaluations * len(strategy.entry_variants) * len(strategy.exit_variants),
+        trials=diagnostics.evaluations,
         budget=evaluation_budget(parameters, epochs),
         seed=seed,
         elapsed_seconds=diagnostics.elapsed_seconds,
@@ -193,7 +187,7 @@ def optimize_split(
 
     return SplitOutcome(
         result=result,
-        pruned=pruned,
+        optimized=optimized,
         parameters=parameters,
         values=outcome.values,
         trial_sharpes=tuple(fitness.trial_sharpes) if diagnostics.counts_exact else (),
@@ -233,7 +227,7 @@ class _Fitness:
             candidate = build_strategy(
                 inject(self.strategy, self.parameters, [float(value) for value in vector])
             )
-            best, sharpe = _best_train_score(candidate, self.train, self.objective)
+            best, sharpe = _train_score(candidate, self.train, self.objective)
             self.trial_sharpes.append(sharpe)
         except CracktradeError as error:
             # A candidate that will not parse or will not simulate is not a bad strategy, it is
@@ -270,57 +264,30 @@ def worst_case_warmup(strategy: Strategy, parameters: tuple[Parameter, ...]) -> 
     return max(baseline, required_warmup(widest))
 
 
-def _best_train_score(
+def _train_score(
     strategy: Strategy, train: TrainWindow, objective: Objective
 ) -> tuple[float, float]:
-    """The best objective score any variant achieves on train, and that variant's Sharpe.
+    """A candidate's objective score on train, and its Sharpe.
 
     The Sharpe is returned alongside because the deflated Sharpe needs the *distribution* of
     trial Sharpes, not just the winner's, and recomputing it later would mean re-running the
     entire search.
+
+    One score per candidate, because a strategy is one entry rule and one exit rule. While the
+    engine crossed E entries with X exits this took the best of E*X on the same train window --
+    and did so under the configured objective, while the *reported* winner was chosen by raw
+    PnL, so the parameters could be fitted for one pair and the config promoted for another.
     """
     risk_free = strategy.execution.risk_free_rate
-    measured = [
-        (objective(metrics), metrics.sharpe_ratio)
-        for metrics in (
-            extract_metrics(simulation.portfolio, risk_free_rate=risk_free)
-            for simulation in run_variants(strategy, train.data)
-        )
-    ]
-    if not measured:
-        return INFEASIBLE, 0.0
-    return min(measured, key=lambda pair: pair[0])
-
-
-def _best_variant_name(strategy: Strategy, train: TrainWindow) -> tuple[str, str]:
-    """The entry/exit pair that performed best on the train window."""
-    risk_free = strategy.execution.risk_free_rate
-    simulations = run_variants(strategy, train.data)
-    best = max(
-        simulations,
-        key=lambda simulation: (
-            extract_metrics(simulation.portfolio, risk_free_rate=risk_free).total_pnl
-        ),
+    metrics = extract_metrics(
+        run_simulation(strategy, train.data).portfolio, risk_free_rate=risk_free
     )
-    return best.pair.entry.name, best.pair.exit.name
-
-
-def _prune_to(strategy: Strategy, winner: tuple[str, str]) -> Strategy:
-    """Collapse a strategy to the single winning entry/exit pair."""
-    entry_name, exit_name = winner
-    config = strategy.model_dump(mode="python")
-    config["entry_variants"] = [
-        entry for entry in config["entry_variants"] if entry["name"] == entry_name
-    ]
-    config["exit_variants"] = [
-        exit_ for exit_ in config["exit_variants"] if exit_["name"] == exit_name
-    ]
-    return build_strategy(config)
+    return objective(metrics), metrics.sharpe_ratio
 
 
 def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, npt.NDArray[np.float64]]:
-    """Score a pruned strategy on the test window, returning its metrics and its returns."""
-    simulation = run_variants(strategy, test.data)[0]
+    """Score a strategy on the test window, returning its metrics and its returns."""
+    simulation = run_simulation(strategy, test.data)
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
@@ -331,14 +298,14 @@ def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, npt.NDArra
 
 
 def _evaluate_train(strategy: Strategy, train: TrainWindow) -> Metrics:
-    """Score a pruned strategy on the train window, for the overfitting gap."""
-    simulation = run_variants(strategy, train.data)[0]
+    """Score a strategy on the train window, for the overfitting gap."""
+    simulation = run_simulation(strategy, train.data)
     return extract_metrics(simulation.portfolio, risk_free_rate=strategy.execution.risk_free_rate)
 
 
 def _test_trades(strategy: Strategy, test: TestWindow) -> tuple[Trade, ...]:
     """Trades taken in the test window, excluding any opened during the warm-up prefix."""
-    simulation = run_variants(strategy, test.data)[0]
+    simulation = run_simulation(strategy, test.data)
     index = test.data.index
     cutoff = index[test.offset].date()
     return tuple(

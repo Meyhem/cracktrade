@@ -74,19 +74,19 @@ indicators:
   - name: rsi_ind
     type: rsi
     window: 14
-entry_variants:
-  - name: pullback
-    signal: (close > sma_long) & (rsi_ind < 35)
-exit_variants:
-  - name: atr_swing
-    atr_stop_multiplier: 2.5
-    take_profit_pct: 18
-    max_holding_days: 15
+entry:
+  signal: (close > sma_long) & (rsi_ind < 35)
+exit:
+  atr_stop_multiplier: 2.5
+  take_profit_pct: 18
+  max_holding_days: 15
 ```
 
-Entry and exit variants are crossed, so `E` entries and `X` exits produce `E×X` independent
-simulations. `uv run cracktrade indicators` lists all 61 indicator types and the names each one
-contributes to the signal namespace.
+One entry rule and one exit rule per strategy, so a run is one simulation and one set of
+numbers. To compare two entry conditions, write two strategies and run both — the engine used to
+cross `E` entries with `X` exits and report the best of `E×X` measured on the same data, which is
+a selection step that inflates whichever pair wins. `uv run cracktrade indicators` lists all 61
+indicator types and the names each one contributes to the signal namespace.
 
 Signals are expressions over price series and indicator outputs. Comparisons must be
 parenthesised, because `&` binds tighter than `<`; the parser says so when you forget.

@@ -38,8 +38,8 @@ TICKER = "TEST"
 def strategy_with(
     *,
     indicators: list[dict[str, Any]] | None = None,
-    entries: list[dict[str, Any]] | None = None,
-    exits: list[dict[str, Any]] | None = None,
+    entry: dict[str, Any] | None = None,
+    exit_rule: dict[str, Any] | None = None,
 ) -> Strategy:
     return parse_strategy(
         {
@@ -55,8 +55,8 @@ def strategy_with(
                 "slippage_pct": 0.05,
             },
             "indicators": indicators or [{"name": "sma_fast", "type": "sma", "window": 20}],
-            "entry_variants": entries or [{"name": "up", "signal": "close > sma_fast"}],
-            "exit_variants": exits or [{"name": "down", "signal": "close < sma_fast"}],
+            "entry": entry or {"signal": "close > sma_fast"},
+            "exit": exit_rule or {"signal": "close < sma_fast"},
         }
     )
 
@@ -111,9 +111,9 @@ def test_default_bounds_are_plus_or_minus_fifty_percent() -> None:
     assert parameter.high == pytest.approx(30.0)
 
 
-def test_exit_variant_numbers_are_discovered() -> None:
+def test_exit_rule_numbers_are_discovered() -> None:
     parameters = discover_parameters(
-        strategy_with(exits=[{"name": "x", "stop_loss_pct": 4.0, "max_holding_days": 10}])
+        strategy_with(exit_rule={"stop_loss_pct": 4.0, "max_holding_days": 10})
     )
 
     keys = {parameter.key for parameter in parameters}
@@ -133,10 +133,7 @@ def test_execution_and_universe_are_never_searched() -> None:
     """Tuning the commission or the date range would be fitting the question, not the answer."""
     parameters = discover_parameters(strategy_with())
 
-    assert all(
-        parameter.section in {"indicators", "entry_variants", "exit_variants"}
-        for parameter in parameters
-    )
+    assert all(parameter.section in {"indicators", "entry", "exit"} for parameter in parameters)
 
 
 def test_optimize_false_pins_a_whole_entry() -> None:
@@ -146,12 +143,12 @@ def test_optimize_false_pins_a_whole_entry() -> None:
                 {"name": "fast", "type": "sma", "window": 20, "optimize": False},
                 {"name": "slow", "type": "sma", "window": 50},
             ],
-            entries=[{"name": "up", "signal": "fast > slow"}],
-            exits=[{"name": "down", "signal": "fast < slow"}],
+            entry={"signal": "fast > slow"},
+            exit_rule={"signal": "fast < slow"},
         )
     )
 
-    assert [parameter.entry_name for parameter in parameters] == ["slow"]
+    assert [parameter.owner for parameter in parameters] == ["slow"]
 
 
 def test_explicit_bounds_override_the_default_range() -> None:
@@ -184,8 +181,8 @@ def test_a_single_parameter_can_be_pinned_within_an_entry() -> None:
                     "optimize": {"slow": False},
                 }
             ],
-            entries=[{"name": "up", "signal": "close > m_macd"}],
-            exits=[{"name": "down", "signal": "close < m_macd"}],
+            entry={"signal": "close > m_macd"},
+            exit_rule={"signal": "close < m_macd"},
         )
     )
 
@@ -200,7 +197,7 @@ def test_a_strategy_with_nothing_tunable_is_refused() -> None:
         discover_parameters(
             strategy_with(
                 indicators=[{"name": "sma_fast", "type": "sma", "window": 20, "optimize": False}],
-                exits=[{"name": "down", "signal": "close < sma_fast"}],
+                exit_rule={"signal": "close < sma_fast"},
             )
         )
 
@@ -220,7 +217,7 @@ def test_injection_preserves_integer_parameters() -> None:
 
 
 def test_injection_rounds_floats_to_two_decimals() -> None:
-    strategy = strategy_with(exits=[{"name": "x", "stop_loss_pct": 5.0}])
+    strategy = strategy_with(exit_rule={"stop_loss_pct": 5.0})
     parameters = discover_parameters(strategy)
     index = next(i for i, p in enumerate(parameters) if p.key == "stop_loss_pct")
     values = [p.value for p in parameters]
@@ -228,7 +225,7 @@ def test_injection_rounds_floats_to_two_decimals() -> None:
 
     config = inject(strategy, parameters, values)
 
-    assert config["exit_variants"][0]["stop_loss_pct"] == 4.33
+    assert config["exit"]["stop_loss_pct"] == 4.33
 
 
 def test_injection_does_not_mutate_the_source_strategy() -> None:
@@ -367,23 +364,18 @@ def test_the_baseline_is_measured_on_the_same_window_as_the_result() -> None:
     )
 
 
-def test_the_optimized_strategy_is_pruned_to_the_winning_variant() -> None:
-    result = optimized(
-        strategy=strategy_with(
-            entries=[
-                {"name": "e1", "signal": "close > sma_fast"},
-                {"name": "e2", "signal": "close > sma_fast * 1.02"},
-            ],
-            exits=[
-                {"name": "x1", "signal": "close < sma_fast"},
-                {"name": "x2", "max_holding_days": 8},
-            ],
-        )
-    )
+def test_the_optimized_yaml_carries_the_one_entry_and_exit_it_started_with() -> None:
+    """No pruning step exists any more: a strategy is one entry rule and one exit rule.
 
-    assert result.entry_name in {"e1", "e2"}
-    assert result.exit_name in {"x1", "x2"}
-    assert result.optimized_yaml.count("name: e") == 1
+    The engine used to cross E entries with X exits, pick the best pair on train, and prune to
+    it. That selection inflated whichever pair won and was counted into ``trials`` to compensate;
+    removing the crossing removes the inflation at the source.
+    """
+    result = optimized(strategy=strategy_with(exit_rule={"max_holding_days": 8}))
+
+    assert "entry:" in result.optimized_yaml
+    assert "exit:" in result.optimized_yaml
+    assert "entry_variants" not in result.optimized_yaml
 
 
 # ---------------------------------------------------------------- D9: failure scoring
@@ -517,17 +509,15 @@ def test_a_parameter_resting_on_its_bound_is_flagged() -> None:
 
 
 def test_the_result_counts_every_configuration_scored() -> None:
-    """The trial count feeds the deflated Sharpe in spec section 12.3, so it must be honest."""
-    result = optimized(
-        strategy=strategy_with(
-            entries=[
-                {"name": "e1", "signal": "close > sma_fast"},
-                {"name": "e2", "signal": "close > sma_fast * 1.02"},
-            ]
-        )
-    )
+    """The trial count feeds the deflated Sharpe in spec section 12.3, so it must be honest.
 
-    assert result.trials == result.evaluations * 2
+    One evaluation is now one trial. While the engine crossed entry and exit variants, each
+    evaluation scored ``entries x exits`` configurations and took the best, so the trial count
+    had to be multiplied by the variant count to keep the deflation honest.
+    """
+    result = optimized()
+
+    assert result.trials == result.evaluations
 
 
 def test_the_optimized_yaml_reloads_as_a_valid_strategy() -> None:

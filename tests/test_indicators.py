@@ -51,8 +51,8 @@ def strategy_with(indicators: list[dict[str, Any]], signal: str = "close > open"
                 "commission_pct": 0.0,
             },
             "indicators": indicators,
-            "entry_variants": [{"name": "e", "signal": signal}],
-            "exit_variants": [{"name": "x", "max_holding_days": 5}],
+            "entry": {"signal": signal},
+            "exit": {"max_holding_days": 5},
         }
     )
 
@@ -321,6 +321,6 @@ def strategy_payload(indicators: list[dict[str, Any]]) -> dict[str, Any]:
             "commission_pct": 0.0,
         },
         "indicators": indicators,
-        "entry_variants": [{"name": "e", "signal": "close > open"}],
-        "exit_variants": [{"name": "x", "max_holding_days": 5}],
+        "entry": {"signal": "close > open"},
+        "exit": {"max_holding_days": 5},
     }

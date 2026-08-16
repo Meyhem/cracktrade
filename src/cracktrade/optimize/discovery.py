@@ -2,9 +2,14 @@
 
 Normative reference: ``docs/ENGINE_SPEC.md`` section 9.1.
 
-Discovery walks only ``indicators``, ``entry_variants`` and ``exit_variants``. ``strategy``,
-``universe``, ``execution`` and ``position_sizing`` are never searched: optimizing the start date
-or the commission rate would be fitting the *question*, not the answer.
+Discovery walks only ``indicators``, ``entry`` and ``exit``. ``strategy``, ``universe``,
+``execution`` and ``position_sizing`` are never searched: optimizing the start date or the
+commission rate would be fitting the *question*, not the answer.
+
+``entry`` holds only ``signal`` and ``optimize``, both structural, so in practice it never
+yields a parameter -- an entry rule is tuned through the indicators its signal references. It is
+walked anyway so that adding a numeric field to :class:`~cracktrade.config.EntryRule` does not
+silently create an unsearchable one.
 
 **[FIX]** Legacy traversed the raw YAML dict, never constructing a validated model, which is how
 its own tests got away with a dict-shaped ``indicators`` section the schema forbids. Here the
@@ -25,8 +30,11 @@ if TYPE_CHECKING:
 
     from cracktrade.config import Strategy
 
-#: Sections whose numeric leaves are searchable. Everything else is fixed.
-SEARCHABLE_SECTIONS = ("indicators", "entry_variants", "exit_variants")
+#: Sections holding a list of entries whose numeric leaves are searchable.
+LIST_SECTIONS = ("indicators",)
+
+#: Sections holding a single mapping whose numeric leaves are searchable.
+SINGLE_SECTIONS = ("entry", "exit")
 
 #: Keys that are structural rather than tunable, so they are skipped even though some hold
 #: numbers in principle.
@@ -41,9 +49,10 @@ class Parameter:
     """One tunable number.
 
     Attributes:
-        section: which list it came from, e.g. ``indicators``.
-        index: position within that list.
-        entry_name: the ``name`` of the entry it belongs to, for reporting.
+        section: which section it came from, e.g. ``indicators`` or ``exit``.
+        index: position within that section's list, or ``None`` for a single-mapping section.
+        owner: the ``name`` of the list entry it belongs to, for reporting. ``None`` for a
+            single-mapping section, which has no name to qualify the path with.
         key: the parameter's field name.
         value: the configured (baseline) value.
         is_integer: whether the YAML literal was an integer. A window of 20.4 is the same
@@ -53,8 +62,8 @@ class Parameter:
     """
 
     section: str
-    index: int
-    entry_name: str
+    index: int | None
+    owner: str | None
     key: str
     value: float
     is_integer: bool
@@ -64,7 +73,9 @@ class Parameter:
     @property
     def path(self) -> str:
         """Dotted path used in reports and parameter diffs."""
-        return f"{self.section}.{self.entry_name}.{self.key}"
+        if self.owner is None:
+            return f"{self.section}.{self.key}"
+        return f"{self.section}.{self.owner}.{self.key}"
 
 
 def discover_parameters(strategy: Strategy) -> tuple[Parameter, ...]:
@@ -77,9 +88,12 @@ def discover_parameters(strategy: Strategy) -> tuple[Parameter, ...]:
     dump = strategy.model_dump(mode="python")
     found: list[Parameter] = []
 
-    for section in SEARCHABLE_SECTIONS:
+    for section in LIST_SECTIONS:
         for index, entry in enumerate(dump.get(section) or ()):
-            found.extend(_parameters_in(section, index, entry))
+            found.extend(_parameters_in(section, index, str(entry.get("name", index)), entry))
+
+    for section in SINGLE_SECTIONS:
+        found.extend(_parameters_in(section, None, None, dump[section]))
 
     if not found:
         msg = (
@@ -93,14 +107,15 @@ def discover_parameters(strategy: Strategy) -> tuple[Parameter, ...]:
     return tuple(found)
 
 
-def _parameters_in(section: str, index: int, entry: Mapping[str, Any]) -> list[Parameter]:
-    """Numeric leaves of one list entry, honouring its ``optimize`` override."""
+def _parameters_in(
+    section: str, index: int | None, owner: str | None, entry: Mapping[str, Any]
+) -> list[Parameter]:
+    """Numeric leaves of one section entry, honouring its ``optimize`` override."""
     control = entry.get("optimize", True)
     if control is False:
         return []
 
     overrides: Mapping[str, Any] = control if isinstance(control, dict) else {}
-    entry_name = str(entry.get("name", index))
 
     parameters: list[Parameter] = []
     for key, value in _numeric_leaves(entry):
@@ -112,7 +127,7 @@ def _parameters_in(section: str, index: int, entry: Mapping[str, Any]) -> list[P
             Parameter(
                 section=section,
                 index=index,
-                entry_name=entry_name,
+                owner=owner,
                 key=key,
                 value=float(value),
                 is_integer=isinstance(value, int),
@@ -185,7 +200,8 @@ def inject(
     config = strategy.model_dump(mode="python")
 
     for parameter, raw in zip(parameters, values, strict=True):
-        entry = config[parameter.section][parameter.index]
+        section = config[parameter.section]
+        entry = section if parameter.index is None else section[parameter.index]
         target = (
             entry["params"]
             if "params" in entry and parameter.key in entry.get("params", {})

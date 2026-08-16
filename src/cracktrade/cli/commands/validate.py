@@ -43,7 +43,6 @@ def validate(
         f"[green]ok[/green] {strategy.strategy.name}: "
         f"{strategy.universe.ticker}, "
         f"{strategy.universe.start_date} to {strategy.universe.end_date}, "
-        f"{len(strategy.indicators)} indicator(s), "
-        f"{len(strategy.entry_variants)}x{len(strategy.exit_variants)} variant combinations",
+        f"{len(strategy.indicators)} indicator(s)",
         style=None,
     )

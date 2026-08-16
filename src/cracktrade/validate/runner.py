@@ -2,9 +2,9 @@
 
 Normative reference: ``docs/ENGINE_SPEC.md`` section 12.
 
-Each fold runs the full section 9.4 protocol independently -- its own search, its own variant
-selection, its own single test evaluation. Nothing is shared between folds except the price
-history, so a fold's test window is never seen by its own search.
+Each fold runs the full section 9.4 protocol independently -- its own search, its own single
+test evaluation. Nothing is shared between folds except the price history, so a fold's test
+window is never seen by its own search.
 
 What comes out is a *distribution*, plus four statistics that say whether the distribution means
 anything: how consistent it was across folds, whether the Sharpe survives deflation for the
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from cracktrade.backtest import buy_and_hold_portfolio, extract_metrics, run_variants
+from cracktrade.backtest import buy_and_hold_portfolio, extract_metrics, run_simulation
 from cracktrade.config import dump_strategy
 from cracktrade.domain import FoldResult, Metrics, ValidationReport
 from cracktrade.log import get_logger
@@ -101,8 +101,6 @@ def walk_forward(
             test_bars=division.test.scored_bars,
             first_test_bar=division.test.data.index[division.test.offset].date(),
             last_test_bar=division.test.data.index[-1].date(),
-            entry_name=outcome.result.entry_name,
-            exit_name=outcome.result.exit_name,
             metrics=outcome.result.test_metrics,
             train_metrics=outcome.result.train_metrics,
             parameters={change.path: change.new_value for change in outcome.result.changes},
@@ -132,7 +130,7 @@ def walk_forward(
         scheme=scheme.value,
         folds=fold_results,
         benchmark=benchmark,
-        optimized_yaml=dump_strategy(last_outcome.pruned),
+        optimized_yaml=dump_strategy(last_outcome.optimized),
         deflated=deflated_sharpe(
             out_of_sample,
             trials=trials,
@@ -146,7 +144,7 @@ def walk_forward(
             last_split.train,
             get_objective(objective_name),
         ),
-        costs=cost_sensitivity(last_outcome.pruned, last_split.test),
+        costs=cost_sensitivity(last_outcome.optimized, last_split.test),
         mean_return_interval=block_bootstrap_interval(out_of_sample, statistic="mean", seed=seed),
         total_return_interval=block_bootstrap_interval(out_of_sample, statistic="total", seed=seed),
         trials=trials,
@@ -202,10 +200,10 @@ def _fold_performance_matrix(
 
     for column, outcome in enumerate(outcomes):
         for row, division in enumerate(splits):
-            simulation = run_variants(outcome.pruned, division.test.data)[0]
+            simulation = run_simulation(outcome.optimized, division.test.data)
             metrics = extract_metrics(
                 simulation.portfolio,
-                risk_free_rate=outcome.pruned.execution.risk_free_rate,
+                risk_free_rate=outcome.optimized.execution.risk_free_rate,
                 offset=division.test.offset,
             )
             matrix[row, column] = metrics.sharpe_ratio

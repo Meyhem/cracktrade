@@ -1,0 +1,47 @@
+# Development database for the API layer (spec section 14).
+#
+# This file hosts Postgres and nothing else. The API server and the run worker are run from the
+# checkout with `uv run cracktrade-api serve` / `worker`, because in development they are
+# restarted constantly and rebuilding an image for each change buys nothing.
+#
+#   docker compose up -d
+#   uv run cracktrade-api db migrate
+#   uv run cracktrade-api serve
+#
+# Credentials match `DEFAULT_DATABASE_URL` in src/cracktrade/api/settings.py, so a freshly
+# composed database needs no configuration at all. Override any of them in `.env`
+# (see `.env.example`); that file is git-ignored precisely so a developer's local port and
+# password never arrive in someone else's checkout.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cracktrade-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cracktrade}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cracktrade}
+      POSTGRES_DB: ${POSTGRES_DB:-cracktrade}
+      # Deterministic collation. Sort order is part of what the database returns, and a
+      # server whose locale differs from a colleague's would order strategy names differently
+      # for reasons nothing in the code accounts for.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      # Host port only. Published on loopback: there is no authentication in front of this
+      # application (spec section 15.3, D-5), so the database must not be reachable off the
+      # machine by accident either.
+      - "127.0.0.1:${CRACKTRADE_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `db migrate` and the db-marked tests both assume a server that is actually accepting
+      # connections, not merely a container that has started.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cracktrade} -d ${POSTGRES_DB:-cracktrade}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  pgdata:
+    name: cracktrade-pgdata

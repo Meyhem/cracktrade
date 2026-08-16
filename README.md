@@ -161,8 +161,40 @@ before anything is considered done.
 code follows. `docs/AUDIT.md` records the financial and technical review that produced the
 validation phase, including the mistakes found along the way.
 
+### Working on the API layer
+
+The HTTP interface and its persistence (spec §14–§15) need a PostgreSQL server. One is defined
+in `docker-compose.yml`; it hosts the database and nothing else, since the server and worker are
+run straight from the checkout.
+
+```bash
+docker compose up -d
+```
+
+Its credentials are the code defaults, so nothing needs configuring. `.env.example` lists every
+knob if you want to change one — copy it to `.env`, which is git-ignored.
+
+Tests that need the database are marked `db`:
+
+```bash
+uv run pytest -m db
+```
+
+They **skip** when no server is reachable, so the engine's own suite still runs on a checkout
+without Docker. That is a deliberate hole: a suite can report green having proved nothing about
+the database. Close it wherever that matters — CI, or before a commit that touches this layer:
+
+```bash
+CRACKTRADE_API_TEST_DB_REQUIRED=1 uv run pytest -m db
+```
+
+Each test runs against its own database, cloned from a session template and dropped afterwards,
+so tests cannot influence one another and none of them touch the development database.
+
 ## Status
 
-The engine, optimizer and validation suite are complete. AI-assisted strategy generation, charts,
-persistence and the HTTP interface are not built yet; the core is a library and the CLI is one
-consumer of it, so adding another interface does not mean moving any logic.
+The engine, optimizer and validation suite are complete. The HTTP interface and persistence are
+being built now, phase by phase, against `docs/API_BUILD_PLAN.md`; AI-assisted strategy
+generation and the web UI come after. The core is a library and the CLI is one consumer of it,
+so adding another interface does not mean moving any logic — the engine stays stateless, and
+what the API stores is the engine's own serialized output.

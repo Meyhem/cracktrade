@@ -133,9 +133,19 @@ knob change a computed result.
   console script wired (`serve`/`worker`/`db` print "not implemented" and exit non-zero).
 - Done when: gate green; `uv run cracktrade-api --help` shows the three subcommands.
 
-### Phase 1 — Docker compose dev environment
+### Phase 1 — Docker compose dev environment — **DONE**
 
 Goal: `docker compose up -d` gives every developer (and the db-marked tests) the same Postgres.
+
+Landed and verified from an empty volume: compose up → healthy in ~6s → `pytest -m db` passes
+with no configuration. Two departures from the plan as written, both deliberate. Isolation is
+**per test**, not per session — each test gets a database cloned from a session template, which
+is a page-level copy inside the server and cheap enough to do per test, and it removes ordering
+dependence entirely rather than reducing it. And the db tests skip on an *unreachable server*
+rather than on an unset variable, so a fresh clone needs no environment at all; because a
+skipping suite can report green having proved nothing, `CRACKTRADE_API_TEST_DB_REQUIRED=1`
+turns the skip into a failure for CI. `_provision_template` in `tests/api/conftest.py` is the
+seam Phase 2 fills with the real migration run.
 
 - `docker-compose.yml`: `postgres:16-alpine`, named volume, healthcheck (`pg_isready`),
   port `${CRACKTRADE_DB_PORT:-5432}`, credentials from `.env` (with `.env.example` committed;

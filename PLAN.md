@@ -62,6 +62,7 @@ src/cracktrade/
   signals/       AST-whitelisted evaluation + causal shift
   backtest/      variant expansion, holding rules (signal_func_nb), vectorbt invocation
   optimize/      parameter discovery, search space, DE driver, fitness, train/test
+  validate/      walk-forward folds, deflated Sharpe, PBO, stability, cost sensitivity
   cli/           Typer app + render.py — parsing and rendering only
   errors.py  settings.py
 ```
@@ -85,7 +86,7 @@ the future API will use.
 | 6 | Backtest engine | done |
 | 7 | Metrics, benchmark, result models | done |
 | 8 | Optimizer | done |
-| 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | |
+| 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | done |
 | 9 | CLI output polish | |
 
 Out of scope this pass: AI strategy generation, charts, persistence, HTTP API, multi-ticker,

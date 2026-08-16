@@ -611,17 +611,17 @@ def test_the_test_window_is_sized_for_the_widest_candidate_the_search_can_reach(
     If the warm-up prefix were sized from the baseline, such a candidate would have its signals
     suppressed inside the scored region and would quietly lose test bars it should have traded.
     """
-    from cracktrade.optimize.runner import _worst_case_warmup
+    from cracktrade.optimize.runner import worst_case_warmup
 
     strategy = strategy_with(indicators=[{"name": "sma_fast", "type": "sma", "window": 200}])
     parameters = discover_parameters(strategy)
 
-    assert _worst_case_warmup(strategy, parameters) >= 300
+    assert worst_case_warmup(strategy, parameters) >= 300
 
 
-def test_the_worst_case_warmup_falls_back_when_the_widest_combination_is_invalid() -> None:
+def test_theworst_case_warmup_falls_back_when_the_widest_combination_is_invalid() -> None:
     """An all-upper-bound configuration need not be a valid strategy."""
-    from cracktrade.optimize.runner import _worst_case_warmup
+    from cracktrade.optimize.runner import worst_case_warmup
 
     strategy = strategy_with()
-    assert _worst_case_warmup(strategy, discover_parameters(strategy)) >= 20
+    assert worst_case_warmup(strategy, discover_parameters(strategy)) >= 20

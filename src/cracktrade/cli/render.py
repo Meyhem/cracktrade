@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         BacktestResult,
         Metrics,
         OptimizationResult,
+        ValidationReport,
         VariantResult,
     )
 
@@ -303,4 +304,146 @@ def _render_diagnostics(result: OptimizationResult, console: Console) -> None:
     console.print(
         "[dim]One split, evaluated once. The maximum over many trials is inflated even with no "
         "edge; walk-forward folds and a deflated Sharpe land in the next phase.[/dim]"
+    )
+
+
+def render_validation(report: ValidationReport, console: Console) -> None:
+    """Print a walk-forward validation report.
+
+    Ordering follows spec section 12.8, and it is the opposite of how a backtest usually gets
+    presented. The verdict comes first, then the evidence for and against it, and the headline
+    return comes last. A reader who stops after two lines should already know whether the
+    result is worth anything.
+    """
+    _render_validation_verdict(report, console)
+    console.print()
+    _render_folds(report, console)
+    console.print()
+    _render_robustness(report, console)
+    console.print()
+    _render_costs(report, console)
+    _render_validation_footer(report, console)
+
+
+def _render_validation_verdict(report: ValidationReport, console: Console) -> None:
+    credible = report.is_credible
+    colour = "green" if credible else "red"
+    verdict = "CREDIBLE" if credible else "NOT CREDIBLE"
+
+    console.print(
+        f"[bold]{report.strategy_name}[/bold] on [bold]{report.ticker}[/bold] — "
+        f"{len(report.folds)} {report.scheme} walk-forward folds, objective {report.objective}"
+    )
+    console.print(f"  [bold {colour}]{verdict}[/bold {colour}]")
+    console.print(
+        f"  out-of-sample {report.combined_return_pct:+.1f}% vs "
+        f"{report.benchmark.total_return_pct:+.1f}% buy-and-hold, "
+        f"profitable in {report.profitable_folds}/{len(report.folds)} folds"
+    )
+    for failure in report.failures:
+        console.print(f"  [red]x[/red] {failure}")
+
+
+def _render_folds(report: ValidationReport, console: Console) -> None:
+    table = Table(title="Per-fold, out of sample", title_justify="left", header_style="bold")
+    table.add_column("Fold")
+    table.add_column("Period")
+    table.add_column("Return", justify="right")
+    table.add_column("Max DD", justify="right")
+    table.add_column("Trades", justify="right")
+    table.add_column("Variant")
+
+    for fold in report.folds:
+        colour = "green" if fold.was_profitable else "red"
+        table.add_row(
+            str(fold.index + 1),
+            f"{fold.first_test_bar} to {fold.last_test_bar}",
+            f"[{colour}]{fold.metrics.total_return_pct:+.2f}%[/{colour}]",
+            f"{fold.metrics.max_drawdown_pct:.2f}%",
+            str(fold.metrics.total_trades),
+            fold.label,
+        )
+    console.print(table)
+    console.print(
+        f"  median {report.median_return_pct:+.2f}%, interquartile spread "
+        f"{report.return_iqr_pct:.2f} pp — how much the answer depends on when you ran it"
+    )
+
+
+def _render_robustness(report: ValidationReport, console: Console) -> None:
+    table = Table(title="Robustness", title_justify="left", header_style="bold")
+    table.add_column("Check")
+    table.add_column("Result", justify="right")
+    table.add_column("Verdict", justify="right")
+
+    deflated = report.deflated
+    overfitting = report.overfitting
+    stability = report.stability
+    interval = report.mean_return_interval
+
+    rows = [
+        (
+            f"Deflated Sharpe ({report.trials} trials)",
+            f"P={deflated.probability:.3f}",
+            deflated.is_significant,
+        ),
+        (
+            "Sharpe vs luck threshold",
+            f"{deflated.observed:.3f} vs {deflated.threshold:.3f}",
+            deflated.beats_the_lucky_threshold,
+        ),
+        (
+            f"Overfitting probability ({overfitting.combinations} splits)",
+            f"{overfitting.probability:.2f}",
+            overfitting.is_acceptable,
+        ),
+        (
+            "Parameter stability (10% nudge)",
+            f"-{100 * stability.worst_small_degradation:.0f}%",
+            stability.is_stable,
+        ),
+        (
+            "Mean bar return, 95% interval",
+            f"[{100 * interval.low:+.3f}%, {100 * interval.high:+.3f}%]",
+            interval.excludes_zero and interval.point > 0,
+        ),
+        ("Fold win rate", f"{100 * report.fold_win_rate:.0f}%", report.fold_win_rate >= 0.5),
+    ]
+    for label, value, passed in rows:
+        mark = "[green]pass[/green]" if passed else "[red]fail[/red]"
+        table.add_row(label, value, mark)
+    console.print(table)
+
+    if deflated.variance_estimated:
+        console.print(
+            "  [dim]Trial Sharpes were unavailable (parallel search), so the deflation used the "
+            "estimator variance — a weaker, more permissive correction.[/dim]"
+        )
+    if stability.fragile_parameters:
+        console.print(f"  [yellow]fragile: {', '.join(stability.fragile_parameters)}[/yellow]")
+
+
+def _render_costs(report: ValidationReport, console: Console) -> None:
+    table = Table(title="Cost sensitivity", title_justify="left", header_style="bold")
+    table.add_column("Slippage")
+    table.add_column("Return", justify="right")
+    for scenario in report.costs.scenarios:
+        colour = "green" if scenario.metrics.total_return_pct > 0 else "red"
+        table.add_row(
+            f"{scenario.multiple:g}x ({scenario.slippage_pct:.3g}%)",
+            f"[{colour}]{scenario.metrics.total_return_pct:+.2f}%[/{colour}]",
+        )
+    console.print(table)
+    if report.costs.break_even_multiple is not None:
+        console.print(
+            f"  [yellow]! the edge disappears at "
+            f"{report.costs.break_even_multiple:g}x slippage[/yellow]"
+        )
+
+
+def _render_validation_footer(report: ValidationReport, console: Console) -> None:
+    console.print()
+    console.print(
+        f"[dim]{report.total_trades} out-of-sample trades, {report.trials} configurations "
+        f"scored, seed {report.seed}, {report.elapsed_seconds:.1f}s[/dim]"
     )

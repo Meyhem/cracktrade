@@ -327,7 +327,7 @@ means no stop.
 - Everything already specified in §9: seeding, `integrality`, `+inf` failure scoring, type-separated
   train/test windows.
 
-### Phase 8.5 — Validation and robustness *(new, and the highest-value phase in the plan)*
+### Phase 8.5 — Validation and robustness *(new, and the highest-value phase in the plan)* — **DONE**
 
 1. Walk-forward fold generator (anchored + rolling), replacing the single split as the default (B3).
 2. Per-fold result matrix with dispersion reporting (B3).
@@ -356,3 +356,34 @@ single contiguous window, and report a number with no benchmark, no confidence i
 overfitting diagnostic. Every one of those is individually enough to make a result that looks
 compelling and is not. The engineering discipline applied to look-ahead bias now needs to be applied
 to selection bias, which is the failure mode that actually costs money in a strategy optimizer.
+
+
+---
+
+## 5. Outcome
+
+Every finding above is implemented. The suite's own verdict on the two shipped example
+strategies, run over real market data, is the shortest summary of why it was worth building.
+
+`momentum_breakout_v2` on MSFT, four anchored walk-forward folds:
+
+```
+NOT CREDIBLE
+  out-of-sample +6.6% vs +149.0% buy-and-hold, profitable in 2/4 folds
+  x deflated Sharpe P=0.00, below the 0.95 bar for 4800 trials
+  x a 10% parameter nudge destroys 81% of the objective
+  x only 16 out-of-sample trades in total
+  x returned +6.6% out of sample against +149.0% for buy-and-hold
+
+fold returns: +16.21%, -2.31%, -8.23%, +2.37%   (median +0.03%, IQR 14.56 pp)
+```
+
+A single 80/20 split landing on the first fold would have reported +16.21% and looked like a
+find. That is the failure this phase exists to prevent, and it is not hypothetical — it is what
+the original design would have printed.
+
+Two units bugs were caught by building the statistics rather than by reading about them. The
+deflated Sharpe mixes the ratio with the observation count, so both must be per-period; feeding
+it annualised trial Sharpes inflated the luck threshold by a factor of about 16 and failed every
+strategy regardless of merit. And a 10% perturbation of a small integer parameter rounds back
+onto itself, which would have reported perfect stability for a test that never ran.

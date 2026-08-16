@@ -36,7 +36,7 @@ from cracktrade.optimize.search import (
     evaluation_budget,
     run_search,
 )
-from cracktrade.optimize.windows import TestWindow, TrainWindow, split
+from cracktrade.optimize.windows import Split, TestWindow, TrainWindow, split
 from cracktrade.strategy import build_strategy, required_warmup
 
 if TYPE_CHECKING:
@@ -67,10 +67,58 @@ def optimize(
         OptimizationError: the history cannot support the requested split.
     """
     parameters = discover_parameters(strategy)
-    warmup = _worst_case_warmup(strategy, parameters)
+    warmup = worst_case_warmup(strategy, parameters)
     division = split(
         data, train_fraction=train_fraction, warmup=warmup, min_test_bars=min_test_bars
     )
+    return optimize_split(
+        strategy,
+        division,
+        ticker=data.ticker,
+        epochs=epochs,
+        seed=seed,
+        workers=workers,
+        objective_name=objective_name,
+    ).result
+
+
+@dataclass(frozen=True, slots=True)
+class SplitOutcome:
+    """One optimization over one train/test division, with the pieces validation needs.
+
+    Attributes:
+        result: the reported result.
+        pruned: the optimized strategy, collapsed to its winning variant pair.
+        parameters: the tunable parameters that were searched.
+        values: the winning parameter vector.
+        trial_sharpes: Sharpe of every candidate scored, empty for a parallel search.
+        test_returns: per-bar out-of-sample returns, warm-up prefix excluded.
+    """
+
+    result: OptimizationResult
+    pruned: Strategy
+    parameters: tuple[Parameter, ...]
+    values: tuple[float, ...]
+    trial_sharpes: tuple[float, ...]
+    test_returns: npt.NDArray[np.float64]
+
+
+def optimize_split(
+    strategy: Strategy,
+    division: Split,
+    *,
+    ticker: str,
+    epochs: int = 10,
+    seed: int = 0,
+    workers: int = 1,
+    objective_name: str = DEFAULT_OBJECTIVE,
+) -> SplitOutcome:
+    """Run the full protocol over one already-computed train/test division.
+
+    Separated from :func:`optimize` so that walk-forward validation can drive many divisions
+    without re-deriving the split each time.
+    """
+    parameters = discover_parameters(strategy)
     objective = get_objective(objective_name)
 
     diagnostics = SearchDiagnostics(
@@ -110,16 +158,18 @@ def optimize(
 
     _warn_if_unhealthy(diagnostics)
 
-    return OptimizationResult(
+    test_metrics, test_returns = _evaluate(pruned, division.test)
+
+    result = OptimizationResult(
         strategy_name=strategy.strategy.name,
-        ticker=data.ticker,
+        ticker=ticker,
         objective=objective_name,
         optimized_yaml=dump_strategy(pruned),
         entry_name=winner[0],
         exit_name=winner[1],
-        test_metrics=_evaluate(pruned, division.test),
+        test_metrics=test_metrics,
         train_metrics=_evaluate_train(pruned, division.train),
-        baseline_test_metrics=_evaluate(_prune_to(strategy, winner), division.test),
+        baseline_test_metrics=_evaluate(_prune_to(strategy, winner), division.test)[0],
         changes=_changes(parameters, outcome.values),
         trades=_test_trades(pruned, division.test),
         train_bars=len(division.train.data),
@@ -134,6 +184,15 @@ def optimize(
         elapsed_seconds=diagnostics.elapsed_seconds,
         convergence_message=diagnostics.message,
         most_common_failure=diagnostics.most_common_failure,
+    )
+
+    return SplitOutcome(
+        result=result,
+        pruned=pruned,
+        parameters=parameters,
+        values=outcome.values,
+        trial_sharpes=tuple(fitness.trial_sharpes) if diagnostics.counts_exact else (),
+        test_returns=test_returns,
     )
 
 
@@ -158,6 +217,10 @@ class _Fitness:
     failures: int = 0
     infeasible: int = 0
     failure_reasons: dict[str, int] = field(default_factory=dict)
+    #: Sharpe of every candidate scored. Their spread is the right measure of how widely the
+    #: search ranged, which is what the deflated Sharpe deflates by (spec 12.3). Only populated
+    #: in-process, so a parallel search leaves this empty and the statistic falls back.
+    trial_sharpes: list[float] = field(default_factory=list)
 
     def __call__(self, vector: npt.NDArray[np.float64]) -> float:
         self.evaluations += 1
@@ -165,7 +228,8 @@ class _Fitness:
             candidate = build_strategy(
                 inject(self.strategy, self.parameters, [float(value) for value in vector])
             )
-            best = _best_train_score(candidate, self.train, self.objective)
+            best, sharpe = _best_train_score(candidate, self.train, self.objective)
+            self.trial_sharpes.append(sharpe)
         except CracktradeError as error:
             # A candidate that will not parse or will not simulate is not a bad strategy, it is
             # not a strategy. It must rank below every real one, not at zero (defect D9).
@@ -179,7 +243,7 @@ class _Fitness:
         return best
 
 
-def _worst_case_warmup(strategy: Strategy, parameters: tuple[Parameter, ...]) -> int:
+def worst_case_warmup(strategy: Strategy, parameters: tuple[Parameter, ...]) -> int:
     """The largest warm-up any candidate in the search space could need.
 
     The test window is extended backwards by this much. Sizing it from the *baseline* strategy
@@ -201,14 +265,26 @@ def _worst_case_warmup(strategy: Strategy, parameters: tuple[Parameter, ...]) ->
     return max(baseline, required_warmup(widest))
 
 
-def _best_train_score(strategy: Strategy, train: TrainWindow, objective: Objective) -> float:
-    """The best score any variant of ``strategy`` achieves on the train window."""
+def _best_train_score(
+    strategy: Strategy, train: TrainWindow, objective: Objective
+) -> tuple[float, float]:
+    """The best objective score any variant achieves on train, and that variant's Sharpe.
+
+    The Sharpe is returned alongside because the deflated Sharpe needs the *distribution* of
+    trial Sharpes, not just the winner's, and recomputing it later would mean re-running the
+    entire search.
+    """
     risk_free = strategy.execution.risk_free_rate
-    scores = [
-        objective(extract_metrics(simulation.portfolio, risk_free_rate=risk_free))
-        for simulation in run_variants(strategy, train.data)
+    measured = [
+        (objective(metrics), metrics.sharpe_ratio)
+        for metrics in (
+            extract_metrics(simulation.portfolio, risk_free_rate=risk_free)
+            for simulation in run_variants(strategy, train.data)
+        )
     ]
-    return min(scores) if scores else INFEASIBLE
+    if not measured:
+        return INFEASIBLE, 0.0
+    return min(measured, key=lambda pair: pair[0])
 
 
 def _best_variant_name(strategy: Strategy, train: TrainWindow) -> tuple[str, str]:
@@ -237,14 +313,16 @@ def _prune_to(strategy: Strategy, winner: tuple[str, str]) -> Strategy:
     return build_strategy(config)
 
 
-def _evaluate(strategy: Strategy, test: TestWindow) -> Metrics:
-    """Score a pruned strategy on the test window. Called once per reported figure."""
+def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, npt.NDArray[np.float64]]:
+    """Score a pruned strategy on the test window, returning its metrics and its returns."""
     simulation = run_variants(strategy, test.data)[0]
-    return extract_metrics(
+    metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
         offset=test.offset,
     )
+    returns = simulation.portfolio.returns().iloc[test.offset :].to_numpy()
+    return metrics, np.asarray(returns, dtype=np.float64)
 
 
 def _evaluate_train(strategy: Strategy, train: TrainWindow) -> Metrics:

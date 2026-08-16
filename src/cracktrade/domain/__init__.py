@@ -10,18 +10,31 @@ boundary: below it the engine speaks vectorbt, above it everything speaks these 
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 
 __all__ = [
+    "INFEASIBLE",
+    "INSTABILITY_THRESHOLD",
     "MIN_TRADES_TO_JUDGE",
+    "SIGNIFICANCE",
     "BacktestResult",
     "BenchmarkComparison",
+    "CostScenario",
+    "CostSensitivity",
     "DataVintage",
+    "DeflatedSharpe",
+    "FoldResult",
+    "Interval",
     "Metrics",
     "OptimizationResult",
+    "OverfittingProbability",
     "ParameterChange",
+    "StabilityPoint",
+    "StabilityReport",
     "Trade",
+    "ValidationReport",
     "VariantResult",
     "YearReturn",
 ]
@@ -103,6 +116,15 @@ class Metrics:
 
 #: See :attr:`Metrics.has_enough_trades_to_judge`.
 MIN_TRADES_TO_JUDGE = 20
+
+#: Conventional bar for calling a deflated Sharpe significant.
+SIGNIFICANCE = 0.95
+
+#: Losing more than this share of the objective to a single 10% nudge marks a result unstable.
+INSTABILITY_THRESHOLD = 0.5
+
+#: Score of a candidate that failed or was infeasible.
+INFEASIBLE = math.inf
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,3 +297,338 @@ class OptimizationResult:
     def parameters_at_bound(self) -> tuple[ParameterChange, ...]:
         """Parameters whose optimum sits on the edge of its search range."""
         return tuple(change for change in self.changes if change.at_bound)
+
+
+@dataclass(frozen=True, slots=True)
+class FoldResult:
+    """One walk-forward fold, optimized and evaluated independently."""
+
+    index: int
+    train_bars: int
+    test_bars: int
+    first_test_bar: date
+    last_test_bar: date
+    entry_name: str
+    exit_name: str
+    metrics: Metrics
+    train_metrics: Metrics
+    parameters: dict[str, float]
+
+    @property
+    def label(self) -> str:
+        """The variant pair this fold selected."""
+        return f"{self.entry_name} / {self.exit_name}"
+
+    @property
+    def was_profitable(self) -> bool:
+        """Whether this fold made money out of sample."""
+        return self.metrics.total_return_pct > 0
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationReport:
+    """A walk-forward run and the statistics that judge it.
+
+    The point of this object is that no single number in it is the answer. A strategy is
+    credible when it was consistently profitable across folds, its Sharpe survives deflation for
+    the number of trials that produced it, its selection procedure beats choosing at random, and
+    its optimum is a plateau rather than a spike. Passing one of those and failing three is not a
+    partial success.
+    """
+
+    strategy_name: str
+    ticker: str
+    objective: str
+    scheme: str
+    folds: tuple[FoldResult, ...]
+    benchmark: Metrics
+    optimized_yaml: str
+    deflated: DeflatedSharpe
+    overfitting: OverfittingProbability
+    stability: StabilityReport
+    costs: CostSensitivity
+    mean_return_interval: Interval
+    total_return_interval: Interval
+    trials: int
+    seed: int
+    elapsed_seconds: float
+
+    @property
+    def combined_return_pct(self) -> float:
+        """Out-of-sample return compounded across every fold."""
+        compounded = 1.0
+        for fold in self.folds:
+            compounded *= 1.0 + fold.metrics.total_return_pct / 100.0
+        return 100.0 * (compounded - 1.0)
+
+    @property
+    def beats_buy_and_hold(self) -> bool:
+        """Whether the strategy outperformed simply holding the ticker out of sample."""
+        return self.combined_return_pct > self.benchmark.total_return_pct
+
+    @property
+    def returns(self) -> tuple[float, ...]:
+        """Each fold's out-of-sample total return."""
+        return tuple(fold.metrics.total_return_pct for fold in self.folds)
+
+    @property
+    def profitable_folds(self) -> int:
+        """How many folds made money out of sample."""
+        return sum(1 for fold in self.folds if fold.was_profitable)
+
+    @property
+    def fold_win_rate(self) -> float:
+        """Share of folds that made money, in ``[0, 1]``.
+
+        The single most informative number here. A strategy positive in six of six folds and one
+        whose entire edge sits in fold three are different objects, and an average cannot tell
+        them apart.
+        """
+        return self.profitable_folds / len(self.folds) if self.folds else 0.0
+
+    @property
+    def median_return_pct(self) -> float:
+        """Median out-of-sample fold return. Robust to a single spectacular fold."""
+        return _median(self.returns)
+
+    @property
+    def return_iqr_pct(self) -> float:
+        """Interquartile spread of fold returns.
+
+        How much the answer depends on *when* you happened to run it.
+        """
+        if len(self.returns) < 4:
+            return 0.0
+        ordered = sorted(self.returns)
+        half = len(ordered) // 2
+        return _median(tuple(ordered[-half:])) - _median(tuple(ordered[:half]))
+
+    @property
+    def total_trades(self) -> int:
+        """Closed out-of-sample trades across every fold."""
+        return sum(fold.metrics.total_trades for fold in self.folds)
+
+    @property
+    def failures(self) -> tuple[str, ...]:
+        """Every robustness check the strategy did not pass, in plain words."""
+        problems: list[str] = []
+        if self.fold_win_rate < 0.5:
+            problems.append(
+                f"profitable in only {self.profitable_folds} of {len(self.folds)} folds"
+            )
+        if not self.deflated.is_significant:
+            problems.append(
+                f"deflated Sharpe P={self.deflated.probability:.2f}, below the 0.95 bar for "
+                f"{self.trials} trials"
+            )
+        if not self.overfitting.is_acceptable:
+            problems.append(
+                f"probability of backtest overfitting {self.overfitting.probability:.2f}, so "
+                f"selection is no better than choosing at random"
+            )
+        if not self.stability.is_stable:
+            problems.append(
+                f"a 10% parameter nudge destroys "
+                f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
+            )
+        if not self.costs.survives_double_costs:
+            problems.append("unprofitable at twice the configured slippage")
+        if self.total_trades < MIN_TRADES_TO_JUDGE:
+            problems.append(f"only {self.total_trades} out-of-sample trades in total")
+        if not self.beats_buy_and_hold:
+            problems.append(
+                f"returned {self.combined_return_pct:+.1f}% out of sample against "
+                f"{self.benchmark.total_return_pct:+.1f}% for buy-and-hold"
+            )
+        return tuple(problems)
+
+    @property
+    def is_credible(self) -> bool:
+        """Whether every robustness check passed.
+
+        Deliberately strict, and deliberately not a score. A number that is 80% trustworthy is
+        not something to put money behind, and averaging the checks would let a strong headline
+        return paper over a failed overfitting test.
+        """
+        return not self.failures
+
+
+def _median(values: tuple[float, ...]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class DeflatedSharpe:
+    """The probability that a strategy's true Sharpe ratio exceeds zero.
+
+    Attributes:
+        observed: the per-period Sharpe actually measured.
+        threshold: the Sharpe a *lucky* search would be expected to produce from no edge at all,
+            given the number of trials. This is the bar the observed value has to clear.
+        probability: ``P(true Sharpe > 0)`` after deflating for trial count, sample length,
+            skew and kurtosis. Below roughly 0.95 the result is not distinguishable from noise.
+        trials: how many configurations were scored.
+        observations: bars the Sharpe was measured over.
+        variance_estimated: whether the cross-trial variance had to be approximated rather than
+            observed. A parallel search does not return its per-trial scores.
+    """
+
+    observed: float
+    threshold: float
+    probability: float
+    trials: int
+    observations: int
+    variance_estimated: bool
+
+    @property
+    def is_significant(self) -> bool:
+        """Whether the result clears the conventional 95% bar."""
+        return self.probability >= SIGNIFICANCE
+
+    @property
+    def beats_the_lucky_threshold(self) -> bool:
+        """Whether the observed Sharpe even exceeds what luck alone would produce."""
+        return self.observed > self.threshold
+
+
+@dataclass(frozen=True, slots=True)
+class OverfittingProbability:
+    """How often the in-sample best configuration underperforms out of sample.
+
+    Attributes:
+        probability: PBO. Above 0.5 the selection procedure is *worse than choosing at random*,
+            and the result must not be presented as a recommendation.
+        combinations: how many train/test partitions were evaluated.
+        median_logit: median of the logit-transformed out-of-sample ranks. Negative means the
+            in-sample winner typically lands below the median out of sample.
+    """
+
+    probability: float
+    combinations: int
+    median_logit: float
+
+    @property
+    def is_acceptable(self) -> bool:
+        """Whether the selection procedure beats picking at random."""
+        return self.probability < 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class Interval:
+    """A bootstrap confidence interval."""
+
+    point: float
+    low: float
+    high: float
+    confidence: float
+
+    @property
+    def excludes_zero(self) -> bool:
+        """Whether the whole interval sits on one side of zero."""
+        return (self.low > 0) or (self.high < 0)
+
+
+@dataclass(frozen=True, slots=True)
+class StabilityPoint:
+    """One perturbed parameter and what it did to the objective."""
+
+    path: str
+    multiplier: float
+    value: float
+    score: float
+    degradation: float
+
+    @property
+    def failed(self) -> bool:
+        """Whether the perturbed configuration could not be scored at all."""
+        return self.score == INFEASIBLE
+
+
+@dataclass(frozen=True, slots=True)
+class StabilityReport:
+    """The neighbourhood around an optimum."""
+
+    baseline_score: float
+    points: tuple[StabilityPoint, ...]
+
+    @property
+    def worst_degradation(self) -> float:
+        """The largest share of the objective lost to any single nudge."""
+        return max((point.degradation for point in self.points), default=0.0)
+
+    @property
+    def worst_small_degradation(self) -> float:
+        """The largest loss caused by a *small* (10%) nudge.
+
+        Judged separately: a 20% move is a genuinely different strategy, but a 10% move should
+        not be, and a result that cannot survive one is fitted to noise.
+        """
+        return max(
+            (point.degradation for point in self.points if abs(point.multiplier) <= 0.1),
+            default=0.0,
+        )
+
+    @property
+    def is_stable(self) -> bool:
+        """Whether the optimum survives its own neighbourhood."""
+        return self.worst_small_degradation < INSTABILITY_THRESHOLD
+
+    @property
+    def fragile_parameters(self) -> tuple[str, ...]:
+        """Parameters whose small perturbation destroys most of the objective."""
+        return tuple(
+            sorted(
+                {
+                    point.path
+                    for point in self.points
+                    if abs(point.multiplier) <= 0.1 and point.degradation >= INSTABILITY_THRESHOLD
+                }
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CostScenario:
+    """The headline result at one cost level."""
+
+    multiple: float
+    slippage_pct: float
+    commission_pct: float
+    metrics: Metrics
+
+
+@dataclass(frozen=True, slots=True)
+class CostSensitivity:
+    """How the result behaves as friction rises."""
+
+    scenarios: tuple[CostScenario, ...]
+
+    @property
+    def baseline(self) -> CostScenario:
+        """The configured cost level."""
+        return self.scenarios[0]
+
+    @property
+    def survives_double_costs(self) -> bool:
+        """Whether the strategy is still profitable at twice the configured slippage."""
+        doubled = self._at(2.0)
+        return doubled is not None and doubled.metrics.total_return_pct > 0
+
+    @property
+    def break_even_multiple(self) -> float | None:
+        """The lowest tested multiple at which the strategy stops making money."""
+        for scenario in self.scenarios:
+            if scenario.metrics.total_return_pct <= 0:
+                return scenario.multiple
+        return None
+
+    def _at(self, multiple: float) -> CostScenario | None:
+        return next(
+            (scenario for scenario in self.scenarios if scenario.multiple == multiple), None
+        )

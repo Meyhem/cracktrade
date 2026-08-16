@@ -1,0 +1,44 @@
+strategy:
+  name: silicon_momentum_pullback_v1
+
+universe:
+  ticker: NVDA
+  start_date: "2023-01-01"
+  end_date: "2025-12-31"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+
+indicators:
+  - name: sma_long
+    type: sma
+    window: 200
+  - name: sma_short
+    type: sma
+    window: 20
+  - name: rsi_ind
+    type: rsi
+    window: 14
+
+entry_variants:
+  - name: moderate_uptrend_pullback
+    signal: "(close > sma_long) & (rsi_ind < 45)"
+  - name: deep_uptrend_pullback
+    signal: "(close > sma_long) & (rsi_ind < 38)"
+
+exit_variants:
+  - name: trend_break_with_trailing
+    signal: "close < sma_short"
+    trailing_stop_pct: 7.5
+    take_profit_pct: 15.0
+    max_holding_days: 20
+  - name: dynamic_atr_swing
+    atr_stop_multiplier: 2.5
+    take_profit_pct: 18.0
+    max_holding_days: 15
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0

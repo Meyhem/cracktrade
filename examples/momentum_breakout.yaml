@@ -1,0 +1,44 @@
+strategy:
+  name: momentum_breakout_v2
+
+universe:
+  ticker: MSFT
+  start_date: "2015-01-01"
+  end_date: "2025-12-31"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+  risk_free_rate: 0.04
+
+indicators:
+  - name: sma_long
+    type: sma
+    source: close
+    window: 200
+  - name: max_high
+    type: rolling_max
+    source: close
+    window: 252
+  - name: vol_ma
+    type: sma
+    source: volume
+    window: 20
+
+entry_variants:
+  - name: strict_momentum
+    signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
+  - name: relaxed_momentum
+    signal: "(close > sma_long) & (close >= max_high)"
+
+exit_variants:
+  - name: time_only
+    max_holding_days: 20
+  - name: trail_and_signal
+    trailing_stop_pct: 5.0
+    signal: "close < sma_long"
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0

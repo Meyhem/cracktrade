@@ -1,0 +1,1481 @@
+# cracktrade — Engine Specification
+
+**Status:** normative. This document is the contract the implementation is verified against.
+**Scope:** strategy configuration format, market-data contract, indicator layer, signal layer,
+backtest engine, metrics, optimizer, and the causality invariant.
+
+## 0. How to read this document
+
+The engine is a clean-room rebuild of `swing-trader`
+(`/home/meyhem/dev/swing-trader`, read-only reference, never imported). Every behaviour below is
+one of:
+
+| Marker | Meaning |
+| --- | --- |
+| **[PORT]** | Legacy behaviour carried over unchanged. Reference given as `file:line`. |
+| **[FIX]** | Legacy behaviour was defective. Legacy behaviour, failure mode, and target behaviour are all stated. The rebuild implements the target. |
+| **[NEW]** | No legacy counterpart. Introduced by this spec. |
+| **[DROP]** | Legacy behaviour deliberately removed. |
+
+Legacy references are to files under `/home/meyhem/dev/swing-trader/`.
+
+Results produced by this engine will **not** reconcile with legacy results. That is intended: the
+defect register in §10 lists fourteen behaviours that change the numbers. There is no
+compatibility mode.
+
+---
+
+## 1. Scope and system overview
+
+### 1.1 Subsystems
+
+```
+config ──▶ data ──▶ indicators ──▶ signals ──▶ backtest ──▶ metrics
+                                                    ▲           │
+                                                    └── optimize ┘
+```
+
+Five libraries plus two consumers:
+
+| Layer | Responsibility | May import |
+| --- | --- | --- |
+| `domain` | value objects, result models. Pure. | — |
+| `config` | strategy schema, parsing, validation | `domain` |
+| `data` | OHLCV retrieval behind a protocol | `domain` |
+| `indicators` | indicator registry and computation | `domain`, `config` |
+| `signals` | expression parsing and evaluation, causal alignment | `domain`, `indicators` |
+| `backtest` | portfolio simulation. **Sole owner of the vectorbt import.** | all above |
+| `metrics` | metric computation from a simulated portfolio | `domain`, `backtest` |
+| `optimize` | parameter search, train/test protocol | all above |
+| `render` | result models → text/json/yaml | `domain` |
+| `cli` | argument parsing, invoking core, rendering | all above |
+
+Dependencies flow strictly downward. Nothing outside `backtest/` imports vectorbt; this keeps the
+engine replaceable and every layer above it unit-testable without a portfolio simulation.
+
+The core returns **typed result objects**. Rendering is the consumer's job. This is the seam a
+future HTTP interface reuses without modification to core.
+
+### 1.2 Pinned dependencies
+
+Per legacy `uv.lock`, retained:
+
+| Package | Version | Note |
+| --- | --- | --- |
+| Python | ≥ 3.12 | |
+| `vectorbt` | 1.0.0 | Open-source only. `import vectorbtpro` is prohibited (legacy `.agents/AGENTS.md` §3). |
+| `pandas` | 2.3.3 | |
+| `numpy` | 2.2.6 | |
+| `scipy` | 1.18.0 | `differential_evolution`, `qmc.LatinHypercube` |
+| `pandas-ta` | 0.4.71b0 | indicator implementations |
+| `yfinance` | ≥ 0.2.40 | default data provider |
+| `pydantic` | ≥ 2.7 | schema |
+
+### 1.3 Dropped
+
+**[DROP]** Google Drive storage, Zulip bot and all chat handlers, the watchdog subsystem, Plotly
+charting, result persistence of any kind, multi-ticker support, shared-cash portfolios.
+
+**[DROP]** Multi-ticker. Legacy accepted `universe.tickers: List[str]` and ran N independent
+single-asset portfolios, each seeded with the full `initial_capital`
+(`src/execution/portfolio.py:55`), summing "portfolio-level" numbers across them. This engine
+accepts exactly one ticker, which removes the ambiguity rather than papering over it. The per-ticker
+loop in `apply_ta` (`src/execution/indicators.py:19-40`), the `[None] + tickers` optimizer
+orchestration (`src/cli/main.py:108`), and ticker-scoped fitness
+(`src/optimization/optimizer.py:87-100`) all disappear.
+
+---
+
+## 2. Causality — the primary invariant
+
+> **Every value used to make a decision at bar *t* must be computable from bars ≤ *t*, and every
+> fill must occur strictly after the bar that produced the signal.**
+
+This outranks every other requirement in this document. Where causality and fidelity to legacy
+behaviour conflict, causality wins. Where causality and performance conflict, causality wins.
+
+Legacy stated the rule as prose guidance (`.agents/AGENTS.md` §3 "Shift Direction Rule", §4 "Next
+Open Rule") and relied on developers following it. **[NEW]** This engine enforces it structurally in
+four independent layers, so that no single mistake defeats it.
+
+### 2.1 Layer 1 — the strategy language cannot express look-ahead
+
+**[FIX]** Legacy evaluated signals with `pd.eval(expr, local_dict=...)`
+(`src/execution/signals.py:16, 26`). `pd.eval` permits attribute access and method calls in its
+`python` engine, so `close.shift(-1) > close` is an expressible strategy. Prose in the LLM prompt
+forbade it (`src/bot/generator.py:264-265`) but nothing enforced it.
+
+**Target:** signal expressions are parsed with `ast.parse(expr, mode="eval")` and walked against a
+node whitelist. Permitted node types, exhaustively:
+
+| Category | Nodes |
+| --- | --- |
+| Structure | `Expression` |
+| Names | `Name` (load context only) |
+| Literals | `Constant` restricted to `int`, `float`, `bool` |
+| Comparison | `Compare` with `Lt`, `LtE`, `Gt`, `GtE`, `Eq`, `NotEq` |
+| Boolean | `BinOp` with `BitAnd`, `BitOr`, `BitXor`; `UnaryOp` with `Invert` |
+| Arithmetic | `BinOp` with `Add`, `Sub`, `Mult`, `Div`, `Pow`, `Mod`; `UnaryOp` with `USub`, `UAdd` |
+
+Every other node type is rejected with a pointed error. In particular `Call`, `Attribute`,
+`Subscript`, `Slice`, `Lambda`, `IfExp`, `Comprehension`, `Starred`, `Await`, `NamedExpr`, and
+`BoolOp` (`and`/`or`, which do not vectorise) are rejected.
+
+Consequence: `.shift(-1)`, `.iloc[t+1]`, `.rolling(center=True)`, `.values`, `max(...)`,
+`__class__`, and every other escape hatch are not merely discouraged — they do not parse. A
+look-ahead strategy is not a strategy that fails validation; it is a string that is not a strategy.
+
+Rejecting `Call` also removes the arbitrary-code-execution surface that `pd.eval` carries.
+
+Evaluation is performed by a recursive walk over the validated AST against a namespace of pandas
+Series, not by `eval`/`pd.eval`. No Python `eval` is called anywhere in the signal path.
+
+**Note on `BoolOp`:** legacy prose said Python `and`/`or` "also work"
+(`src/bot/generator.py:250`). They do not — on Series they raise or silently coerce. They are
+rejected; `&` and `|` are the only conjunctions.
+
+### 2.2 Layer 2 — indicators are causal by construction
+
+Each registry entry declares:
+
+- `warmup: int` — the number of leading bars whose output is not yet defined, derived from the
+  indicator's parameters.
+- `causality: CAUSAL | FORWARD_PROJECTED | NON_CAUSAL`
+
+Rules:
+
+- `center=True` is never passed to any rolling computation. **[NEW]**
+- `NON_CAUSAL` indicators — anything normalising over the full sample (global min/max scaling,
+  whole-series z-score) — are not registrable. Only rolling statistics are permitted.
+- `FORWARD_PROJECTED` outputs are handled explicitly, never inherited. Ichimoku's `senkou_a` /
+  `senkou_b` spans are plotted 26 bars into the future; at index *t* they hold values derived from
+  bars ≤ *t* but *labelled* as *t*+26. **Target:** forward-projected output columns are **dropped**
+  from the namespace and referencing them is a validation error naming the reason. Realignment is
+  not attempted, because the realigned series duplicates `tenkan`/`kijun` information and the
+  silent-wrong-answer risk exceeds the value. **[FIX]** — legacy exposed these columns unlabelled
+  via the generic fan-out at `src/execution/indicators.py:107-109`.
+- Warm-up region is `NaN`, never zero. See §10 D1.
+
+### 2.3 Layer 3 — one alignment path
+
+**[NEW]** All temporal alignment goes through a single helper:
+
+```python
+def causal_shift(obj: SeriesOrFrame, periods: int) -> SeriesOrFrame:
+    if periods < 0:
+        raise CausalityViolation(...)
+    return obj.shift(periods)
+```
+
+`.shift(` appears nowhere else in the codebase. A repository lint rule (ruff custom rule or a
+`grep`-based test) fails the build on `.shift(-`, `shift(periods=-`, and `center=True` outside the
+helper and its tests.
+
+Everything time-dependent routes through it: entry signals, exit signals, time-based exits, and
+per-bar risk series such as the ATR stop. Legacy applied `.shift(1)` ad hoc in three places
+(`src/execution/signals.py:21`, `src/execution/signals.py:31`,
+`src/execution/portfolio.py:25`) and `.shift(n)` in two more
+(`src/execution/backtester.py:36, 46`); each was an independent opportunity for the sign to be
+wrong.
+
+### 2.4 Layer 4 — truncation-equivalence harness
+
+**[NEW]** The empirical net. It catches leakage regardless of which layer introduced it, including
+leakage introduced by a future pandas_ta version.
+
+For a strategy *S*, full history *H* of length *N*, and a sample of indices *t*:
+
+1. Compute the full pipeline on *H* → indicator frame `F_full`, signal frames, stop series.
+2. Compute the same pipeline on `H[:t+1]` → `F_trunc`.
+3. Assert that every value at index *t* is **exactly equal** (or both NaN) between `F_full` and
+   `F_trunc`, for every indicator column, every entry/exit signal, and every per-bar risk series.
+
+Any divergence is look-ahead by definition: a value at *t* that changes when future bars are added
+was computed from those future bars.
+
+Coverage requirements:
+
+- every indicator in the registry, at its default and at two randomised parameterisations;
+- property-based random strategy generation (Hypothesis) over the signal grammar, so coverage is not
+  limited to hand-written cases;
+- at least 20 sampled indices per case, including indices inside the warm-up region.
+
+Exact float equality is required, not `isclose`. A causal computation on a prefix produces bitwise
+identical results; approximate equality would mask genuine leakage in low-order bits.
+
+This harness is a permanent CI gate. It is introduced in Phase 5 and extended in Phases 4, 6 and 8.
+
+### 2.5 Optimizer leakage is prevented by types
+
+**[FIX]** See §10 D2. The fitness function's signature accepts only a `TrainWindow`. The test window
+is a distinct type, `TestWindow`, constructible only by the splitter and consumed only by the
+reporting path. Passing test data to fitness, or selecting a variant on test data, is a type error
+caught by mypy — not a convention a developer can forget.
+
+The test window is evaluated **exactly once**, after parameter search and variant selection are
+final.
+
+### 2.6 Pessimistic conventions
+
+Daily OHLC bars do not record intrabar sequence. Any assumption about ordering within a bar that
+favours the strategy is look-ahead wearing a different hat.
+
+| Situation | Rule |
+| --- | --- |
+| Stop-loss and take-profit both touched within one bar | **Stop-loss fires.** **[NEW]** |
+| Price gaps through a stop level at the open | Fill at the **actual open**, not the stop price. **[NEW]** |
+| Signal generated on bar *D* | Fill at `Open[D+1]`. Never `Close[D]`, never `Open[D]`. **[PORT]** — `.agents/AGENTS.md` §4 |
+| Current day's bar is incomplete | **Dropped.** A run at 14:00 and a run at 22:00 see identical history. **[NEW]** |
+| Indicator not yet defined at bar *t* (warm-up) | No signal may be true at *t*. **[FIX]**, see §10 D1 |
+
+The exact vectorbt parameters achieving the first two (`stop_exit_price` and the SL/TP evaluation
+order in `Portfolio.from_signals`) are verified empirically against the installed vectorbt 1.0.0
+during Phase 6 and recorded in §6.5. They are asserted by a test, not assumed from documentation.
+
+### 2.7 Residual biases — outside engine control
+
+Documented, not fixed. They are properties of the data and of the user, not of the engine.
+
+- **Ticker selection is hindsight.** The user chooses a ticker knowing its history. No engine can
+  correct for this.
+- **Retroactive adjustment.** yfinance applies split and dividend adjustments across the entire
+  series, so historical prices reflect corporate actions that had not yet occurred at that date.
+  Bar-to-bar *returns* are unaffected; absolute price levels and any absolute price thresholds in a
+  signal are.
+- **Index membership and delisting** are not modelled. A ticker that exists today is assumed to have
+  existed throughout.
+
+---
+
+## 3. Strategy configuration format
+
+YAML file, seven top-level sections. Parsed into Pydantic v2 models.
+
+### 3.1 Global schema rules
+
+**[FIX]** Legacy `ConfigModel` set `strict=True` (`src/core/config.py:95`) but did **not** forbid
+extra top-level keys, which is why a `watchdog:` block survived parsing and was silently ignored
+(`src/cli/main.py:40`). Meanwhile `ExecutionModel` silently discarded `entry_price` and
+`exit_price`, which appear in legacy tests (`tests/test_execution.py:35-36`,
+`tests/test_optimizer.py:10`) but do not exist on the model.
+
+**Target:** `extra='forbid'` on **every** model including the root. An unrecognised key is an error
+naming the key and listing the accepted keys at that level. There is no escape hatch. A config that
+sets `entry_price: "next_close"` and is silently given next-open execution is worse than a config
+that refuses to load.
+
+`strict=True` is retained: `initial_capital: "10000"` is an error, not a coercion.
+
+### 3.2 `strategy` — required
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Non-empty. Recommended snake_case. Used in output only. |
+
+**[PORT]** `src/core/config.py:87-88`.
+
+**[DROP]** Legacy detected duplicate strategy names in the storage layer rather than in validation.
+With no persistence there is no name registry and nothing to collide with.
+
+### 3.3 `universe` — required
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `ticker` | `str` | — | **[FIX]** Exactly one. Non-empty after strip. Legacy: `tickers: List[str]` (`src/core/config.py:33`). |
+| `start_date` | `datetime.date` | — | **[FIX]** Legacy typed dates as `str` and compared them lexicographically (`src/core/config.py:34, 39`), which happens to work for ISO-8601 and fails for anything else. |
+| `end_date` | `datetime.date` | today (UTC) | **[PORT]** default_factory, `src/core/config.py:35`. |
+
+Validation: `start_date < end_date`; the span must cover at least `max(indicator warmup) + 30`
+trading days, estimated at 252 trading days per calendar year. **[NEW]** — legacy accepted a
+two-week backtest of a 200-day moving average and reported it as a result.
+
+`end_date` is **inclusive** of the named day. See §4.2.
+
+### 3.4 `execution` — required
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `initial_capital` | `float` | — | `> 0` |
+| `slippage_pct` | `float` | — | `>= 0`. Percent, e.g. `0.1` = 0.1%. |
+| `commission_pct` | `float` | — | `>= 0`. Percent. |
+| `risk_free_rate` | `float` | `0.04` | **Annual** rate as a fraction. `0.04` = 4%/year. |
+
+**[PORT]** `src/core/config.py:45-71`. Percent → fraction conversion is `value / 100.0`
+(`src/core/config.py:67, 71`).
+
+**[FIX]** `risk_free_rate` was parsed and then ignored; Sharpe and Sortino hardcoded `0.04`
+(`src/metrics.py:21, 31`). See §10 D3 and D4.
+
+**[DROP]** `entry_price`, `exit_price` — never existed on the model; now rejected explicitly rather
+than swallowed. Execution venue is next-open, always, and is not configurable.
+
+### 3.5 `indicators` — optional, defaults to `[]`
+
+A **list** of indicator specifications.
+
+**[FIX]** Legacy `tests/test_optimizer.py:11-14` passes `indicators` as a **dict** keyed by name and
+never validates it, because `OptimizationEngine` traverses the raw dict without constructing a
+`ConfigModel`. The list shape from `src/core/config.py:100` is normative here; the dict shape is
+rejected, and the optimizer validates before traversing (§8.1).
+
+Base fields on every entry:
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Unique across the list. Must be a valid Python identifier — it becomes a name in the signal namespace. Must not shadow `open`, `high`, `low`, `close`, `volume`. |
+| `type` | `str` | — | Must be present in the registry (§5). |
+| `source` | `str` | `"close"` | One of `open`, `high`, `low`, `close`, `volume`. |
+
+**[FIX] Type-specific parameters.** Legacy `IndicatorModel` used `extra='forbid'` with a **fixed
+21-field allowlist** shared by every indicator type (`src/core/config.py:8-30`):
+
+```
+name, type, source, window, fast, slow, signal, std, k, d, smooth_k,
+multiplier, lower_length, upper_length, af0, af, tenkan, kijun, senkou,
+bb_length, kc_length
+```
+
+Failure modes: adding one indicator requiring a new parameter meant editing a core model; every
+indicator accepted every other indicator's parameters, so `{type: sma, window: 20, tenkan: 9}`
+validated cleanly and silently dropped `tenkan`; and `model_dump(exclude_none=True)`
+(`src/execution/indicators.py:98`) forwarded whatever was set straight into the pandas_ta call,
+turning a typo into a `TypeError` from library internals.
+
+**Target:** each registry entry declares its own parameter schema. Validation is two-stage — the
+base fields are parsed, `type` is resolved against the registry, then the remaining keys are
+validated against that indicator's schema. Unknown parameters are rejected naming the indicator and
+listing its accepted parameters. Adding an indicator means adding a registry entry, not editing a
+shared model.
+
+`window` remains the user-facing name for the primary lookback across all types, for continuity with
+existing strategy files. **[PORT]** — remapped to `length` at the pandas_ta boundary,
+`src/execution/indicators.py:92-96`.
+
+### 3.6 `entry_variants` — required, non-empty
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Unique across the list. |
+| `signal` | `str` | — | Must parse under the §2.1 grammar; every `Name` must resolve in the namespace. |
+
+**[PORT]** `src/core/config.py:73-75, 105-110`.
+
+**[NEW]** Signal expressions are validated at **config-parse time**, not at first evaluation.
+Undefined names, forbidden syntax, and type errors are reported before any data is downloaded.
+
+### 3.7 `exit_variants` — required, non-empty
+
+| Field | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Unique across the list. |
+| `signal` | `str \| None` | `None` | Same grammar as entries. |
+| `stop_loss_pct` | `float \| None` | `None` | `> 0`. Percent from entry price. |
+| `trailing_stop_pct` | `float \| None` | `None` | `> 0`. Percent from peak since entry. |
+| `atr_stop_multiplier` | `float \| None` | `None` | `> 0`. Multiple of ATR(14). |
+| `take_profit_pct` | `float \| None` | `None` | `> 0`. Percent from entry price. |
+| `min_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. |
+| `max_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. |
+
+**[PORT]** `src/core/config.py:77-85`.
+
+Validation **[NEW]**: at least one exit mechanism must be set — a variant with only a `name` never
+exits and produces a single open position. `min_holding_days < max_holding_days` when both are set.
+
+**Stop-loss priority chain [PORT]** (`src/execution/portfolio.py:19-32`): exactly one stop type is
+active, in order
+
+1. `atr_stop_multiplier`
+2. `trailing_stop_pct`
+3. `stop_loss_pct`
+
+`take_profit_pct` is orthogonal and combines with whichever stop is active.
+
+**[NEW]** Setting more than one stop type is a **validation warning** naming which one wins. Legacy
+silently discarded the others.
+
+### 3.8 `position_sizing` — optional
+
+| Field | Type | Rule |
+| --- | --- | --- |
+| `type` | `str` | One of `fixed_pct`, `fixed_cash`, `fixed_shares`. **[FIX]** Legacy took any `str` (`src/core/config.py:91`) and silently fell through to the `inf`/`amount` default for an unrecognised value (`src/execution/portfolio.py:37-48`). |
+| `value` | `float` | `> 0`. For `fixed_pct`, additionally `<= 100`. |
+
+Omitted → 100% of available cash per trade.
+
+**Semantics, reconciled [FIX].** Legacy user documentation described `fixed_pct` as "Percent of your
+total account to invest per trade" (`src/bot/handlers/explain.py:150`) and "% of current equity"
+(`src/bot/generator.py:240`). The implementation maps it to vectorbt's `percent` sizing
+(`src/execution/portfolio.py:41-42`), which is a percentage of **available cash**, not of total
+equity. With a single position and no accumulation the two coincide only when flat. The
+documentation was wrong; the mapping is retained and this spec states the true meaning:
+
+| `type` | vectorbt `size_type` | `size` | Meaning |
+| --- | --- | --- | --- |
+| `fixed_pct` | `percent` | `value / 100` | Fraction of **available cash** at order time |
+| `fixed_cash` | `value` | `value` | Absolute cash amount per trade |
+| `fixed_shares` | `amount` | `value` | Absolute share count per trade |
+| *(omitted)* | `amount` | `inf` | All available cash |
+
+**[PORT]** `src/execution/portfolio.py:37-48`.
+
+### 3.9 Validation error contract
+
+**[PORT]** `src/core/config.py:112-130`. Errors are aggregated, not raised on first failure. Each is
+rendered as `- <dotted.path>: <message>`; a missing field renders as "This field is required but
+missing from the config."; Pydantic's `"Value error, "` prefix is stripped.
+
+**[NEW]** Additionally: the offending YAML line number where recoverable, and a `did you mean`
+suggestion for unknown keys within edit distance 2 of a valid key.
+
+### 3.10 Worked example
+
+Adapted from `src/bot/generator.py:282-319` — single-ticker, `window` on `rolling_max` sourced from
+`close` as in the original.
+
+```yaml
+strategy:
+  name: momentum_breakout_v2
+
+universe:
+  ticker: MSFT
+  start_date: "2015-01-01"
+  end_date: "2025-12-31"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+  risk_free_rate: 0.04
+
+indicators:
+  - name: sma_long
+    type: sma
+    source: close
+    window: 200
+  - name: max_high
+    type: rolling_max
+    source: close
+    window: 252
+  - name: vol_ma
+    type: sma
+    source: volume
+    window: 20
+
+entry_variants:
+  - name: strict_momentum
+    signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
+  - name: relaxed_momentum
+    signal: "(close > sma_long) & (close >= max_high)"
+
+exit_variants:
+  - name: time_only
+    max_holding_days: 20
+  - name: trail_and_signal
+    trailing_stop_pct: 5.0
+    signal: "close < sma_long"
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0
+```
+
+Second example, adapted from `src/bot/generator.py:325-365`:
+
+```yaml
+strategy:
+  name: silicon_momentum_pullback_v1
+
+universe:
+  ticker: NVDA
+  start_date: "2023-01-01"
+  end_date: "2025-12-31"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+
+indicators:
+  - name: sma_long
+    type: sma
+    window: 200
+  - name: sma_short
+    type: sma
+    window: 20
+  - name: rsi_ind
+    type: rsi
+    window: 14
+
+entry_variants:
+  - name: moderate_uptrend_pullback
+    signal: "(close > sma_long) & (rsi_ind < 45)"
+  - name: deep_uptrend_pullback
+    signal: "(close > sma_long) & (rsi_ind < 38)"
+
+exit_variants:
+  - name: trend_break_with_trailing
+    signal: "close < sma_short"
+    trailing_stop_pct: 7.5
+    take_profit_pct: 15.0
+    max_holding_days: 20
+  - name: dynamic_atr_swing
+    atr_stop_multiplier: 2.5
+    take_profit_pct: 18.0
+    max_holding_days: 15
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0
+```
+
+---
+
+## 4. Market data contract
+
+### 4.1 The frame
+
+The engine consumes exactly one shape. Providers adapt to it; the engine never adapts to a provider.
+
+| Property | Requirement |
+| --- | --- |
+| Type | `pandas.DataFrame` |
+| Index | `pandas.DatetimeIndex`, timezone-naive, strictly increasing, no duplicates, no NaT |
+| Columns | exactly `Open`, `High`, `Low`, `Close`, `Volume`, in that order, flat (no MultiIndex) |
+| dtype | `float64` for all five |
+| Content | no NaN after preparation; `Low <= Open, Close <= High`; `Volume >= 0` |
+
+**[PORT]** DatetimeIndex preservation is load-bearing — vectorbt derives annualisation from it.
+`.reset_index()` is prohibited (`.agents/AGENTS.md` §3).
+
+**[FIX]** `float64`, not `float32`. Legacy cast to `float32`
+(`src/data/market.py:38`) as a memory guardrail for multi-ticker universes. With one ticker the
+saving is irrelevant, while `float32` on a compounding equity curve accumulates visible error and —
+worse — makes the §2.4 exact-equality assertions flaky for reasons unrelated to causality.
+
+The contract is validated on entry to the engine by an explicit check, not assumed. **[NEW]**
+
+### 4.2 Retrieval
+
+`MarketDataProvider` is a `typing.Protocol`:
+
+```python
+class MarketDataProvider(Protocol):
+    def fetch(self, ticker: str, start: date, end: date) -> pd.DataFrame: ...
+```
+
+`YFinanceProvider` implements it.
+
+- **End-date inclusivity [PORT].** yfinance's `end` is exclusive; one day is added so the
+  user's `end_date` is included (`src/data/market.py:9-11`).
+- **Column normalisation [PORT].** Labels are capitalised and the five needed columns selected
+  (`src/data/market.py:30-32`). The MultiIndex branch (`src/data/market.py:22-28`) is **[DROP]**ped
+  — single ticker only. If yfinance returns a MultiIndex anyway (it does for some call shapes), it is
+  flattened by selecting the single ticker level, and an unexpected shape is an error rather than a
+  silent reshape.
+- **Empty result [PORT]** raises (`src/data/market.py:15-16`), with the ticker and date range in the
+  message.
+
+### 4.3 Gap handling
+
+**[FIX]** Legacy applied `.ffill().bfill()` (`src/data/market.py:35`). See §10 D5.
+
+**Target:**
+
+1. `ffill()` only — a stale price carried forward is a defensible model of a non-trading day.
+2. `bfill()` is **never** applied. Backward-filling propagates a *later* price to an *earlier* bar,
+   which is look-ahead in the data layer, and for a late-IPO ticker it fabricates an entire
+   pre-listing history out of the first real close.
+3. Leading NaN rows — before the ticker's first real bar — are **dropped**, and the effective start
+   date is reported in the result.
+4. If the surviving history is shorter than `max(indicator warmup) + 30` bars, raise. A backtest that
+   cannot warm up its indicators has no valid region.
+5. Any NaN remaining after step 1-3 is an error, not a fill.
+
+### 4.4 Incomplete bars
+
+**[NEW]** If the last row's date equals today in the exchange's timezone and the session has not
+closed, the row is dropped. Determinism within a trading day matters more than one extra bar.
+
+### 4.5 Caching
+
+**[NEW]** Optional, off by default, enabled by `--cache`. Parquet keyed by
+`(provider, ticker, start, end)`. Purely a redownload optimisation; it holds no results and is not
+persistence in the sense excluded from this pass.
+
+---
+
+## 5. Indicator layer
+
+### 5.1 Namespace
+
+Computation produces a namespace consumed by the signal layer:
+
+| Key | Value |
+| --- | --- |
+| `open`, `high`, `low`, `close`, `volume` | the raw OHLCV Series |
+| one key per single-output indicator | its `name` |
+| one key per output of a multi-output indicator | `{name}_{suffix}` |
+
+**[PORT]** `src/execution/indicators.py:56-62`.
+
+**[FIX]** Legacy fed `df_filled = df.ffill()` to indicators while the namespace held the *raw*
+series (`src/execution/indicators.py:63, 67`), so `close` in a signal and the `close` an indicator
+saw could differ. With §4.3 forbidding residual NaN, the two are identical and the second frame is
+removed. One frame, no divergence.
+
+### 5.2 Registry
+
+**[NEW]** Replaces `getattr(ta, type)` dispatch with signature introspection
+(`src/execution/indicators.py:76-96`). Each entry declares:
+
+```python
+@dataclass(frozen=True)
+class IndicatorSpec:
+    type: str                       # YAML `type`
+    params: type[BaseModel]         # per-indicator parameter schema
+    outputs: tuple[str, ...]        # () for single-output
+    warmup: Callable[[BaseModel], int]
+    causality: Causality
+    compute: Callable[..., SeriesOrFrame]
+    inputs: frozenset[str]          # which of high/low/close/volume are required
+```
+
+`inputs` replaces `inspect.signature` introspection (`src/execution/indicators.py:83-90`), which was
+correct in practice but silently coupled to pandas_ta's internal parameter names. Declaring inputs
+makes the coupling explicit and testable.
+
+**[PORT]** `source` selects the primary series for single-input indicators; multi-input indicators
+(ATR, Stochastic, ADX, PSAR, …) receive `high`/`low`/`close`/`volume` regardless of `source`
+(`src/bot/generator.py:86-90`). **[NEW]** setting `source` on a multi-input indicator is a warning,
+since it has no effect.
+
+### 5.3 Builtins
+
+**[PORT]** `rolling_max` and `rolling_min` are engine-native, not pandas_ta
+(`src/execution/indicators.py:69-74`). Parameters: `window`. Warm-up: `window - 1`.
+
+### 5.4 Multi-output fan-out
+
+**[PORT]** `src/execution/indicators.py:46-49, 107-109`. A pandas_ta call returning a DataFrame is
+split into one namespace key per column, named `{name}_{first_token_of_column_lowercased}` — the
+column label up to the first underscore. Examples:
+
+| YAML | Namespace keys |
+| --- | --- |
+| `{name: my_bb, type: bbands, window: 20, std: 2.0}` | `my_bb_bbl`, `my_bb_bbm`, `my_bb_bbu`, `my_bb_bbb`, `my_bb_bbp` |
+| `{name: my_macd, type: macd, fast: 12, slow: 26, signal: 9}` | `my_macd_macd`, `my_macd_macdh`, `my_macd_macds` |
+| `{name: my_stoch, type: stoch, k: 14, d: 3, smooth_k: 3}` | `my_stoch_stochk`, `my_stoch_stochd` |
+
+**[FIX]** Legacy derived these names at runtime from whatever pandas_ta happened to return, so a
+library upgrade renaming a column silently renamed a namespace key and broke every signal referencing
+it — at evaluation time, as an undefined-name error. Target: `outputs` is declared in the registry
+and **asserted** against the actual returned columns. A mismatch is an engine error at startup
+naming the indicator and both column sets, not a user-facing signal error.
+
+### 5.5 Warm-up
+
+**[FIX]** See §10 D1. The warm-up region is `NaN`. Each indicator's `warmup` is declared; the
+strategy's warm-up is the maximum across all indicators actually referenced. No signal may be true
+before `max(warmup)` — enforced in the signal layer (§6.3), not by filling.
+
+---
+
+## 6. Signal layer
+
+### 6.1 Grammar
+
+Per §2.1. Comparisons combined with `&`/`|` must be parenthesised, because Python's precedence binds
+`&` tighter than `<`. **[NEW]** An unparenthesised comparison adjacent to a bitwise operator is
+detected at parse time and rejected with the corrected expression in the message — legacy left this
+to a runtime error inside pandas (`src/bot/generator.py:260-263`).
+
+### 6.2 Evaluation
+
+The validated AST is walked against the §5.1 namespace. Names resolve to Series; comparisons and
+bitwise operators produce boolean Series; arithmetic produces float Series. The result must be a
+boolean Series aligned to the data index — anything else is an error naming the expression.
+
+**[FIX]** See §10 D15. Comparison against NaN yields `False`, but that is *not* sufficient to keep
+undefined values out of trading decisions, for two reasons:
+
+- **Negation inverts it.** `~(rsi > 30)` is `True` wherever `rsi` is NaN, because the inner
+  comparison was `False`. A single `~` converts "undefined" into an active signal.
+- **NaN is not confined to warm-up.** Several registered indicators are undefined on interior bars
+  *by design*: `psar_psarl` holds a value only while the trend is up, `supertrend_supertl` only
+  while the supertrend is long. Measured over 300 bars, `psar_psarl` is NaN on 61% of post-warm-up
+  bars and `supertrend_supertl` on 90%.
+
+**Target — definedness tracking.** Evaluation carries a boolean *defined mask* alongside the value.
+A `Name` node contributes `series.notna()`; every operator intersects the masks of its operands; a
+`Constant` contributes all-`True`. The final signal is `signal & defined`, applied before the
+next-open shift. Undefined therefore collapses to "no signal" under every operator, including
+negation, rather than under comparison only.
+
+The mask is reported as `defined_pct` per signal, so a strategy whose entry condition is undefined
+on 90% of bars is visible in the output rather than merely silent.
+
+### 6.3 Warm-up suppression
+
+**[NEW]** Before alignment, the first `max(warmup)` positions of every signal are forced to `False`.
+Warm-up suppression and the §6.2 defined mask are complementary, not redundant: the mask handles
+undefined values wherever they occur, and suppression additionally covers the case where an
+indicator has *converged to a value* before the library's declared warm-up has elapsed. Both are
+applied.
+
+### 6.4 Next-open alignment
+
+**[PORT]** `src/execution/signals.py:21, 31`.
+
+```
+raw = evaluate(expr, namespace)         # decision made on the close of bar D
+aligned = causal_shift(raw, 1)          # boolean lands on bar D+1
+aligned = aligned.fillna(False).astype(bool)
+```
+
+vectorbt is then given `price=Open`, so the fill occurs at `Open[D+1]`.
+
+**Conformance test [PORT]** — `tests/test_execution.py:69`. A 25-bar synthetic series whose close
+jumps at index 20 such that `close > 30` is true only there, produces a first trade with
+`Entry Timestamp == index[21]`. This assertion is carried over verbatim and is the canonical
+next-open test.
+
+---
+
+## 7. Backtest engine
+
+### 7.1 Variant expansion
+
+**[PORT]** `src/execution/backtester.py:23-26`. The cartesian product of entry variants × exit
+variants. Each pair is simulated independently and reported separately. `E` entries × `X` exits =
+`E·X` simulations per backtest.
+
+### 7.2 Exit composition
+
+**[FIX]** This is the largest behavioural change in the engine. Legacy composition
+(`src/execution/backtester.py:35-47`):
+
+```python
+if max_holding_days:
+    variant_exits |= entries.shift(max_holding_days)
+if min_holding_days:
+    ignore = OR over i in 1..min_holding_days of entries.shift(i)
+    variant_exits &= ~ignore
+```
+
+Both rules key off **entry signals**, not realised positions. An entry signal that fires while
+already in a position — vectorbt ignores it — still schedules a time exit `max_holding_days` later
+and still suppresses exits for `min_holding_days`, both relative to a trade that never happened. And
+`min_holding_days` masks only the signal and time exits; vectorbt's internal SL/TP fire regardless,
+so the documented guarantee ("Never sell before holding for at least this many trading days",
+`src/bot/handlers/explain.py:130`) is not delivered.
+
+**Target — decided 2026-08-16, revising the original target.** Holding constraints are evaluated
+against **realised positions**, but they **do not bind SL/TP**. A stop-loss or take-profit always
+fires; `min_holding_days` suppresses only *signal* exits and *time* exits.
+
+Rationale: a stop-loss that is disabled for the first `N` days is not a stop-loss. Binding it to the
+holding constraint fattens the left tail of the return distribution and makes the reported maximum
+drawdown reflect a risk control the user believes is active but which was switched off. Between the
+legacy documented guarantee ("never sell before holding this many days") and the guarantee a stop
+makes ("never lose more than this"), the stop wins.
+
+**Implementation — decided during Phase 6, superseding two earlier designs.** The rules are applied
+**inside the simulation**, through vectorbt's `signal_func_nb` hook, which is called once per bar
+with `position_now` already reflecting everything that happened earlier. The holding rules therefore
+key off realised positions *by construction*, in a single pass, with no iteration.
+
+Two earlier designs were tried and are recorded here because the reasons they failed are the reasons
+this one is right.
+
+*Design 1 — fixed-point iteration.* Compute exits from realised positions, re-simulate, repeat until
+the exits stop changing. Correct, and the original spec text. It was abandoned on measurement: the
+recursion is a **chain, not a contraction**. A time exit for position *k* only becomes known once
+position *k* is realised, which requires the exit of position *k-1*, so each pass resolves exactly
+one more trade. A traced run on a 120-bar series advanced one trade per iteration:
+
+```
+iter1: exits@[]        -> realised@[2]
+iter2: exits@[6]       -> realised@[2 7]
+iter3: exits@[6 11]    -> realised@[2 7 20]
+```
+
+A history with 200 trades would need 200 full simulations per variant, per optimizer evaluation.
+No iteration cap can rescue that; the algorithm is simply wrong for the problem.
+
+*Design 2 — suppress entries that collide with a forced exit.* This was needed because vectorbt
+**discards an exit that lands on the same bar as an entry** (`upon_long_conflict` defaults to
+`ignore`), and `signals.clean` deletes it outright — so a `max_holding_days` exit falling on a bar
+where the entry condition still held would silently vanish and the constraint would not be delivered
+at all. Suppressing the entry fixed the collision but made the iteration *worse*, because the entry
+set now changed between passes too.
+
+*Design 3 — the signal function.* Both problems disappear. The rules are evaluated with the position
+state in hand, so there is nothing to iterate; and the function returns one decision per bar, so an
+entry and an exit can never collide and vectorbt's conflict resolution is never reached.
+
+```
+per bar i, given position_now:
+    if flat:                      emit entry := entries[i];  forget the entry bar
+    else:
+        held := i - entry_bar
+        if max_holding and held >= max_holding:   emit exit          # forced
+        elif held < min_holding:                  emit nothing       # suppressed
+        else:                                     emit exit := exits[i]
+```
+
+Stops are not consulted here: the simulation applies them independently and they always fire,
+including inside the minimum-holding window.
+
+`NonConvergentHoldingConstraintError` is **removed** from the error taxonomy. Nothing iterates, so
+nothing can fail to converge.
+
+`max_holding_days` counts **trading days** (index positions), not calendar days.
+
+### 7.3 Signal cleaning — [DROP]
+
+**[DROP]** Legacy applied `entries.vbt.signals.clean(exits)` (`src/execution/backtester.py:49`) to
+make signals strictly alternate. This engine does **not**.
+
+Two reasons. It is redundant: `from_signals` with `accumulate=False` and `direction='longonly'`
+already ignores an entry raised while in a position and an exit raised while flat, so cleaning
+changes no result. And it is harmful: when an entry and an exit fall on the same bar, `clean`
+resolves the conflict by **deleting the exit**, which is precisely the bar a `max_holding_days` exit
+tends to land on. Measured on a 12-bar case with entries on bars 2-9 and a forced exit on bar 6,
+`clean` returned entries `[2]` and exits `[]` — the constraint erased. The signal function
+(section 7.2) makes the question moot by never emitting both.
+
+### 7.4 Stops
+
+**Priority chain [PORT]** per §3.7.
+
+**ATR stop [FIX].** Legacy computed it as a per-bar percent series
+(`src/execution/portfolio.py:21-25`):
+
+```python
+atr = ta.atr(df.High, df.Low, df.Close, length=14)   # direct call, bypasses apply_ta
+atr = atr.fillna(0)
+sl_stop = ((atr * multiplier) / df.Close).shift(1).fillna(0)
+```
+
+Three defects: the direct `ta.atr` call bypassed the indicator layer entirely (§10 D6); `.fillna(0)`
+on the ATR produced a zero stop distance during warm-up; and `.fillna(0)` on the resulting series
+means "0% stop", which in vectorbt is not "no stop" but a stop at the entry price (§10 D7).
+
+**Target:** ATR is computed through the registry like any other indicator, with `length=14` fixed.
+The stop series is
+
+```
+sl_stop = causal_shift((ATR(14) * multiplier) / Close, 1)
+```
+
+with **NaN** in the warm-up region, meaning *no stop* — not zero. The `.shift(1)` is the same
+next-open rule as everywhere else: the stop distance applied on bar *t* is derived from bar *t-1*'s
+close and ATR, both known before *t* opens.
+
+`trailing_stop_pct` and `stop_loss_pct` are scalars, `value / 100.0`
+(`src/execution/portfolio.py:28, 31`). `sl_trail=True` only for the trailing case
+(`src/execution/portfolio.py:29`). `take_profit_pct` → `tp_stop = value / 100.0`
+(`src/execution/portfolio.py:35`).
+
+### 7.5 vectorbt invocation
+
+**[FIX]** Legacy passed nine arguments to `Portfolio.from_signals`
+(`src/execution/portfolio.py:50-64`) and inherited every other default implicitly, making results
+silently version-dependent. Target: **every** parameter that affects the result is passed
+explicitly.
+
+| Parameter | Value | Source |
+| --- | --- | --- |
+| `close` | `df.Close` | **[PORT]** `portfolio.py:51` |
+| `entries` / `exits` | composed boolean Series | **[PORT]** |
+| `price` | `df.Open` | **[PORT]** `portfolio.py:54` — the next-open fill |
+| `init_cash` | `execution.initial_capital` | **[PORT]** `portfolio.py:55` |
+| `size` / `size_type` | per §3.8 | **[PORT]** `portfolio.py:37-48` |
+| `fees` | `commission_pct / 100` | **[PORT]** `portfolio.py:58` |
+| `slippage` | `slippage_pct / 100` | **[PORT]** `portfolio.py:59` |
+| `sl_stop` / `sl_trail` / `tp_stop` | per §7.4 | **[PORT]** `portfolio.py:60-62` |
+| `direction` | `'longonly'` | **[FIX]** implicit default, never stated |
+| `accumulate` | `False` | **[FIX]** implicit |
+| `cash_sharing` | `False` | **[FIX]** implicit; irrelevant single-column but pinned |
+| `size_granularity` | `None` (fractional shares permitted) | **[FIX]** implicit |
+| `stop_entry_price` | `'fillprice'` | **[FIX]** implicit; see below |
+| `stop_exit_price` | `'stoplimit'`, pessimistic per §2.6 | **[FIX]** implicit |
+| `upon_stop_exit` | `'close'` | **[FIX]** implicit |
+| `use_stops` | `True` | **[FIX]** implicit |
+| `signal_func_nb` | the holding-rule function, §7.2 | **[NEW]** |
+| `freq` | `'1D'` | **[PORT]** `portfolio.py:63` |
+| `seed` | from settings | **[NEW]** |
+
+**[FIX] `year_freq` is not a `from_signals` parameter.** Verified against the installed vectorbt
+1.0.0: it is absent from that function's 60 parameters. It exists as the process-global
+`vbt.settings['returns']['year_freq']` (default `'365 days'`) and as a per-call argument on the
+metric methods — `sharpe_ratio`, `sortino_ratio`, `annualized_return`, `max_drawdown`,
+`calmar_ratio` all accept it; `total_return` correctly does not.
+
+The global is **never** mutated: it is process-wide state that would leak into any other vectorbt
+consumer sharing the interpreter. `year_freq='252 days'` is passed explicitly at every metric call
+site instead, and a test asserts that the two calendars give different Sharpe values so the argument
+cannot be silently dropped.
+
+**[FIX] `stop_entry_price`.** vectorbt defaults this to `'close'` — stop distances are measured from
+the **close of the entry bar**. But the engine fills at that bar's *open*, so a configured "5% stop"
+would not be 5% below the price actually paid, and would drift looser or tighter with the entry day's
+own range. `'fillprice'` measures from the executed price, slippage included, which is what the
+configuration means.
+
+**[FIX] `stop_conflict_mode` does not exist** in vectorbt 1.0.0 either. The parameters that do exist
+for intrabar stop resolution are `stop_exit_price` and `upon_stop_exit`. §2.6's pessimistic
+conventions are expressed through those, established empirically in Phase 6.
+
+**[FIX] Annualisation inconsistency.** Legacy passed `freq='d'` and let vectorbt annualise with its
+default `year_freq` of 365 days when computing `annualized_return()`
+(`src/optimization/evaluator.py:105`), while the dead metrics module used `ann_factor=252`
+(`src/metrics.py:21, 31`). The two shipped numbers were annualised on different calendars. Target:
+`year_freq='252 days'` everywhere — daily *trading* bars, not calendar days — and no metric computes
+its own annualisation factor.
+
+**[NEW]** Daily bars only. `freq` is not configurable; an index whose inferred frequency is not daily
+is rejected at the data contract check (§4.1) rather than silently mis-annualised.
+
+**[PORT]** Long-only. Legacy never stated this; it was a library default
+(`src/execution/portfolio.py:50-64` passes no `direction`). It is now explicit, and short signals are
+not expressible.
+
+---
+
+## 8. Metrics
+
+**[FIX]** Legacy had two metric implementations. `src/metrics.py` defined a six-metric
+`MetricsRegistry` (CAGR, max drawdown, win rate, Sharpe, profit factor, Sortino) that **nothing
+imported** — dead code. The metrics actually shipped were computed inline in
+`src/optimization/evaluator.py:98-107`. This spec defines one merged set.
+
+| Metric | Definition | Source |
+| --- | --- | --- |
+| `total_trades` | closed trade count | `evaluator.py:85` |
+| `win_rate_pct` | winning / total × 100, `0.0` when no trades | `evaluator.py:102` |
+| `profit_factor` | gross profit / abs(gross loss); `inf` if no losses and profit > 0; `0.0` if neither | `evaluator.py:86-96` |
+| `total_pnl` | sum of closed-trade PnL | `evaluator.py:88` |
+| `cagr_pct` | `annualized_return() × 100`, `0.0` when NaN | `evaluator.py:105` |
+| `max_drawdown_pct` | `max_drawdown() × 100`, `0.0` when NaN. Negative. | `evaluator.py:106` |
+| `sharpe_ratio` | `sharpe_ratio(risk_free=<per-period>)` | `metrics.py:21` |
+| `sortino_ratio` | `sortino_ratio(risk_free=<per-period>)` | `metrics.py:31` |
+
+**[NEW]** Added to the shipped set: `final_equity`, `exposure_pct` (fraction of bars in a position),
+`avg_holding_days`, `best_trade_pnl`, `worst_trade_pnl`. These cost nothing to compute and are what
+one actually needs to judge whether an optimizer result is real.
+
+**[NEW] Benchmark.** Every result carries buy-and-hold of the same ticker over the same window under
+the same cost model, as a full `Metrics` instance, plus the excess return and the information ratio.
+Without it the report answers "did the optimizer do something" rather than "should I invest": a
+strategy returning 13% on a ticker that returned 40% would read as a success. vectorbt accepts
+`benchmark_rets` on the metric methods directly, so this is a reporting decision, not a modelling
+one.
+
+**[NEW] Cash convention.** Idle cash earns nothing, while `risk_free_rate` is charged as the Sharpe
+hurdle across the whole period. This is the standard excess-return frame and is kept, but it means a
+strategy in the market 25% of the time is charged a full hurdle on 100% of the period. `exposure_pct`
+is therefore reported adjacent to every risk-adjusted metric so the figure is interpretable, and the
+convention is stated in the output.
+
+**[NEW] Sub-period breakdown.** A per-calendar-year return table and the worst rolling 12-month
+return. "All the profit came from one quarter" is the most common way a backtest misleads, and no
+aggregate figure can reveal it.
+
+**[NEW] Data vintage.** The fetch date, first and last bar, and a hash of the price frame are
+recorded in every result. `auto_adjust=True` retro-adjusts the entire series on each dividend and
+split, so the same backtest run a quarter apart uses different prices; recording the vintage makes a
+divergence explainable rather than merely alarming.
+
+**[FIX] Risk-free rate.** Legacy hardcoded `risk_free=0.04` (`src/metrics.py:21, 31`), ignoring
+`execution.risk_free_rate` entirely (§10 D3), and passed an **annual** figure into a parameter
+vectorbt interprets **per period** (§10 D4) — inflating the effective hurdle by roughly 252×, which
+drives Sharpe and Sortino strongly negative for any realistic strategy.
+
+**Target:** the configured annual rate is converted once,
+
+```
+rf_per_period = (1 + execution.risk_free_rate) ** (1 / 252) - 1
+```
+
+and that value is passed. The conversion lives in one function with a unit test asserting that a 4%
+annual rate compounds back to 4% over 252 periods.
+
+Metrics are returned as a frozen `Metrics` dataclass, not a dict. Trades are returned as a list of
+`Trade` value objects, not a vectorbt `records_readable` frame — the vectorbt column names
+(`Entry Timestamp`, `Exit Timestamp`, `PnL`, …) are an implementation detail of the engine layer and
+do not leak into the public API.
+
+---
+
+## 9. Optimization engine
+
+### 9.1 Parameter discovery
+
+**[PORT]** `src/optimization/optimizer.py:29-51`. Recursive traversal of `indicators`,
+`entry_variants`, and `exit_variants` only. `strategy`, `universe`, `execution`, and
+`position_sizing` are never optimized. Every non-bool `int`/`float` leaf becomes a parameter.
+Int-ness is recorded from the YAML literal (`optimizer.py:50`) and re-applied on injection
+(`optimizer.py:59`): ints via `int(round(v))`, floats via `round(v, 2)`.
+
+**[PORT]** Default bounds are ±50%: `(min(v·0.5, v·1.5), max(v·0.5, v·1.5))`, with `v == 0` mapping
+to `[-0.5, 0.5]` (`optimizer.py:44-49`). The `min`/`max` construction handles negative values.
+
+**[FIX]** Legacy traversed the **raw dict** without ever constructing a `ConfigModel`
+(`optimizer.py:16-27`), which is how `tests/test_optimizer.py` gets away with a dict-shaped
+`indicators`. Target: the config is validated first; discovery runs over the validated model's dump.
+
+**[NEW]** Per-parameter bound overrides, because ±50% of a 200-day SMA is a 100-300 range that may
+be far wider or narrower than intended. The `optimize` key is available on every `indicators`,
+`entry_variants`, and `exit_variants` entry, and takes either a boolean or a mapping keyed by
+parameter name:
+
+```yaml
+indicators:
+  - name: sma_long
+    type: sma
+    window: 200
+    optimize:
+      window: {min: 150, max: 250}   # explicit bounds for this parameter
+
+  - name: rsi_ind
+    type: rsi
+    window: 14
+    optimize: false                  # pin every parameter of this entry
+
+  - name: my_macd
+    type: macd
+    fast: 12
+    slow: 26
+    signal: 9
+    optimize:
+      signal: false                  # pin one parameter, search the others
+```
+
+Absent an override, `optimize: true` applies and every numeric parameter of the entry is searched
+with ±50% bounds. Keying by parameter name is required because an entry commonly holds several
+numeric parameters and a single `{min, max}` pair could not say which one it referred to.
+
+**[PORT] Known limitation.** Numeric literals embedded in `signal:` strings — the `1.5` in
+`volume > vol_ma * 1.5`, the `45` in `rsi_ind < 45` — are **not** reachable by the optimizer. This is
+the main expressiveness limit of the parameterisation and is inherited deliberately; making
+signal literals optimizable requires a parameter-reference syntax in the grammar and is out of
+scope for this pass.
+
+### 9.2 Search
+
+**[PORT]** `scipy.optimize.differential_evolution` (`optimizer.py:166-169`):
+
+| Parameter | Value |
+| --- | --- |
+| `strategy` | `'best1bin'` |
+| `popsize` | `15` |
+| `mutation` | `(0.5, 1)` |
+| `recombination` | `0.7` |
+| `maxiter` | `epochs` |
+| `workers` | `-1` |
+| `updating` | `'deferred'` |
+| `init` | Latin hypercube, `popsize × dim - 1` points, baseline config injected as member 0 (`optimizer.py:156-159`) |
+| `seed` | **[FIX]** required, from settings, default `0` |
+
+Evaluation budget ≈ `(epochs + 1) × popsize × dim`.
+
+**[FIX] Reproducibility.** Legacy passed no `seed` while using `workers=-1` (§10 D12), so no run was
+reproducible. Target: `seed` is always passed. With `updating='deferred'` the population is evaluated
+synchronously per generation, so results are identical regardless of worker count — this is asserted
+by a test running the same optimization at `workers=1` and `workers=-1` and comparing the best
+parameter vector exactly.
+
+**[FIX] Integer parameters.** Continuous DE bounds over integers produce a piecewise-flat landscape
+(§10 D13): a window of 20.0 and 20.4 are the same strategy, so the gradient information DE relies on
+is destroyed over lattice-sized regions. Target: integer parameters are declared to scipy via
+`integrality`, which makes DE respect the lattice directly rather than rounding after the fact.
+
+### 9.3 Fitness
+
+**[FIX] — decided 2026-08-16.** The objective is **pluggable**, and the default is **Calmar with a
+hard trade-count floor**:
+
+```
+if trades < min_trades:   return +inf          # infeasible, not discounted
+return -calmar(train)                          # annualised return / |max drawdown|
+```
+
+`min_trades` defaults to 20. The floor is a **feasibility constraint**, not a multiplier: a
+three-trade result carries no information regardless of how large its PnL is, and the legacy `×0.1`
+discount is defeated by any fluke bigger than 10×.
+
+The objective used is recorded in `OptimizationResult`, because a number is not comparable across
+objectives and the report must say which one produced it.
+
+**Trial counting.** The optimizer records the total number of *configurations scored*, which is
+`evaluations × |entry_variants| × |exit_variants|` — the variant maximum below is itself a selection
+step and must be counted as one. This count feeds the Deflated Sharpe Ratio in §12.
+
+The legacy objective is retained as a selectable option and specified here for reference. It is
+**not** the default: raw PnL is scale-dependent and outlier-dominated, and its drawdown term scales
+a typical −20% drawdown by only 0.8, so it disciplines risk barely at all.
+
+**[PORT]** `optimizer.py:109-121`, per variant, maximum across variants:
+
+```
+if trades < 5:              pnl *= 0.1
+if isnan(mdd) or mdd > 0:   mdd = 0.0
+fitness = pnl * (1 + mdd)   if pnl > 0        # mdd is negative → penalises
+        = pnl * (1 - mdd)   if pnl <= 0       # → penalises further
+return -max(fitness)                          # negated for scipy minimisation
+```
+
+`mdd` is a negative fraction, so both branches penalise drawdown.
+
+**[FIX] Failure scoring.** Legacy returned `0.0` from an unparseable config or a failed backtest
+(`optimizer.py:77, 82`) and `0.0` when no variant produced a score (`optimizer.py:121`). Since a
+genuinely losing strategy scores *negative*, an invalid configuration outranked it, and DE was
+actively biased toward regions of the parameter space that do not parse (§10 D9). Target: a failure
+returns `+inf` in scipy's minimisation space — strictly worse than any real result — and the failure
+is counted and reported. A run where more than 20% of evaluations failed emits a warning naming the
+most common exception, because that indicates bounds producing invalid configs rather than a
+meaningful search.
+
+**[FIX]** Fitness is computed on the **train window only**, and its signature accepts only
+`TrainWindow` (§2.5).
+
+### 9.4 Evaluation protocol
+
+**[FIX]** This is the correctness centrepiece. Legacy computed `df_train`/`df_test` at an 80/20
+split (`optimizer.py:20-22`), fit on train — and then computed **both** the baseline PnL
+(`optimizer.py:133`) and the reported result (`optimizer.py:181-183`) on `df_full`. `df_test` was
+assigned and never read. Every headline number the system produced was in-sample, on data the
+optimizer had already fit to (§10 D2).
+
+**Target protocol:**
+
+| Stage | Data | Purpose |
+| --- | --- | --- |
+| 1. Split | full history → `TrainWindow` (first 80%) / `TestWindow` (last 20%) | contiguous, no shuffling |
+| 2. Search | `TrainWindow` | DE finds the parameter vector |
+| 3. Variant selection | `TrainWindow` | best entry × exit pair by PnL — **[PORT]** `evaluator.py:11-43` |
+| 4. Prune | — | config collapsed to the winning pair — **[PORT]** `evaluator.py:45-57` |
+| 5. Report | `TestWindow` | the headline numbers, computed once |
+| 6. Baseline | `TestWindow` | unoptimized config on the same test window, for comparison |
+
+Indicator warm-up for the test window is computed from train-window bars — that is past data
+relative to every test bar and is correct, not leakage. The split index is chosen so that the test
+window has at least `max(warmup) + 30` bars available including its warm-up prefix.
+
+Both optimized and baseline numbers are reported on the test window, so the improvement figure
+compares like with like. Legacy compared an in-sample optimized number against an in-sample baseline
+(`optimizer.py:117`), which at least was consistent, but both were inflated.
+
+**[NEW]** Train-window metrics are also reported, labelled as in-sample, next to the test metrics.
+The gap between them is the single most useful overfitting diagnostic available, and hiding it would
+be a disservice.
+
+**[FIX] Walk-forward is the default protocol — decided 2026-08-16**, superseding the single-split
+design above. The single 80/20 split is retained only as an explicitly selectable fast mode for
+iteration, and its output is labelled as such.
+
+A single contiguous test window is a single draw. Whether it happens to contain a bull run or 2022
+dominates the result, and neither outcome carries information about the strategy. It is also a
+one-shot resource that the intended workflow destroys: the user reads the test number, adjusts the
+strategy, and re-runs — at which point the test window has been fit to, through the user, and the
+out-of-sample label is false.
+
+The protocol above is therefore applied **per fold** (anchored and rolling generators, fold count
+configurable, default 6), and §12 reports the distribution across folds rather than a point. The
+`TrainWindow`/`TestWindow` types are unchanged — the fold generator is simply another constructor
+for them, so fitness and reporting need no modification.
+
+Repeated optimization of the same strategy file against the same data range increments a run counter
+recorded in the result, so re-fitting is at least visible in the output.
+
+### 9.5 Reported result
+
+`OptimizationResult` (a frozen dataclass, rendered by the CLI, serialisable by a future API):
+
+- the optimized config, as a YAML string with `strategy.name` suffixed `_optimized` — **[PORT]**
+  §9 of the legacy plan;
+- the winning entry/exit variant names;
+- test-window metrics, train-window metrics, and baseline test-window metrics;
+- the parameter diff — `path: old → new`, filtered to parameters belonging to the surviving variants
+  (**[PORT]** `optimizer.py:185-196`);
+- the trade list for the test window;
+- search diagnostics: evaluations performed, failures, wall time, seed, convergence message.
+
+---
+
+## 10. Defect register
+
+Each entry: legacy behaviour, failure mode, target. All are fixed in this engine.
+
+**D1 — Indicator warm-up zero-fill.**
+`src/execution/indicators.py:71, 74, 109, 111` applied `.fillna(0)` to every indicator output.
+Failure: over the warm-up region a rolling maximum reads `0`, so `close >= rolling_max` is true from
+bar 0 and the strategy takes a spurious day-1 entry that dominates short backtests. Every
+zero-crossing comparison (`macd_macdh > 0`) is similarly wrong during warm-up.
+**Target:** NaN propagation (§5.5) plus explicit signal suppression until `max(warmup)` (§6.3).
+
+**D2 — In-sample headline numbers.**
+`src/optimization/optimizer.py:22` computes `df_test` and never reads it; `optimizer.py:133, 181-183`
+report on `df_full`. Failure: reported PnL, CAGR and drawdown are measured on the data the optimizer
+fit to; the numbers are approximately meaningless as forecasts.
+**Target:** the §9.4 protocol, with type-level enforcement (§2.5).
+
+**D3 — `risk_free_rate` ignored.**
+`src/core/config.py:49` parses it; `src/metrics.py:21, 31` hardcode `0.04`. Failure: the field is
+inert; changing it changes nothing.
+**Target:** the configured value is used (§8).
+
+**D4 — Annual rate used as a per-period rate.**
+`src/metrics.py:21, 31` pass `risk_free=0.04` to vectorbt, which expects a per-period figure.
+Failure: the hurdle is overstated by ~252×; Sharpe and Sortino are strongly negative for every
+strategy, making them useless for comparison.
+**Target:** `(1 + rf) ** (1/252) - 1` (§8).
+
+**D5 — `bfill()` fabricates pre-listing history.**
+`src/data/market.py:35`. Failure: for a ticker that listed mid-range, the first real close is
+propagated backwards across every earlier bar, creating a flat synthetic price history; indicators
+warm up on invented data and trades are taken in a period when the instrument did not trade.
+**Target:** `ffill` only, drop leading NaN, error on residual NaN (§4.3).
+
+**D6 — ATR stop bypasses the indicator layer.**
+`src/execution/portfolio.py:21` calls `ta.atr(df.High, df.Low, df.Close, ...)` directly rather than
+going through `apply_ta`. Failure: on multi-ticker frames it received a DataFrame where a Series was
+expected and either raised or silently misbehaved. Single-ticker removes the immediate crash, but the
+bypass also skipped warm-up handling and every other registry guarantee.
+**Target:** ATR computed through the registry (§7.4).
+
+**D7 — `sl_stop` zero-fill.**
+`src/execution/portfolio.py:25` ends `.fillna(0)`. Failure: in vectorbt a `0.0` stop distance is not
+"no stop" — it is a stop at the entry price, which triggers on the first adverse tick. Every ATR-stop
+trade opened during warm-up is therefore stopped out immediately.
+**Target:** NaN means no stop (§7.4). A test asserts vectorbt 1.0.0's actual handling of both `0.0`
+and NaN rather than trusting this reading of it.
+
+**D8 — Holding rules key off signals, not positions.**
+`src/execution/backtester.py:35-47`. Failure: time exits and minimum-hold suppression are computed
+from entry *signals*, including signals that never opened a position; and `min_holding_days` does not
+bind vectorbt's internal SL/TP, so the documented guarantee is not delivered.
+**Target:** fixed-point iteration over realised positions (§7.2).
+
+**D9 — Failures score better than losses.**
+`src/optimization/optimizer.py:77, 82, 121` return `0.0`. Failure: `0.0` beats any losing strategy's
+negative score, so DE is attracted to parameter regions that fail to parse or fail to simulate.
+**Target:** `+inf` in minimisation space, with failure counting (§9.3).
+
+**D10 — Swallowed `UnboundLocalError`.**
+`src/optimization/evaluator.py:90-91` assigns `variant_pnl` only inside `if target_ticker:`; when the
+target ticker matches no column the name is unbound at `evaluator.py:113`, raising
+`UnboundLocalError`, which the bare `except Exception` at `evaluator.py:117` swallows — returning
+zeros that read as "this strategy made no money" rather than "this run was broken".
+**Target:** no bare excepts in the engine. Exceptions are typed, caught at a boundary that can act on
+them, and never converted into a plausible-looking zero.
+
+**D11 — No enforced minimum history.**
+Legacy accepted any date range. Failure: a 200-day SMA over a 60-day backtest is entirely warm-up;
+with D1's zero-fill it produced trades anyway.
+**Target:** validated at config time and again after data load (§3.3, §4.3).
+
+**D12 — Non-reproducible optimization.**
+`src/optimization/optimizer.py:166-169` — no `seed`, `workers=-1`. Failure: the same command
+produces different strategies on consecutive runs; results cannot be verified or compared.
+**Target:** mandatory seed, asserted worker-independence (§9.2).
+
+**D13 — Continuous bounds over integer parameters.**
+`optimizer.py:59` rounds after the fact. Failure: the fitness landscape is piecewise flat over
+lattice cells, degrading DE's differential signal.
+**Target:** scipy `integrality` (§9.2).
+
+**D14 — Shape and precision.**
+`float32` prices (`src/data/market.py:38`); `freq='d'` hardcoded (`portfolio.py:63`); long-only never
+stated; `indicators` accepted as a dict in `tests/test_optimizer.py:11-14` versus the list the schema
+requires.
+**Target:** `float64` (§4.1); daily-only made explicit and validated (§7.5); long-only pinned
+explicitly (§7.5); list shape normative with the dict shape rejected (§3.5).
+
+**D15 — Undefined indicator values reach trading decisions.** **[NEW — found in this engine, not
+legacy, by audit on 2026-08-16; see `docs/AUDIT.md` §A1.]**
+`cracktrade/signals/evaluate.py` relied on NaN comparisons yielding `False`. Failure: `~` inverts
+that to `True`, so `~(rsi > 30)` fires on every bar where `rsi` is undefined. Because `psar_psarl`
+and `supertrend_supertl` are NaN on 61% and 90% of post-warm-up bars respectively — by design, not
+by error — a plausible strategy trades on undefined data for most of its history. The symmetric
+quieter failure is that `close > psar_psarl` is silently `False` on 61% of bars, so the strategy
+under test is not the one the user wrote and nothing reports the difference.
+**Target:** the §6.2 defined mask, plus `defined_pct` in the output.
+
+---
+
+## 11. Public API surface
+
+The library's contract. The CLI is one consumer; a future HTTP interface is another.
+
+Validation is split across two modules, because meaning cannot be checked where shape is.
+`cracktrade.config` validates structure and is imported by the indicator and signal layers, so it
+cannot import them back. `cracktrade.strategy` sits above all three and composes them: it is the
+entry point interfaces should use, and a strategy that loads through it is valid in every sense the
+engine checks — before any market data is fetched.
+
+```python
+# cracktrade.config -- structural validation only
+def read_strategy_file(path: Path) -> Strategy: ...
+def parse_strategy(data: Mapping[str, Any]) -> Strategy: ...
+def dump_strategy(strategy: Strategy) -> str: ...
+
+# cracktrade.strategy -- structural + semantic (registry, grammar)
+def load_strategy(path: Path) -> Strategy: ...
+def build_strategy(data: Mapping[str, Any]) -> Strategy: ...
+def register_validator(validator: SemanticValidator) -> None: ...
+
+# cracktrade.data
+class MarketDataProvider(Protocol):
+    def fetch(self, ticker: str, start: date, end: date) -> pd.DataFrame: ...
+def load_history(strategy: Strategy, provider: MarketDataProvider) -> MarketData: ...
+
+# cracktrade.backtest
+def run_backtest(strategy: Strategy, data: MarketData) -> BacktestResult: ...
+
+# cracktrade.optimize
+def optimize(
+    strategy: Strategy,
+    data: MarketData,
+    settings: OptimizationSettings,
+) -> OptimizationResult: ...
+```
+
+Result models (`cracktrade.domain`) are frozen dataclasses with no pandas or vectorbt types in their
+public fields: `Metrics`, `Trade`, `VariantResult`, `BacktestResult`, `OptimizationResult`,
+`ParameterChange`, `SearchDiagnostics`.
+
+### 11.1 Conformance test list
+
+Derived from the three legacy test files plus one regression test per defect.
+
+**Ported:**
+1. Next-open execution — signal at index 20 → entry at index 21 (`tests/test_execution.py:69`).
+2. SMA computes the expected trailing mean (`tests/test_indicators.py:64-78`).
+3. MACD fans out to `_macd`, `_macdh`, `_macds` (`tests/test_indicators.py:80-93`).
+4. ATR auto-receives high/low/close (`tests/test_indicators.py:95-104`).
+5. VWAP auto-receives high/low/close/volume (`tests/test_indicators.py:106-115`).
+6. `rolling_max` / `rolling_min` produce correct windows (`tests/test_indicators.py:167-177`).
+7. Parameter discovery finds exactly the numeric leaves, with ±50% bounds
+   (`tests/test_optimizer.py:23-45`).
+8. Parameter injection preserves int-ness and does not mutate the source config
+   (`tests/test_optimizer.py:47-78`).
+
+**New — causality:**
+9. Truncation equivalence across the whole registry (§2.4).
+10. Property-based truncation equivalence over generated strategies (§2.4).
+11. `causal_shift` raises on negative periods.
+12. Repo contains no `.shift(-` or `center=True` outside the helper.
+13. Every forbidden AST node type is rejected, one test per node type.
+14. `close.shift(-1) > close` fails to parse.
+15. Passing a `TestWindow` to fitness fails type-checking (mypy-asserted).
+
+**New — one per defect:**
+16. D1 — `close >= rolling_max(252)` produces no entry before bar 252.
+17. D2 — reported metrics differ from train metrics on a strategy that overfits.
+18. D3 — changing `risk_free_rate` changes Sharpe.
+19. D4 — 4% annual compounds to 4% over 252 periods.
+20. D5 — a late-listing ticker produces no bars before its first real close.
+21. D6 — ATR stop matches a registry-computed ATR exactly.
+22. D7 — NaN `sl_stop` opens no stop; `0.0` behaviour asserted against vectorbt 1.0.0.
+23. D8 — no realised position closes earlier than `min_holding_days` *by signal or time exit*, and
+    every `max_holding_days` trade lasts exactly that long; a stop still fires inside the window.
+    Plus: the holding rules cost exactly one simulation per variant (§7.2).
+24. D9 — a config that fails to parse scores worse than a losing config.
+25. D10 — no bare `except` in the engine (AST-scanned).
+26. D11 — insufficient history raises.
+27. D12 — same seed → identical result at `workers=1` and `workers=-1`.
+28. D13 — integer parameters take only integer values across the search.
+29. D14 — non-daily index rejected; dict-shaped `indicators` rejected; dtype is `float64`.
+
+---
+
+## 12. Validation and robustness
+
+**[NEW — decided 2026-08-16.]** The engine's discipline against *look-ahead* bias (§2) has no
+counterpart against *selection* bias, which is the failure mode that actually costs money in a
+strategy optimizer. §2 guarantees that no number was computed from the future. This section
+guarantees that a number which survived a search of thousands of candidates is reported with the
+evidence needed to judge whether it is signal or the maximum of noise.
+
+Every instrument here consumes data the engine already produces. None requires new market data.
+
+### 12.1 Walk-forward folds
+
+Per §9.4. Two generators, both producing `(TrainWindow, TestWindow)` pairs with contiguous,
+non-shuffled, strictly ordered windows:
+
+- **anchored** — train start fixed at the first bar, train end advancing per fold;
+- **rolling** — train window of fixed length sliding forward.
+
+Default 6 folds. Each fold runs the full §9.4 protocol independently: its own search, its own
+variant selection, its own single test evaluation. Warm-up for a test window is drawn from bars
+preceding it, which is past data relative to every test bar.
+
+### 12.2 Fold dispersion
+
+The reported object is a distribution, not a point: per-fold test metrics, their median and IQR, and
+the **fold win rate** (folds with positive test return / total). A strategy positive in 6 of 6 folds
+and one whose entire edge sits in fold 3 are different objects and must not print the same headline.
+
+### 12.3 Deflated Sharpe Ratio
+
+Bailey & López de Prado. Adjusts the observed Sharpe for the number of trials, the sample length,
+and the skew and kurtosis of the return series, yielding the probability that the true Sharpe exceeds
+zero.
+
+The trial count is the one recorded in §9.3 — `evaluations × |entry_variants| × |exit_variants|` —
+not the number of DE generations. Understating it understates the deflation.
+
+Motivation: the maximum Sharpe over `N` independent trials on **pure noise** is inflated by roughly
+`sqrt(2 * ln N)` standard errors. At `N = 5000` that is about 2.9σ. A search with no edge whatsoever
+produces an impressive optimum as a matter of arithmetic, and nothing in §9 could previously say so.
+
+### 12.4 Probability of Backtest Overfitting
+
+CSCV (combinatorially symmetric cross-validation) over the §12.1 fold matrix: the frequency with
+which the configuration ranked best in-sample lands below the median out-of-sample. Reported as a
+probability. A PBO above 0.5 means the selection procedure is worse than choosing at random and the
+result must not be presented as a recommendation.
+
+### 12.5 Parameter stability
+
+Differential evolution returns a point. A financially usable optimum is a **plateau**; a sharp spike
+is a curve fit, and the two are indistinguishable in a point report.
+
+After the search, each optimized parameter is perturbed independently across a local grid (±10%,
+±20%, integer parameters to the neighbouring lattice points) and the objective re-evaluated on the
+train window. The result carries the degradation surface. A result where a single-parameter ±10%
+perturbation removes more than half the objective is **flagged as unstable** in the output.
+
+### 12.6 Bootstrap confidence intervals
+
+Stationary block bootstrap over the test-window trade sequence, giving intervals on mean trade
+return and on CAGR. Block resampling rather than i.i.d. resampling because trade outcomes are
+serially dependent.
+
+A 20% test window may hold six trades. Six trades support no conclusion, but a point estimate
+printed to two decimal places implies one. Below `min_trades` (§9.3) the headline verdict is
+**suppressed** rather than qualified.
+
+### 12.7 Cost sensitivity
+
+The headline metrics are recomputed at 1×, 2× and 3× the configured `slippage_pct`. Modelling
+liquidity- and volatility-dependent slippage properly is out of scope; establishing whether the edge
+survives a tripling of costs is three extra backtests and answers the question that matters. An edge
+that dies at 2× costs is not tradeable.
+
+### 12.8 Reporting order
+
+The CLI leads with the verdict, not the equity curve:
+
+1. benchmark comparison (§8) — did it beat buy-and-hold;
+2. fold dispersion (§12.2) — was it consistent;
+3. PBO and deflated Sharpe (§12.3, §12.4) — is it distinguishable from noise;
+4. parameter stability (§12.5) — is it a plateau;
+5. cost sensitivity (§12.7) — does it survive friction;
+6. the headline metrics.
+
+A result failing (1), or with PBO > 0.5, or flagged unstable, is reported as such before any
+profitable-looking number is shown.

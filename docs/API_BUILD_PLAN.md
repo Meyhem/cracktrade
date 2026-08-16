@@ -293,7 +293,15 @@ strategies (list/create/import/fork/get), versions (list/get/save/restore/diff).
 - Done when: the coverage matrix rows for list/detail/config/history/diff/dialogs (API.md §8,
   minus runs) are all exercised by tests.
 
-### Phase 6 — Run pipeline: launch, worker, progress, series, SSE
+### Phase 6 — Run pipeline: launch, worker, progress, series, SSE — **DONE**
+
+Landed. Two things worth recording. The CSV route had to be declared *before* the generic
+series route: Starlette matches in declaration order and a path parameter swallows a dot, so
+every `equity.csv` request was being answered by the generic handler looking for a series
+literally named "equity.csv". And most worker tests run against a fake engine behind a
+protocol — the lifecycle is what they test, and carrying a differential-evolution search
+through each one would make the suite slow enough to stop being run; two tests use the real
+engine against a stub provider to check the seam itself.
 
 Goal: the spine of the product — a run goes queued → running → terminal with honest progress
 and an immutable record.

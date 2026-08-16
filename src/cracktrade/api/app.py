@@ -20,7 +20,8 @@ from fastapi.responses import JSONResponse
 
 from cracktrade.api.db.pool import build_pool
 from cracktrade.api.errors import ApiError, InvariantViolationError, ValidationFailedError
-from cracktrade.api.routes import meta, strategies, versions
+from cracktrade.api.events import sse
+from cracktrade.api.routes import meta, runs, strategies, versions
 from cracktrade.api.settings import ApiSettings, load_api_settings
 from cracktrade.log import get_logger
 
@@ -92,4 +93,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(meta.router, prefix=API_PREFIX)
     app.include_router(strategies.router, prefix=API_PREFIX)
     app.include_router(versions.router, prefix=API_PREFIX)
+    app.include_router(runs.router, prefix=API_PREFIX)
+    app.include_router(sse.router, prefix=API_PREFIX)
     return app

@@ -31,26 +31,34 @@ def test_help_exits_zero() -> None:
     assert main(["--help"]) == 0
 
 
-@pytest.mark.parametrize("argv", [["worker"]])
-def test_registered_but_unbuilt_subcommands_fail(argv: list[str]) -> None:
-    """An unimplemented command reports failure rather than a quiet success.
+@pytest.mark.parametrize("argv", [["serve"], ["worker"]])
+def test_long_running_commands_check_the_database_before_starting(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both must decide *before* the part that never returns.
 
-    The list shrinks as phases land: ``db`` left it in phase 2 and ``serve`` in phase 5. Both
-    are now covered by tests that exercise what they actually do.
-    """
-    assert main(argv) == NOT_IMPLEMENTED
+    ``serve`` blocks in ``uvicorn.run`` and ``worker`` in its claim loop, so a database check
+    made afterwards would never be reached. Verifying up front is also the behaviour worth
+    having: a process started against half a schema fails later, inside a request or a run, and
+    far less clearly than it does here.
 
-
-def test_serve_refuses_an_unmigrated_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    """It must decide *before* binding a port.
-
-    Two things at once. A server started against half a schema fails later, inside a request,
-    and less clearly than it does here. And the check has to happen before ``uvicorn.run``,
-    which never returns -- otherwise this test hangs instead of failing, which is exactly how
-    the gap that prompted it was found.
+    This test exists because both commands were, in turn, still on the "not implemented yet"
+    list when they became implemented -- and the assertion that they exit non-zero was
+    satisfied by them starting a real server and a real worker inside the suite, which then
+    hung until it was killed. A test that can hang is worse than no test, so this one asserts
+    the refusal rather than the absence.
     """
     monkeypatch.setenv("CRACKTRADE_API_DATABASE_URL", "postgresql://nobody@localhost:59999/nope")
-    assert main(["serve"]) == DATABASE_ERROR
+    assert main(argv) == DATABASE_ERROR
+
+
+def test_no_subcommand_is_left_unimplemented() -> None:
+    """The placeholder exit code should now be unreachable.
+
+    Kept as a reminder rather than deleted: it is what makes the *next* unbuilt subcommand
+    declare itself, instead of quietly exiting zero while doing nothing.
+    """
+    assert NOT_IMPLEMENTED == 70
 
 
 @pytest.mark.parametrize("argv", [["db", "migrate"], ["db", "status"], ["db", "verify"]])

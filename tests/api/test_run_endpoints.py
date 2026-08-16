@@ -1,0 +1,343 @@
+"""Phase 6: the run endpoints over HTTP.
+
+The worker's own behaviour is covered in ``test_worker.py``. What is left here is the surface:
+the status code a launch returns, the filters four different screens share, what a suppressed
+run is *not* sent, and the CSV that has to be the same bytes as the chart.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import psycopg
+import pytest
+from fastapi.testclient import TestClient
+from psycopg.rows import TupleRow
+
+from cracktrade.api.db.uow import unit_of_work_on
+from cracktrade.api.repos import RunRepo
+from cracktrade.api.settings import ApiSettings
+from cracktrade.api.worker.runner import claim_one
+from cracktrade.data import StaticProvider
+from tests.test_metrics import trending_market
+
+pytestmark = pytest.mark.db
+
+BASE = "/api/v1"
+TICKER = "TEST"
+
+
+def _strategy(client: TestClient, name: str = "momentum_v2") -> str:
+    response = client.post(
+        f"{BASE}/strategies",
+        json={
+            "name": name,
+            "ticker": TICKER,
+            "start_date": "2020-01-01",
+            "end_date": "2023-12-31",
+        },
+    )
+    assert response.status_code == 201, response.text
+    identifier: str = response.json()["strategy"]["id"]
+    return identifier
+
+
+def _launch(client: TestClient, strategy_id: str, kind: str, **params: Any) -> dict[str, Any]:
+    response = client.post(
+        f"{BASE}/strategies/{strategy_id}/runs", json={"kind": kind, "params": params}
+    )
+    assert response.status_code == 202, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def _work_the_queue(db_url: str) -> None:
+    """Execute everything queued, with the real engine and stub data."""
+    provider = StaticProvider({TICKER: trending_market(bars=700).frame})
+    settings = ApiSettings(database_url=db_url, worker_heartbeat_seconds=0.05)
+    with psycopg.connect(db_url) as connection:
+        while claim_one(connection, settings, provider=provider) is not None:
+            pass
+
+
+# --------------------------------------------------------------------------- launching
+
+
+def test_launching_is_accepted_not_completed(client: TestClient) -> None:
+    """202, because the run is queued. The caller goes back to the strategy immediately."""
+    run = _launch(client, _strategy(client), "backtest")
+    assert run["status"] == "queued"
+    assert run["number"] == 1
+    assert run["version"] == 1
+    assert run["stale"] is False
+    assert run["headline"] is None
+    assert run["seed"] >= 0
+
+
+def test_launch_parameters_are_defaulted_and_echoed(client: TestClient) -> None:
+    run = _launch(client, _strategy(client), "walk_forward")
+    assert run["params"] == {
+        "objective": "calmar",
+        "epochs": 10,
+        "folds": 6,
+        "scheme": "anchored",
+    }
+
+
+def test_an_unknown_objective_is_refused_before_it_reaches_the_queue(
+    client: TestClient,
+) -> None:
+    """A run that cannot execute must not queue, where its failure would look like the engine's."""
+    response = client.post(
+        f"{BASE}/strategies/{_strategy(client)}/runs",
+        json={"kind": "optimize", "params": {"objective": "vibes"}},
+    )
+    assert response.status_code == 422
+    assert "unknown objective" in response.json()["detail"]
+
+
+def test_an_absurd_epoch_count_is_refused(client: TestClient) -> None:
+    response = client.post(
+        f"{BASE}/strategies/{_strategy(client)}/runs",
+        json={"kind": "optimize", "params": {"epochs": 100000}},
+    )
+    assert response.status_code == 422
+
+
+def test_a_backtest_takes_no_parameters(client: TestClient) -> None:
+    """It runs the config as written; a parameter would imply otherwise."""
+    response = client.post(
+        f"{BASE}/strategies/{_strategy(client)}/runs",
+        json={"kind": "backtest", "params": {"epochs": 5}},
+    )
+    assert response.status_code == 422
+
+
+def test_an_unknown_kind_is_refused_by_the_schema(client: TestClient) -> None:
+    response = client.post(f"{BASE}/strategies/{_strategy(client)}/runs", json={"kind": "hope"})
+    assert response.status_code == 422
+
+
+def test_runs_share_one_number_sequence_per_strategy(client: TestClient) -> None:
+    strategy_id = _strategy(client)
+    assert _launch(client, strategy_id, "backtest")["number"] == 1
+    assert _launch(client, strategy_id, "optimize")["number"] == 2
+
+
+# --------------------------------------------------------------------------- listing
+
+
+def test_runs_are_filtered_by_strategy_kind_and_status(client: TestClient) -> None:
+    """One endpoint behind the run tabs, the all-runs page, the queue and the chart picker."""
+    first = _strategy(client, "one")
+    second = _strategy(client, "two")
+    _launch(client, first, "backtest")
+    _launch(client, first, "optimize")
+    _launch(client, second, "backtest")
+
+    everything = client.get(f"{BASE}/runs").json()
+    assert everything["total"] == 3
+
+    by_strategy = client.get(f"{BASE}/runs", params={"strategy_id": first}).json()
+    assert by_strategy["total"] == 2
+
+    by_kind = client.get(f"{BASE}/runs", params={"strategy_id": first, "kind": "optimize"}).json()
+    assert by_kind["total"] == 1
+
+    queued = client.get(f"{BASE}/runs", params={"status": "queued,running"}).json()
+    assert queued["total"] == 3
+    assert client.get(f"{BASE}/runs", params={"status": "succeeded"}).json()["total"] == 0
+
+
+def test_an_unknown_filter_value_matches_nothing_rather_than_failing(
+    client: TestClient,
+) -> None:
+    """A client asking for a status this version lacks should see nothing, not a 500."""
+    _launch(client, _strategy(client), "backtest")
+    body = client.get(f"{BASE}/runs", params={"status": "elsewhere"}).json()
+    assert body["total"] == 1, "an unparseable filter is dropped, not applied"
+
+
+def test_listing_paginates(client: TestClient) -> None:
+    strategy_id = _strategy(client)
+    for _ in range(3):
+        _launch(client, strategy_id, "backtest")
+    page = client.get(f"{BASE}/runs", params={"limit": 2}).json()
+    assert len(page["runs"]) == 2
+    assert page["total"] == 3
+
+
+def test_an_unknown_run_is_a_404_problem(client: TestClient) -> None:
+    response = client.get(f"{BASE}/runs/00000000-0000-0000-0000-0000000000ff")
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+# --------------------------------------------------------------------------- cancelling
+
+
+def test_cancelling_a_queued_run_ends_it_immediately(client: TestClient) -> None:
+    """Nothing has started, so there is nothing to ask politely."""
+    run = _launch(client, _strategy(client), "optimize")
+    response = client.post(f"{BASE}/runs/{run['id']}/cancel")
+    assert response.status_code == 202
+    assert response.json()["status"] == "cancelled"
+
+
+def test_cancelling_a_finished_run_is_a_conflict(client: TestClient, db_url: str) -> None:
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+
+    response = client.post(f"{BASE}/runs/{run['id']}/cancel")
+    assert response.status_code == 409
+
+
+# --------------------------------------------------------------------------- executed runs
+
+
+def test_a_finished_backtest_returns_the_engines_own_result(
+    client: TestClient, db_url: str
+) -> None:
+    """Passed through verbatim, contractual derived properties included."""
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+
+    body = client.get(f"{BASE}/runs/{run['id']}").json()
+    assert body["run"]["status"] == "succeeded", body
+    result = body["result"]
+    assert result["vintage"]["ticker"] == TICKER
+    assert "has_enough_trades_to_judge" in result["metrics"]
+    assert "beats_buy_and_hold" in result["benchmark"]
+    assert body["error"] is None
+
+
+def test_a_finished_run_reports_elapsed_time(client: TestClient, db_url: str) -> None:
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+    body = client.get(f"{BASE}/runs/{run['id']}").json()["run"]
+    assert body["elapsed_seconds"] is not None
+    assert body["elapsed_seconds"] >= 0
+
+
+def test_a_run_against_an_older_version_reads_as_stale(client: TestClient, db_url: str) -> None:
+    strategy_id = _strategy(client)
+    run = _launch(client, strategy_id, "backtest")
+    _work_the_queue(db_url)
+
+    detail = client.get(f"{BASE}/strategies/{strategy_id}").json()
+    config = dict(detail["head"]["config"])
+    config["exit"] = {**config["exit"], "stop_loss_pct": 9.0}
+    client.post(
+        f"{BASE}/strategies/{strategy_id}/versions",
+        json={"base_version": 1, "config": config},
+    )
+
+    assert client.get(f"{BASE}/runs/{run['id']}").json()["run"]["stale"] is True
+
+
+# --------------------------------------------------------------------------- series
+
+
+def test_series_are_catalogued_and_fetchable(client: TestClient, db_url: str) -> None:
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+
+    catalog = client.get(f"{BASE}/runs/{run['id']}/series").json()["series"]
+    assert catalog["equity"] == [0]
+    assert set(catalog) >= {"equity", "drawdown", "close", "monthly_returns"}
+
+    points = client.get(f"{BASE}/runs/{run['id']}/series/equity").json()["points"]
+    assert len(points["dates"]) == len(points["values"]) > 0
+
+
+def test_a_missing_series_is_a_404(client: TestClient, db_url: str) -> None:
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+    assert client.get(f"{BASE}/runs/{run['id']}/series/nope").status_code == 404
+
+
+def test_csv_export_streams_the_stored_points(client: TestClient, db_url: str) -> None:
+    """The chart and the file are the same bytes, because neither recomputes anything."""
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+
+    response = client.get(f"{BASE}/runs/{run['id']}/series/equity.csv")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+    lines = response.text.strip().splitlines()
+    assert lines[0] == "dates,values"
+
+    points = client.get(f"{BASE}/runs/{run['id']}/series/equity").json()["points"]
+    assert len(lines) == len(points["dates"]) + 1
+    assert lines[1].startswith(points["dates"][0])
+
+
+def test_monthly_returns_export_keeps_the_in_market_column(client: TestClient, db_url: str) -> None:
+    """Flat and absent are different facts, so the flag has to survive the export."""
+    run = _launch(client, _strategy(client), "backtest")
+    _work_the_queue(db_url)
+    text = client.get(f"{BASE}/runs/{run['id']}/series/monthly_returns.csv").text
+    assert text.splitlines()[0] == "months,values,in_market"
+
+
+# --------------------------------------------------------------------------- honesty
+
+
+def test_a_suppressed_run_is_not_sent_the_figures_it_withholds(
+    client: TestClient, db: psycopg.Connection[TupleRow], db_url: str
+) -> None:
+    """Spec 15.2: a client cannot render a number it was never given.
+
+    Landed through the repository with a hand-built result, because provoking a genuinely
+    thin run would mean finding a strategy that trades sixteen times -- which tests the market
+    generator rather than the suppression rule.
+    """
+    run = _launch(client, _strategy(client), "backtest")
+    with unit_of_work_on(db) as work:
+        repo = RunRepo(work.connection)
+        repo.claim("test-worker")
+        repo.succeed(
+            run["id"],
+            result={
+                "metrics": {
+                    "total_trades": 16,
+                    "total_return_pct": 13.2,
+                    "has_enough_trades_to_judge": False,
+                },
+                "entry_defined_pct": 8.0,
+                "benchmark": {"excess_return_pct": -135.8},
+            },
+            suppressed=True,
+        )
+
+    summary = client.get(f"{BASE}/runs", params={"strategy_id": run["strategy"]["id"]}).json()
+    headline = summary["runs"][0]["headline"]
+    assert headline["suppressed"] is True
+    assert headline["trades"] == 16
+    assert headline["trade_floor"] == 20
+    assert "return_pct" not in headline
+    assert "excess_pp" not in headline
+
+
+def test_only_searches_are_promotable(client: TestClient, db_url: str) -> None:
+    """A backtest has no winning config to promote: it ran the one that was already there."""
+    strategy_id = _strategy(client)
+    _launch(client, strategy_id, "backtest")
+    _launch(client, strategy_id, "optimize", epochs=2)
+    _work_the_queue(db_url)
+
+    runs = client.get(f"{BASE}/runs", params={"strategy_id": strategy_id}).json()["runs"]
+    promotable = {run["kind"]: run["promotable"] for run in runs}
+    assert promotable == {"backtest": False, "optimize": True}
+
+
+def test_a_strategy_with_runs_but_no_validation_is_unvalidated(
+    client: TestClient, db_url: str
+) -> None:
+    """Not a neutral state: it means nobody has checked the result yet."""
+    strategy_id = _strategy(client)
+    _launch(client, strategy_id, "backtest")
+    _work_the_queue(db_url)
+    assert client.get(f"{BASE}/strategies/{strategy_id}").json()["verdict"] == "unvalidated"

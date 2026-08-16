@@ -29,6 +29,7 @@ from cracktrade.api.app import API_PREFIX
 from cracktrade.api.db.console import render_migrate, render_status, render_verify
 from cracktrade.api.db.migrate import plan
 from cracktrade.api.settings import load_api_settings
+from cracktrade.api.worker.runner import run_forever
 from cracktrade.errors import CracktradeError
 from cracktrade.log import configure
 
@@ -137,8 +138,23 @@ def serve(
 
 @app.command()
 def worker() -> None:
-    """Run the queue worker that executes backtests, searches and validations."""
-    _unimplemented("worker", "phase 6")
+    """Run the queue worker that executes backtests, searches and validations.
+
+    A separate process from the server by design: a walk-forward is minutes of CPU-bound work
+    and must not sit inside a request. Refuses to start against an unmigrated database, for the
+    same reason `serve` does.
+    """
+    settings = load_api_settings()
+    with _database() as connection:
+        if not plan(connection).is_up_to_date:
+            err_console.print(
+                "[bold red]the database is not fully migrated[/bold red] "
+                "-- run `cracktrade-api db migrate` first."
+            )
+            raise typer.Exit(NOT_MIGRATED)
+
+    err_console.print("worker ready; waiting for runs")
+    run_forever(settings)
 
 
 @db_app.command("migrate")

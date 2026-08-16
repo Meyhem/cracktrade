@@ -8,6 +8,7 @@ into exit codes.
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from typing import Annotated
 
 import typer
@@ -40,6 +41,9 @@ app = typer.Typer(
 
 #: Diagnostics go to stderr so stdout carries only the requested output and stays pipeable.
 err_console = Console(stderr=True)
+
+#: Conventional status for a run cancelled with Ctrl-C.
+INTERRUPTED = 130
 
 
 def _version_callback(value: bool) -> None:
@@ -81,21 +85,44 @@ def _exit_code_for(error: CracktradeError) -> ExitCode:
     return ExitCode.INTERNAL
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI, translating engine errors into exit codes.
 
     Engine errors are user-facing and are printed without a traceback. Anything else is a bug
     and keeps its traceback, because hiding it would only make the bug harder to report.
+
+    ``argv`` exists so the error boundary is part of the invocable surface rather than a wrapper
+    around it. Calling ``app()`` directly -- which is what a test harness or an embedding caller
+    does -- would otherwise skip the mapping entirely and raise where it should have returned a
+    code.
+
+    Typer vendors click as a private module, so its exception types are not importable here.
+    They do not need to be: in standalone mode click converts everything it handles, including
+    ``--help`` and ``typer.Exit``, into ``SystemExit``, while an engine error is not click's and
+    propagates untouched. Catching those two covers the whole surface using only public API.
     """
     try:
-        app()
+        app(args=argv)
     except CracktradeError as error:
-        code = _exit_code_for(error)
         err_console.print(f"[bold red]error:[/bold red] {error}")
-        return int(code)
-    except typer.Exit as exit_signal:
-        return int(exit_signal.exit_code)
+        return int(_exit_code_for(error))
+    except KeyboardInterrupt:
+        err_console.print("[yellow]interrupted[/yellow]")
+        return INTERRUPTED
+    except SystemExit as exit_signal:
+        return _status_of(exit_signal)
     return int(ExitCode.OK)
+
+
+def _status_of(exit_signal: SystemExit) -> int:
+    """The status a ``SystemExit`` carries. ``None`` means success; a string means failure."""
+    code = exit_signal.code
+    if code is None:
+        return int(ExitCode.OK)
+    if isinstance(code, int):
+        return code
+    err_console.print(f"[bold red]error:[/bold red] {code}")
+    return int(ExitCode.INTERNAL)
 
 
 if __name__ == "__main__":

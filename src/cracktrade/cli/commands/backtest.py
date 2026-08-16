@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 from cracktrade.backtest import run_backtest
+from cracktrade.cli.output import OutputFormat, emit
 from cracktrade.cli.render import render_result
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
 from cracktrade.settings import load_settings
@@ -27,6 +28,14 @@ def backtest(
             help="Path to the strategy YAML file.",
         ),
     ],
+    fmt: Annotated[
+        OutputFormat,
+        typer.Option("--format", help="How to present the result."),
+    ] = OutputFormat.TABLE,
+    output: Annotated[
+        Path | None,
+        typer.Option("-o", "--output", help="Write machine-readable output here."),
+    ] = None,
     cache: Annotated[
         bool,
         typer.Option("--cache/--no-cache", help="Cache downloaded price history on disk."),
@@ -48,4 +57,5 @@ def backtest(
         max_filled_fraction=settings.max_filled_fraction,
     )
 
-    render_result(run_backtest(strategy, data, seed=settings.seed), console)
+    result = run_backtest(strategy, data, seed=settings.seed)
+    emit(result, fmt, console=console, render=render_result, output=output)

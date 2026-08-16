@@ -11,7 +11,7 @@ API reusing the same core comes later.
 | Spec | `docs/ENGINE_SPEC.md` is the contract; written in Phase 0 before any code |
 | Fidelity | Clean rebuild. Every defect in the spec's defect register is fixed. No legacy-compat mode. Results will **not** match the old system. |
 | Universe | Exactly **one ticker per config** (`universe.ticker: str`). No multi-ticker, no shared-cash portfolios. |
-| Persistence | **None.** Optimized YAML + metrics go to stdout. `-o` writes a file only when asked. No run catalogue, no DB. |
+| Persistence | **None.** Results go to stdout; `-o` writes a file only when asked. No run catalogue, no DB. |
 | Indicators | Registry with per-indicator param schemas, replacing the legacy fixed 21-field allowlist |
 | Look-ahead | Structurally impossible — see "Causality" below. Non-negotiable. |
 | Data source | yfinance behind a `MarketDataProvider` protocol. Disk cache opt-in via `--cache`. |
@@ -87,7 +87,7 @@ the future API will use.
 | 7 | Metrics, benchmark, result models | done |
 | 8 | Optimizer | done |
 | 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | done |
-| 9 | CLI output polish | |
+| 9 | CLI output polish | done |
 
 Out of scope this pass: AI strategy generation, charts, persistence, HTTP API, multi-ticker,
 Google Drive, Zulip, watchdog.

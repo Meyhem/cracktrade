@@ -14,6 +14,7 @@ useful overfitting diagnostic available for free, and hiding it would be a disse
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -59,6 +60,7 @@ def optimize(
     train_fraction: float = 0.8,
     objective_name: str = DEFAULT_OBJECTIVE,
     min_test_bars: int = 30,
+    on_generation: Callable[[int, float], None] | None = None,
 ) -> OptimizationResult:
     """Search ``strategy``'s parameters on train data and report on unseen test data.
 
@@ -79,6 +81,7 @@ def optimize(
         seed=seed,
         workers=workers,
         objective_name=objective_name,
+        on_generation=on_generation,
     ).result
 
 
@@ -112,6 +115,7 @@ def optimize_split(
     seed: int = 0,
     workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
+    on_generation: Callable[[int, float], None] | None = None,
 ) -> SplitOutcome:
     """Run the full protocol over one already-computed train/test division.
 
@@ -146,6 +150,7 @@ def optimize_split(
         seed=seed,
         workers=workers,
         diagnostics=diagnostics,
+        on_generation=on_generation,
     )
     diagnostics.elapsed_seconds = time.perf_counter() - started
     _absorb_counts(diagnostics, fitness, workers=workers)

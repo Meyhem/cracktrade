@@ -8,6 +8,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from cracktrade.cli.output import OutputFormat, emit
+from cracktrade.cli.progress import search_progress
 from cracktrade.cli.render import render_optimization
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
 from cracktrade.optimize import DEFAULT_OBJECTIVE, OBJECTIVES
@@ -16,6 +18,7 @@ from cracktrade.settings import load_settings
 from cracktrade.strategy import load_strategy, required_warmup
 
 console = Console()
+err_console = Console(stderr=True)
 
 
 def optimize(
@@ -32,9 +35,16 @@ def optimize(
         str,
         typer.Option("--objective", help=f"One of: {', '.join(sorted(OBJECTIVES))}."),
     ] = DEFAULT_OBJECTIVE,
+    fmt: Annotated[
+        OutputFormat, typer.Option("--format", help="How to present the result.")
+    ] = OutputFormat.TABLE,
     output: Annotated[
         Path | None,
-        typer.Option("-o", "--output", help="Write the optimized strategy YAML here."),
+        typer.Option("-o", "--output", help="Write the result here instead of stdout."),
+    ] = None,
+    strategy_out: Annotated[
+        Path | None,
+        typer.Option("--strategy-out", help="Write the optimized strategy YAML here."),
     ] = None,
     cache: Annotated[
         bool, typer.Option("--cache/--no-cache", help="Cache downloaded price history.")
@@ -45,6 +55,8 @@ def optimize(
     Parameters are fitted on the first 80% of history and the entry/exit variant is chosen there
     too. The remaining 20% is evaluated exactly once, after both choices are final, and is the
     only part reported as out-of-sample.
+
+    A single split is one draw. For a result worth acting on, use `cracktrade walkforward`.
     """
     settings = load_settings()
     strategy = load_strategy(strategy_file)
@@ -57,22 +69,26 @@ def optimize(
         max_filled_fraction=settings.max_filled_fraction,
     )
 
-    result = run_optimize(
-        strategy,
-        data,
-        epochs=epochs,
-        seed=settings.seed,
-        workers=settings.workers,
-        train_fraction=settings.train_fraction,
-        objective_name=objective,
-        min_test_bars=settings.min_bars_beyond_warmup,
-    )
+    with search_progress(
+        total=epochs, label="searching", enabled=fmt is OutputFormat.TABLE
+    ) as on_generation:
+        result = run_optimize(
+            strategy,
+            data,
+            epochs=epochs,
+            seed=settings.seed,
+            workers=settings.workers,
+            train_fraction=settings.train_fraction,
+            objective_name=objective,
+            min_test_bars=settings.min_bars_beyond_warmup,
+            on_generation=on_generation,
+        )
 
-    render_optimization(result, console)
+    emit(result, fmt, console=console, render=render_optimization, output=output)
 
-    if output is not None:
-        output.write_text(result.optimized_yaml, encoding="utf-8")
-        console.print(f"\n[green]wrote[/green] {output}")
-    else:
+    if strategy_out is not None:
+        strategy_out.write_text(result.optimized_yaml, encoding="utf-8")
+        err_console.print(f"[green]wrote[/green] {strategy_out}")
+    elif fmt is OutputFormat.TABLE:
         console.print()
         typer.echo(result.optimized_yaml, nl=False)

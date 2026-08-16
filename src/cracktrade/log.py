@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from rich.console import Console
 from rich.logging import RichHandler
 
 _ROOT = "cracktrade"
@@ -26,6 +27,10 @@ def configure(*, verbose: bool = False, quiet: bool = False) -> None:
     logger.setLevel(level)
     logger.handlers.clear()
     handler = RichHandler(
+        # Diagnostics go to stderr. RichHandler defaults to stdout, which would put log lines
+        # into the middle of `--format json` output and make it unparseable -- stdout carries
+        # the requested result and nothing else.
+        console=Console(stderr=True),
         rich_tracebacks=False,
         show_path=False,
         show_time=False,

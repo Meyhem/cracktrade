@@ -16,6 +16,7 @@ Two fixes over the legacy search matter more than the rest:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
@@ -26,7 +27,7 @@ from cracktrade.log import get_logger
 from cracktrade.optimize.objective import INFEASIBLE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     import numpy.typing as npt
 
@@ -104,8 +105,22 @@ def run_search(
     seed: int,
     workers: int,
     diagnostics: SearchDiagnostics,
+    on_generation: Callable[[int, float], None] | None = None,
 ) -> SearchOutcome:
-    """Search ``parameters`` with differential evolution, minimising ``score``."""
+    """Search ``parameters`` with differential evolution, minimising ``score``.
+
+    ``on_generation`` is called once per completed generation with the generation number and
+    scipy's convergence measure, so a caller can show progress without this module knowing
+    anything about terminals.
+    """
+    generation = 0
+
+    def report(_vector: npt.NDArray[np.float64], convergence: float = 0.0) -> None:
+        nonlocal generation
+        generation += 1
+        if on_generation is not None:
+            on_generation(generation, float(convergence))
+
     bounds = [(parameter.low, parameter.high) for parameter in parameters]
     integrality = np.array([parameter.is_integer for parameter in parameters], dtype=bool)
 
@@ -125,6 +140,7 @@ def run_search(
         polish=False,
         init=_initial_population(parameters, seed),
         integrality=integrality,
+        callback=report if on_generation is not None else None,
     )
 
     diagnostics.message = str(result.message)

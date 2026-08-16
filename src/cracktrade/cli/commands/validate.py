@@ -11,7 +11,7 @@ from rich.console import Console
 from cracktrade.config import dump_strategy
 from cracktrade.strategy import load_strategy
 
-console = Console()
+console = Console(stderr=True)
 
 
 def validate(

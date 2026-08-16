@@ -1499,3 +1499,58 @@ The CLI leads with the verdict, not the equity curve:
 
 A result failing (1), or with PBO > 0.5, or flagged unstable, is reported as such before any
 profitable-looking number is shown.
+
+
+---
+
+## 13. Interface surface
+
+**[NEW]** The CLI is one consumer of the library, not a layer with logic of its own.
+
+### 13.1 Output formats
+
+Every result command takes `--format table|json|yaml` and `-o FILE`. Serialisation lives in
+`cracktrade.serialize`, not in the CLI, because the planned HTTP interface must produce the same
+shape from the same objects.
+
+Derived properties are part of the serialised form. `is_credible`, `failures` and
+`fold_win_rate` are computed rather than stored, and a field-only walk would omit exactly the
+parts that carry the verdict. Each type declares which of its properties are contractual.
+
+**JSON has no infinity.** `profit_factor` is legitimately infinite for a strategy with no losing
+trades. Non-finite floats serialise as `null` rather than as `Infinity`, which most parsers
+reject.
+
+### 13.2 Stream discipline
+
+**Stdout carries the requested output and nothing else.** Diagnostics, progress and verdicts go
+to stderr, so `cracktrade backtest s.yaml --format json | jq` works without filtering.
+
+This was a defect until Phase 9: `RichHandler` defaults to a stdout console, so every log line
+landed in the middle of the JSON document. A test asserts the handler's console is a stderr one,
+because capturing output would pass under a lucky harness.
+
+Progress bars are suppressed unless stderr is a TTY and the format is `table`.
+
+### 13.3 Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | success |
+| 1 | internal error — a bug; traceback preserved |
+| 2 | configuration invalid or unreadable |
+| 3 | market data unavailable or off-contract |
+| 4 | simulation or search failed |
+| 5 | an operation was refused as look-ahead |
+| 6 | the run succeeded but the result is not credible (`--strict` only) |
+| 130 | interrupted |
+
+Code 6 is deliberately not an error: the run worked, the strategy did not. It is returned only
+under `--strict` so a validation run can gate a pipeline without every ordinary invocation
+looking like a failure.
+
+**The error boundary is part of the invocable surface.** `main(argv)` runs the app and maps
+exceptions to codes, so a caller embedding the CLI gets the same behaviour as the console
+script. Typer vendors click privately, so click's exception types are not importable; in
+standalone mode click converts everything it handles into `SystemExit` while an engine error
+propagates untouched, and catching those two covers the surface using only public API.

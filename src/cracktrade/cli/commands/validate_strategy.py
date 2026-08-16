@@ -8,6 +8,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from cracktrade.cli.exit_codes import ExitCode
+from cracktrade.cli.output import OutputFormat, emit
 from cracktrade.cli.render import render_validation
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
 from cracktrade.optimize import DEFAULT_OBJECTIVE, OBJECTIVES
@@ -16,6 +18,7 @@ from cracktrade.strategy import load_strategy, required_warmup
 from cracktrade.validate import DEFAULT_FOLDS, FoldScheme, walk_forward
 
 console = Console()
+err_console = Console(stderr=True)
 
 
 def walkforward(
@@ -37,10 +40,21 @@ def walkforward(
     objective: Annotated[
         str, typer.Option("--objective", help=f"One of: {', '.join(sorted(OBJECTIVES))}.")
     ] = DEFAULT_OBJECTIVE,
+    fmt: Annotated[
+        OutputFormat, typer.Option("--format", help="How to present the result.")
+    ] = OutputFormat.TABLE,
     output: Annotated[
         Path | None,
-        typer.Option("-o", "--output", help="Write the final fold's strategy YAML here."),
+        typer.Option("-o", "--output", help="Write the result here instead of stdout."),
     ] = None,
+    strategy_out: Annotated[
+        Path | None,
+        typer.Option("--strategy-out", help="Write the final fold's strategy YAML here."),
+    ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Exit non-zero when the result is not credible."),
+    ] = False,
     cache: Annotated[
         bool, typer.Option("--cache/--no-cache", help="Cache downloaded price history.")
     ] = False,
@@ -52,6 +66,9 @@ def walkforward(
     statistics that say whether the distribution is distinguishable from luck: a Sharpe deflated
     for the number of trials, the probability of backtest overfitting, parameter stability, and
     sensitivity to costs.
+
+    With --strict the process exits 6 when the result fails any of those checks, so this can
+    gate a pipeline.
     """
     settings = load_settings()
     strategy = load_strategy(strategy_file)
@@ -76,8 +93,11 @@ def walkforward(
         min_test_bars=settings.min_bars_beyond_warmup,
     )
 
-    render_validation(report, console)
+    emit(report, fmt, console=console, render=render_validation, output=output)
 
-    if output is not None:
-        output.write_text(report.optimized_yaml, encoding="utf-8")
-        console.print(f"\n[green]wrote[/green] {output}")
+    if strategy_out is not None:
+        strategy_out.write_text(report.optimized_yaml, encoding="utf-8")
+        err_console.print(f"[green]wrote[/green] {strategy_out}")
+
+    if strict and not report.is_credible:
+        raise typer.Exit(ExitCode.NOT_CREDIBLE)

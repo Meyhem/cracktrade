@@ -23,3 +23,7 @@ class ExitCode(IntEnum):
     ENGINE = 4
     #: The engine refused an operation that would introduce look-ahead bias.
     CAUSALITY = 5
+    #: The run completed, but the result did not clear its robustness checks. Only returned
+    #: under --strict, so that a validation run can gate a pipeline without every ordinary
+    #: invocation looking like a failure.
+    NOT_CREDIBLE = 6

@@ -55,16 +55,14 @@ yfinance applies split/dividend adjustments retroactively.
 
 ```
 src/cracktrade/
-  domain/        value objects + result models — pure, no I/O, no vectorbt
+  domain/        frozen result models — pure, no pandas, no vectorbt in public fields
   config/        Pydantic v2 strategy schema, parse/serialize, error formatting
   data/          MarketDataProvider protocol + YFinanceProvider + OHLCV contract
   indicators/    IndicatorRegistry, pandas_ta adapters, engine builtins
   signals/       AST-whitelisted evaluation + causal shift
   backtest/      variant expansion, holding rules (signal_func_nb), vectorbt invocation
-  metrics/       merged metric set
   optimize/      parameter discovery, search space, DE driver, fitness, train/test
-  render/        result-model -> table / json / yaml renderers
-  cli/           Typer app — parsing and rendering only
+  cli/           Typer app + render.py — parsing and rendering only
   errors.py  settings.py
 ```
 
@@ -85,7 +83,7 @@ the future API will use.
 | 5 | Signal layer + causality harness | done |
 | 5.5 | Correctness patch: definedness mask (D15), fill provenance, UTC cutoff, float equality | done |
 | 6 | Backtest engine | done |
-| 7 | Metrics and result models | |
+| 7 | Metrics, benchmark, result models | done |
 | 8 | Optimizer | |
 | 8.5 | Validation and robustness (walk-forward, DSR, PBO, stability, bootstrap, cost sweep) | |
 | 9 | CLI output polish | |

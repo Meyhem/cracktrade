@@ -1332,7 +1332,7 @@ class MarketDataProvider(Protocol):
 def load_history(strategy: Strategy, provider: MarketDataProvider) -> MarketData: ...
 
 # cracktrade.backtest
-def run_backtest(strategy: Strategy, data: MarketData) -> BacktestResult: ...
+def run_backtest(strategy: Strategy, data: MarketData, *, seed: int = 0) -> BacktestResult: ...
 
 # cracktrade.optimize
 def optimize(
@@ -1343,8 +1343,13 @@ def optimize(
 ```
 
 Result models (`cracktrade.domain`) are frozen dataclasses with no pandas or vectorbt types in their
-public fields: `Metrics`, `Trade`, `VariantResult`, `BacktestResult`, `OptimizationResult`,
-`ParameterChange`, `SearchDiagnostics`.
+public fields: `Metrics`, `Trade`, `YearReturn`, `BenchmarkComparison`, `DataVintage`,
+`VariantResult`, `BacktestResult`, and — from Phase 8 — `OptimizationResult`, `ParameterChange`,
+`SearchDiagnostics`.
+
+`cracktrade.strategy.required_warmup(strategy)` returns the bars a strategy needs before any
+indicator is defined. Interfaces pass it, plus a margin, to `load_history`, which is how D11 is
+enforced without the CLI reimplementing the calculation.
 
 ### 11.1 Conformance test list
 

@@ -62,6 +62,26 @@ def build_strategy(data: Mapping[str, Any]) -> Strategy:
     return _apply_semantic_checks(parse_strategy(data))
 
 
+def required_warmup(strategy: Strategy) -> int:
+    """Bars the strategy needs before any of its indicators is defined.
+
+    Declared warm-up, taken as the maximum across the indicator list. Callers pass this plus a
+    margin to :func:`cracktrade.data.load_history`, so a 200-day moving average over a 60-day
+    range is refused at the data layer rather than producing a backtest that is entirely
+    warm-up (defect D11).
+    """
+    import importlib
+
+    registry = importlib.import_module("cracktrade.indicators.registry")
+    importlib.import_module("cracktrade.indicators.compute").registry_installed()
+
+    warmup = 0
+    for indicator in strategy.indicators:
+        spec = registry.get(indicator.type)
+        warmup = max(warmup, spec.warmup(spec.params.model_validate(indicator.params)))
+    return warmup
+
+
 def _ensure_validators_registered() -> None:
     """Import the layers that own semantic checks, so they register themselves.
 

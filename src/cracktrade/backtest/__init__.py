@@ -1,12 +1,21 @@
-"""The backtest engine: variant expansion, exit composition, and simulation.
+"""The backtest engine: variant expansion, holding rules, simulation, and metrics.
 
 vectorbt is imported only inside this package (see ``PLAN.md``), so the layers above it depend
-on typed results rather than on a third-party portfolio object.
+on the frozen value objects in :mod:`cracktrade.domain` rather than on a third-party portfolio
+object. :func:`run_backtest` is the boundary.
 """
 
 from __future__ import annotations
 
+from cracktrade.backtest.benchmark import buy_and_hold_portfolio, compare
 from cracktrade.backtest.holding import holding_bounds
+from cracktrade.backtest.metrics import (
+    extract_metrics,
+    extract_trades,
+    per_period_risk_free,
+    worst_rolling_12m,
+    yearly_returns,
+)
 from cracktrade.backtest.portfolio import (
     FREQ,
     STOP_ENTRY_PRICE,
@@ -15,6 +24,7 @@ from cracktrade.backtest.portfolio import (
     metric,
     require_daily_bars,
 )
+from cracktrade.backtest.results import frame_digest, run_backtest, vintage_of
 from cracktrade.backtest.runner import VariantSimulation, run_variants
 from cracktrade.backtest.stops import ATR_WINDOW, StopConfiguration, atr_stop_series, build_stops
 from cracktrade.backtest.variants import VariantPair, expand_variants
@@ -30,9 +40,19 @@ __all__ = [
     "VariantSimulation",
     "atr_stop_series",
     "build_stops",
+    "buy_and_hold_portfolio",
+    "compare",
     "expand_variants",
+    "extract_metrics",
+    "extract_trades",
+    "frame_digest",
     "holding_bounds",
     "metric",
+    "per_period_risk_free",
     "require_daily_bars",
+    "run_backtest",
     "run_variants",
+    "vintage_of",
+    "worst_rolling_12m",
+    "yearly_returns",
 ]

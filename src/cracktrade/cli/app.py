@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from cracktrade import __version__
+from cracktrade.cli.commands.backtest import backtest as backtest_command
 from cracktrade.cli.commands.indicators import indicators as indicators_command
 from cracktrade.cli.commands.validate import validate as validate_command
 from cracktrade.cli.exit_codes import ExitCode
@@ -59,6 +60,7 @@ def main_callback(
 
 
 app.command("validate")(validate_command)
+app.command("backtest")(backtest_command)
 app.command("indicators")(indicators_command)
 
 

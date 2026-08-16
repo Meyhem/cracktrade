@@ -44,6 +44,7 @@ class VariantSimulation:
         exit_signal: the evaluated exit expression, or ``None`` when the variant exits only by
             stops or holding period.
         stops: the resolved stop configuration.
+        warmup: bars suppressed at the head of every signal in this run.
     """
 
     pair: VariantPair
@@ -53,6 +54,7 @@ class VariantSimulation:
     entry_signal: EvaluatedSignal
     exit_signal: EvaluatedSignal | None
     stops: StopConfiguration
+    warmup: int
 
     @property
     def label(self) -> str:
@@ -98,6 +100,7 @@ def run_variants(
             strategy=strategy,
             entry_signal=entry_signals[pair.entry.name],
             exit_signal=exit_signals[pair.exit.name],
+            warmup=namespace.warmup,
             seed=seed,
         )
         for pair in pairs
@@ -118,6 +121,7 @@ def _run_pair(
     strategy: Strategy,
     entry_signal: EvaluatedSignal,
     exit_signal: EvaluatedSignal | None,
+    warmup: int,
     seed: int,
 ) -> VariantSimulation:
     """Simulate one entry/exit pair."""
@@ -148,4 +152,5 @@ def _run_pair(
         entry_signal=entry_signal,
         exit_signal=exit_signal,
         stops=stops,
+        warmup=warmup,
     )

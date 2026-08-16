@@ -49,12 +49,14 @@ Five libraries plus two consumers:
 | `optimize` | parameter search, train/test protocol | all above |
 | `render` | result models → text/json/yaml | `domain` |
 | `cli` | argument parsing, invoking core, rendering | all above |
+| `api` | HTTP interface and persistence (§14, §15) | all above |
 
 Dependencies flow strictly downward. Nothing outside `backtest/` imports vectorbt; this keeps the
 engine replaceable and every layer above it unit-testable without a portfolio simulation.
 
-The core returns **typed result objects**. Rendering is the consumer's job. This is the seam a
-future HTTP interface reuses without modification to core.
+The core returns **typed result objects**. Rendering is the consumer's job. This is the seam the
+HTTP interface (§15) reuses without modification to core: the engine itself remains stateless,
+and everything `api` stores is the engine's own serialized output.
 
 ### 1.2 Pinned dependencies
 
@@ -71,10 +73,20 @@ Per legacy `uv.lock`, retained:
 | `yfinance` | ≥ 0.2.40 | default data provider |
 | `pydantic` | ≥ 2.7 | schema |
 
+**[NEW — decided 2026-08-16.]** The `api` layer (§15) adds `fastapi`, `uvicorn`,
+`psycopg[binary,pool]` (raw SQL, no ORM — §15.3 D-6), and `sse-starlette`, all `>=` pinned:
+none of them shapes a result the way the engine pins above do. Any api-layer library behaviour
+a result depends on gets an exact pin plus a pinning test at the moment it is first relied on,
+same rule as everywhere.
+
 ### 1.3 Dropped
 
 **[DROP]** Google Drive storage, Zulip bot and all chat handlers, the watchdog subsystem, Plotly
 charting, result persistence of any kind, multi-ticker support, shared-cash portfolios.
+
+**[AMENDED 2026-08-16.]** Result persistence returns — but as an *interface-layer* concern
+(§14), not an engine one. The engine stays stateless and side-effect-free; the `api` layer
+stores the engine's serialized results verbatim. Nothing else in this drop list comes back.
 
 **[DROP]** Multi-ticker. Legacy accepted `universe.tickers: List[str]` and ran N independent
 single-asset portfolios, each seeded with the full `initial_capital`
@@ -276,6 +288,12 @@ that refuses to load.
 
 **[DROP]** Legacy detected duplicate strategy names in the storage layer rather than in validation.
 With no persistence there is no name registry and nothing to collide with.
+
+**[AMENDED 2026-08-16.]** Persistence exists again (§14), and with it a name registry: stored
+strategies have globally unique, case-sensitive names (§14.3), enforced by the database, because
+the UI addresses strategies by name in breadcrumbs and promotion records. Config validation
+itself is unchanged — a YAML file's `strategy.name` collides with nothing until it is stored,
+so uniqueness is checked at the persistence boundary, not here.
 
 ### 3.3 `universe` — required
 
@@ -1592,3 +1610,180 @@ exceptions to codes, so a caller embedding the CLI gets the same behaviour as th
 script. Typer vendors click privately, so click's exception types are not importable; in
 standalone mode click converts everything it handles into `SystemExit` while an engine error
 propagates untouched, and catching those two covers the surface using only public API.
+
+---
+
+## 14. Persistence
+
+**[NEW — decided 2026-08-16.]** §1.3 dropped result persistence from the *engine*. This section
+adds it to the *interface* layer. The distinction is load-bearing: nothing in §§2–13 gains a
+database dependency, the engine remains callable with no storage at all, and every byte stored
+here is either a strategy config the user wrote or a result the engine serialized (§13.1).
+
+PostgreSQL 15+. The DDL lives in `src/cracktrade/api/db/migrations/`; the migration chain is
+the canonical schema (§14.6) and this section is the canonical *semantics*.
+
+### 14.1 What is stored, and in what form
+
+Four tables: `strategy` (identity + lineage), `strategy_version` (append-only config history),
+`run` (one execution against one exact version), `run_series` (per-bar chart series).
+
+**Results are stored verbatim as `jsonb`** — exactly `cracktrade.serialize.to_dict` output,
+contractual derived properties included. They are never exploded into columns and never
+recomputed. Two reasons, both non-negotiable:
+
+- prices are retroactively adjusted (§4.1, D-10 in §10), so a figure re-derived later would
+  describe different data than the run's own vintage block claims. A stored result is a record
+  of a measurement, not a cache of one;
+- the serialized form is already the cross-interface contract (§13.1). A second, columnar
+  description of the same values is a second thing that can drift.
+
+Columns are promoted out of `jsonb` only where a *list view* filters or sorts on them
+(`status`, `kind`, `version`, `is_credible`, `suppressed`). Those are copies, written in the
+same transaction as the result they come from, never edited afterwards.
+
+### 14.2 Append-only, enforced
+
+Configuration history and run records are append-only, and the schema enforces it rather than
+trusting the application:
+
+- `strategy_version` and `run_series` reject `UPDATE` and `DELETE` outright (trigger);
+- `run` rows mutate only while non-terminal — status, progress, worker lease, and the single
+  result-landing update. Identity fields (`kind`, `version`, `number`, `params`, `seed`,
+  `queued_at`) are frozen at insert, and the whole row freezes on reaching a terminal status;
+- nothing is ever deleted. There is no delete operation at any layer (§15.2).
+
+**Restoring an old config appends; it never rewinds.** A restore writes a new head version whose
+config is a copy of the target and whose `restored_from` records the source. Runs made against
+the previous head stay attached to it. History that could be rewritten could not be used to
+explain a result, which is the only reason to keep it.
+
+### 14.3 Identity, versions, lineage
+
+- Strategy names are globally unique and case-sensitive (amends §3.2).
+- Versions are numbered `1..N` per strategy with no gaps, and are immutable once written.
+- Runs carry a per-strategy display number shared across all kinds, so `#14` is unambiguous
+  within a strategy without naming its kind.
+- Lineage is explicit and shape-checked: a **fork** records parent strategy + the exact version
+  copied; a **promotion** records parent strategy + the originating run. A fork starts a fresh
+  history at v1 and does not inherit the parent's versions.
+- A promotion snapshots whether its source run was uncredible at promotion time. That snapshot
+  is historical fact and is never updated; the UI's warning is cleared by the new strategy's own
+  validation passing, not by editing the past.
+
+### 14.4 Derived truths — never stored
+
+Two facts the UI displays everywhere are computed at read time, because storing them creates a
+second copy that can disagree with the first:
+
+**Staleness.** A run is stale when its `version` is below the strategy's current head. It
+describes a config that no longer exists.
+
+**Verdict.** A strategy is:
+
+| Verdict | Condition |
+| --- | --- |
+| `credible` | latest succeeded walk-forward **against the head version** has `is_credible` |
+| `not_credible` | that run exists and is not credible |
+| `unvalidated` | runs exist, but no succeeded walk-forward against the head |
+| `never_run` | no runs at all |
+
+Only a walk-forward against the *current head* can validate a strategy. A credible run against
+v3 of a strategy now at v7 leaves it `unvalidated`, because it says nothing about the config
+that exists now (§12 is the authority on what a verdict means; this is only where it attaches).
+`unvalidated` is not a neutral state and must never render as one.
+
+Version change summaries and diffs are likewise computed from the stored configs, never stored.
+
+### 14.5 Run lifecycle
+
+`queued → running → succeeded | failed | cancelled`. The database is the queue: a worker claims
+the oldest queued run with `FOR UPDATE SKIP LOCKED`, holds a lease (`claimed_by` +
+`heartbeat_at`), and lands the terminal state — result, series, and promoted columns — in one
+transaction. `cancel_requested` is the API's only write into a live run; the worker observes it
+between generations and folds and ends the run `cancelled`, with no result and no error.
+
+A run whose worker dies is failed honestly on lease expiry (`engine_failure`, worker terminated
+mid-run) and never silently re-queued: a re-run fetches data again and is therefore a different
+measurement (§14.1).
+
+Failures record the engine's own error text verbatim, plus a category mapping 1:1 onto the exit
+codes of §13.3:
+
+| Category | Exit code |
+| --- | --- |
+| `config_invalid` | 2 |
+| `market_data` | 3 |
+| `engine_failure` | 4 |
+| `causality_violation` | 5 |
+
+Exit code 6 (§13.3, "succeeded but not credible") has no counterpart here by design: an
+uncredible run is a `succeeded` run whose verdict says so. Encoding a verdict as a failure would
+make the two indistinguishable from a queue's point of view.
+
+### 14.6 Migrations
+
+Forward-only, ordered SQL files applied by the engine in `api/db/migrate.py`, each in its own
+transaction, serialized by advisory lock, recorded in a ledger with a sha256 checksum.
+
+The chain refuses to run rather than guess when: an applied file's checksum has changed (edited
+after application), a new file is numbered below an applied one (history rewrite), or the ledger
+holds a version with no matching file (database ahead of code).
+
+**There are no down migrations.** Rolling back applied DDL on an append-only database would be a
+fiction — the data the rollback destroys is precisely the data the design promises to keep.
+Recovery is a new forward migration.
+
+---
+
+## 15. HTTP interface
+
+**[NEW — decided 2026-08-16.]** The second consumer of the library, alongside the CLI (§13). It
+follows the same rule: **it parses and renders, and owns no engine logic**. Where a number
+appears, it is the engine's number, serialized by `cracktrade.serialize` and passed through
+unaltered.
+
+The interface contract (endpoint shapes, request/response bodies, status codes) lives in
+`docs/API.md`. This section records only what is normative and would otherwise drift.
+
+### 15.1 Result payloads are the engine's serialization
+
+Any response embedding a run result embeds `to_dict` output verbatim, including the contractual
+derived properties of §13.1 (`is_credible`, `failures`, `fold_win_rate`, `improvement_pct`,
+`at_bound`, …), with non-finite floats as `null`.
+
+The API must not recompute a verdict, a derived statistic, or a pass/fail from underlying
+fields. Where the UI needs structure the engine does not yet expose — the per-check verdict
+table is the case in point — the fix is a contractual property on the result model, not a
+calculation in the interface. Verdict logic exists in exactly one place (§12), or it will
+eventually exist in two versions that disagree.
+
+### 15.2 Guarantees carried into the API surface
+
+- **No delete.** No endpoint deletes a strategy, version, or run (§14.2).
+- **Suppression is honest end to end.** Below `MIN_TRADES_TO_JUDGE` closed trades (§8), the
+  withheld figures are not sent — not in a detail response and not in a list row. A client
+  cannot render a suppressed number it was never given.
+- **Staleness and verdict travel with every run and strategy rendered**, derived per §14.4.
+- **Optimistic concurrency on config saves.** A save states the version it was based on and is
+  refused if the head has moved, because a silent last-write-wins on an append-only history
+  loses an edit while appearing to succeed. A save that changes nothing creates no version.
+- **Stream discipline** (§13.2) applies to the API processes: diagnostics to stderr, structured,
+  never into a response body.
+
+### 15.3 Process and access decisions
+
+| # | Decision |
+| --- | --- |
+| D-6 | psycopg 3 with raw SQL, no ORM. The schema is hand-written; an ORM is a second description of it. |
+| D-7 | Hand-rolled forward-only migration engine (§14.6). |
+| D-8 | The migration chain is the canonical DDL; no second schema file. |
+| D-9 | Two processes, one codebase: API server and worker. The database is the queue; no broker. |
+| D-10 | Live progress via Postgres `LISTEN`/`NOTIFY` relayed as SSE; polling is the documented fallback. |
+| D-11 | FastAPI. Pydantic DTOs at the edge only; internal types are frozen dataclasses, as in the engine. |
+| D-12 | Separate `cracktrade-api` entry point (`serve`, `worker`, `db`). The `cracktrade` CLI is untouched. |
+| D-5 | No authentication. Single user, bound to localhost. Revisit only if that changes. |
+
+Layering, enforced by review and a repo test: `routes → services → repos → db`, no skips and no
+cycles. Engine calls happen in `services/` and the worker only; repositories never import the
+engine, routes never import repositories.

@@ -1,0 +1,57 @@
+"""Settings for the API server and the worker.
+
+Separate from :class:`cracktrade.settings.Settings`, which configures the *engine*. These are
+process settings for the interface layer: where the database is, what to bind, how long a
+worker lease survives. Nothing here influences a computed result.
+
+Read from the environment with the ``CRACKTRADE_API_`` prefix, or from a ``.env`` file.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Default connection string. Matches the credentials in ``docker-compose.yml`` so that a
+#: freshly composed development database needs no configuration at all.
+DEFAULT_DATABASE_URL = "postgresql://cracktrade:cracktrade@localhost:5432/cracktrade"
+
+
+class ApiSettings(BaseSettings):
+    """Process-level settings for the HTTP interface and its worker."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CRACKTRADE_API_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    #: libpq connection string for the application database.
+    database_url: str = DEFAULT_DATABASE_URL
+
+    #: Interface the server binds to. Loopback by default: there is no authentication
+    #: (spec section 15.3, D-5), so the server must not be reachable off the machine by
+    #: accident.
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, gt=0, lt=65536)
+
+    #: Connection-pool bounds for the API process.
+    pool_min_size: int = Field(default=1, ge=0)
+    pool_max_size: int = Field(default=10, ge=1)
+
+    #: How often a worker refreshes the lease on the run it is executing.
+    worker_heartbeat_seconds: float = Field(default=10.0, gt=0)
+
+    #: A claimed run whose heartbeat is older than this is treated as abandoned and failed
+    #: honestly rather than re-queued -- re-running would refetch data and measure something
+    #: else (spec section 14.5).
+    worker_lease_seconds: float = Field(default=60.0, gt=0)
+
+    #: Idle sleep between queue polls when there is nothing to claim.
+    worker_poll_seconds: float = Field(default=1.0, gt=0)
+
+
+def load_api_settings() -> ApiSettings:
+    """Build API settings from the environment."""
+    return ApiSettings()

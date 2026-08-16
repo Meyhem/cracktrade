@@ -1,0 +1,139 @@
+"""``cracktrade-api`` command-line entry point.
+
+Three subcommands over one codebase (spec section 15.3, D-12):
+
+* ``serve``   -- the HTTP server;
+* ``worker``  -- the run executor, a separate process by design;
+* ``db``      -- migration management (``migrate``, ``status``, ``verify``).
+
+The engine's own ``cracktrade`` CLI is untouched: two interfaces, one library.
+
+Each subcommand is registered here and implemented in its own module as the phases land. Until
+then they exit :data:`NOT_IMPLEMENTED` rather than printing a success they did not achieve.
+"""
+
+from __future__ import annotations
+
+import sys
+from collections.abc import Sequence
+
+import typer
+from rich.console import Console
+
+from cracktrade import __version__
+from cracktrade.log import configure
+
+#: Exit status for a subcommand that exists but is not built yet. Distinct from the engine's
+#: exit codes, which describe why a *run* failed; this says the command itself is unavailable.
+NOT_IMPLEMENTED = 70
+
+#: Conventional status for a process ended with Ctrl-C, as in the engine CLI.
+INTERRUPTED = 130
+
+app = typer.Typer(
+    name="cracktrade-api",
+    help="HTTP interface and run worker for the cracktrade engine.",
+    no_args_is_help=True,
+    add_completion=False,
+    pretty_exceptions_enable=False,
+)
+
+db_app = typer.Typer(
+    name="db",
+    help="Database migrations.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+app.add_typer(db_app)
+
+#: Diagnostics go to stderr; stdout carries requested output only (spec section 13.2, which
+#: applies to these processes too).
+err_console = Console(stderr=True)
+
+
+def _unimplemented(what: str, phase: str) -> None:
+    """Report a subcommand that is registered but not yet built."""
+    err_console.print(f"[yellow]{what} is not implemented yet[/yellow] (arrives in {phase}).")
+    raise typer.Exit(NOT_IMPLEMENTED)
+
+
+@app.callback()
+def main_callback(
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Debug logging."),
+    quiet: bool = typer.Option(False, "-q", "--quiet", help="Warnings and errors only."),
+) -> None:
+    """Global options."""
+    configure(verbose=verbose, quiet=quiet)
+
+
+@app.command()
+def serve() -> None:
+    """Run the HTTP server."""
+    _unimplemented("serve", "phase 5")
+
+
+@app.command()
+def worker() -> None:
+    """Run the queue worker that executes backtests, searches and validations."""
+    _unimplemented("worker", "phase 6")
+
+
+@db_app.command("migrate")
+def db_migrate() -> None:
+    """Apply every pending migration."""
+    _unimplemented("db migrate", "phase 2")
+
+
+@db_app.command("status")
+def db_status() -> None:
+    """Show applied and pending migrations."""
+    _unimplemented("db status", "phase 2")
+
+
+@db_app.command("verify")
+def db_verify() -> None:
+    """Check the migration ledger against the migration files, applying nothing."""
+    _unimplemented("db verify", "phase 2")
+
+
+@app.command()
+def version() -> None:
+    """Show the version."""
+    typer.echo(f"cracktrade-api {__version__}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the application and return a process exit status.
+
+    The error boundary is part of the invocable surface, exactly as in the engine CLI
+    (:func:`cracktrade.cli.app.main`): an embedding caller gets the same behaviour as the
+    console script rather than a raised exception where a code was expected.
+
+    Standalone mode is deliberate. Typer vendors click privately, so click's exception types
+    are not importable; in standalone mode click converts everything it handles -- ``--help``,
+    ``typer.Exit``, and usage errors such as an unknown subcommand -- into ``SystemExit``,
+    which is public API and enough to cover the surface.
+    """
+    try:
+        app(args=argv)
+    except KeyboardInterrupt:
+        err_console.print("[yellow]interrupted[/yellow]")
+        return INTERRUPTED
+    except SystemExit as exit_signal:
+        return _status_of(exit_signal)
+    return 0
+
+
+def _status_of(exit_signal: SystemExit) -> int:
+    """The status a ``SystemExit`` carries. ``None`` means success; a string means failure."""
+    code = exit_signal.code
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    err_console.print(f"[bold red]error:[/bold red] {code}")
+    return 1
+
+
+if __name__ == "__main__":  # pragma: no cover - console-script parity
+    sys.exit(main())

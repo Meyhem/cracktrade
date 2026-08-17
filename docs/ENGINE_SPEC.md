@@ -1917,6 +1917,21 @@ A repo test pins the three surfaces to one path.
 - **Suppression is honest end to end.** Below `MIN_TRADES_TO_JUDGE` closed trades (§8), the
   withheld figures are not sent — not in a detail response and not in a list row. A client
   cannot render a suppressed number it was never given.
+
+  **[CLARIFIED — 2026-08-17.]** This governs what the interface *composes*: headlines and list
+  rows, which omit the keys outright. It does **not** extend to the embedded `result` blob,
+  because §15.1 requires that to be the engine's serialisation passed through unaltered, and
+  the two rules cannot both hold for the same bytes. §15.1 wins there: stripping keys out of a
+  stored result would mean the artifact on disk and the artifact on the wire differ, and a
+  client could no longer check one against the other. Below the floor the blob therefore still
+  carries every figure, and `has_enough_trades_to_judge` travels with the metrics that contain
+  them so a reader can tell.
+
+  A client rendering the blob is consequently responsible for the floor, and must apply it at
+  one chokepoint rather than at each figure — the web UI does this in `lib/result.ts`, which
+  declines to hand a screen the metrics at all rather than handing them over with a flag asking
+  politely that they not be shown. Trade *counts* stay visible on both sides of the line: a
+  count is the evidence for the suppression, not a claim about performance.
 - **Staleness and verdict travel with every run and strategy rendered**, derived per §14.4.
 - **Optimistic concurrency on config saves.** A save states the version it was based on and is
   refused if the head has moved, because a silent last-write-wins on an append-only history

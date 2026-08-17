@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from '../../api/client'
 import { IMMUTABLE, queryKeys, type RunListFilters } from '../../api/keys'
-import type { Run, RunDetailNarrowed, RunKind } from '../../api/types'
+import type { PromotedStrategy, Run, RunDetailNarrowed, RunKind } from '../../api/types'
 
 export type RunListResult = { runs: Run[]; total: number }
 
@@ -100,6 +100,25 @@ export function useCancelRun() {
     onSuccess: (run) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(run.id) })
+    },
+  })
+}
+
+export function usePromoteRun() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { runId: string; name: string }): Promise<PromotedStrategy> => {
+      const result = await api.POST('/api/v1/runs/{run_id}/promote', {
+        params: { path: { run_id: input.runId } },
+        body: { name: input.name },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      // A promotion creates a strategy, a version and a queued backtest at once.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.strategies.all })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     },
   })
 }

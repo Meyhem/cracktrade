@@ -1,4 +1,5 @@
-import { Anchor, Card, Center, Code, Group, Loader, Stack, Text, Title } from '@mantine/core'
+import { useState } from 'react'
+import { Anchor, Button, Card, Center, Group, Loader, Stack, Text, Title } from '@mantine/core'
 import { Link, useParams } from 'react-router'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { StaleBadge } from '../../components/StaleBadge'
@@ -7,17 +8,24 @@ import { EmptyState } from '../../components/EmptyState'
 import { useActiveRun } from '../../api/runs'
 import { useRun } from './queries'
 import { absolute, duration, runKindLabel } from '../../lib/format'
+import { BacktestView } from './view/BacktestView'
+import { OptimizationView } from './view/OptimizationView'
+import { ValidationView } from './view/ValidationView'
+import { PromoteRunModal } from './PromoteRunModal'
+import { asString, field } from '../../lib/result'
 
 /**
- * A run, in outline.
+ * One run.
  *
- * The three full run views land in a later phase; what is here is the header every kind
- * shares and the failure path, which is the part that most needs to exist early — a run that
- * fails at 3am should say why rather than showing a spinner that never resolves.
+ * The header, the failure path and the cancellation note are shared by all three kinds; what
+ * each kind *says* differs enough that the three views are separate components rather than one
+ * with branches. They read the engine's serialised result through `lib/result.ts`, which is the
+ * only place that blob is interpreted.
  */
 export function RunViewPage() {
   const { strategyId, runId } = useParams()
   const { data, error, isPending } = useRun(runId ?? '')
+  const [promoteOpen, setPromoteOpen] = useState(false)
   const live = useActiveRun(runId)
 
   if (isPending) {
@@ -31,6 +39,10 @@ export function RunViewPage() {
 
   const run = live ?? data.run
   const failure = data.error
+  const isPendingRun = run.status === 'queued' || run.status === 'running'
+  // Promotable is the server's judgement, not ours: a backtest has nothing to promote, and
+  // neither does a run that did not succeed.
+  const optimizedYaml = asString(field(data.result, 'optimized_yaml'))
 
   return (
     <Stack gap="md">
@@ -45,9 +57,16 @@ export function RunViewPage() {
           {run.stale && <StaleBadge version={run.version} />}
           <RunStatusCell run={run} />
         </Group>
-        <Anchor component={Link} size="sm" to={`/strategies/${strategyId}/charts?run=${run.id}`}>
-          See all charts
-        </Anchor>
+        <Group gap="sm">
+          <Anchor component={Link} size="sm" to={`/strategies/${strategyId}/charts?run=${run.id}`}>
+            See all charts
+          </Anchor>
+          {run.promotable && (
+            <Button onClick={() => setPromoteOpen(true)} size="xs">
+              Promote to strategy
+            </Button>
+          )}
+        </Group>
       </Group>
 
       <Text c="dimmed" size="sm">
@@ -84,27 +103,36 @@ export function RunViewPage() {
         </Card>
       )}
 
-      {run.status === 'succeeded' && (
-        <EmptyState title="The full run view lands in a later phase">
-          The result is stored and complete. Until this screen is built, here is the shape of what
-          it holds.
+      {isPendingRun && (
+        <EmptyState title={`This run is ${run.status}`}>
+          Results appear here once it lands. You can navigate away — the run continues on the
+          worker, and several strategies can run at once.
         </EmptyState>
       )}
 
-      {data.result && (
-        <Card padding="md" withBorder>
-          <Stack gap="xs">
-            <Text fw={600} size="sm">
-              Result keys
-            </Text>
-            <Group gap={6}>
-              {Object.keys(data.result).map((key) => (
-                <Code key={key}>{key}</Code>
-              ))}
-            </Group>
-          </Stack>
-        </Card>
+      {run.status === 'succeeded' && data.result === null && (
+        <EmptyState title="This run recorded no result">
+          It landed as succeeded with nothing stored, which should not happen. Treat the run as
+          unusable rather than as a result of zero.
+        </EmptyState>
       )}
+
+      {run.status === 'succeeded' && data.result && (
+        <>
+          {run.kind === 'backtest' && <BacktestView result={data.result} />}
+          {run.kind === 'optimize' && <OptimizationView result={data.result} />}
+          {run.kind === 'walk_forward' && (
+            <ValidationView checks={data.checks} result={data.result} />
+          )}
+        </>
+      )}
+      <PromoteRunModal
+        defaultName={data.default_promote_name}
+        onClose={() => setPromoteOpen(false)}
+        opened={promoteOpen}
+        optimizedYaml={optimizedYaml}
+        run={run}
+      />
     </Stack>
   )
 }

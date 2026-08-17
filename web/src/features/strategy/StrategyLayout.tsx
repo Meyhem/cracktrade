@@ -18,6 +18,8 @@ import { ProblemAlert } from '../../components/ProblemAlert'
 import { VerdictChip } from '../../components/VerdictChip'
 import { useStrategy } from '../strategies/queries'
 import { LaunchRunModal } from '../runs/LaunchRunModal'
+import { ForkStrategyModal } from './ForkStrategyModal'
+import { ValidateConfigModal } from './ValidateConfigModal'
 import { StrategyContext } from './context'
 import { dateOnly } from '../../lib/format'
 import type { RunKind, StrategyDetail, VerdictState } from '../../api/types'
@@ -67,6 +69,8 @@ export function StrategyLayout() {
   const location = useLocation()
   const { data: strategy, error, isPending } = useStrategy(strategyId ?? '')
   const [launchKind, setLaunchKind] = useState<RunKind | null>(null)
+  const [forkOpen, setForkOpen] = useState(false)
+  const [validateOpen, setValidateOpen] = useState(false)
 
   if (isPending) {
     return (
@@ -113,6 +117,9 @@ export function StrategyLayout() {
               />
             </Group>
             <Group gap="xs">
+              <Button onClick={() => setValidateOpen(true)} variant="subtle">
+                Validate
+              </Button>
               <Button onClick={() => setLaunchKind('backtest')} variant="default">
                 Backtest
               </Button>
@@ -120,6 +127,9 @@ export function StrategyLayout() {
                 Optimize
               </Button>
               <Button onClick={() => setLaunchKind('walk_forward')}>Walk-forward</Button>
+              <Button onClick={() => setForkOpen(true)} variant="default">
+                Fork
+              </Button>
             </Group>
           </Group>
 
@@ -150,6 +160,8 @@ export function StrategyLayout() {
         {launchKind && (
           <LaunchRunModal kind={launchKind} onClose={() => setLaunchKind(null)} opened />
         )}
+        <ForkStrategyModal onClose={() => setForkOpen(false)} opened={forkOpen} />
+        <ValidateConfigModal onClose={() => setValidateOpen(false)} opened={validateOpen} />
       </Stack>
     </StrategyContext>
   )

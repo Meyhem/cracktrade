@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './client'
 import { IMMUTABLE, queryKeys } from './keys'
-import type { ConfigMapping, ValidateResponse } from './types'
+import type { ConfigDiffResponse, ConfigMapping, ValidateResponse } from './types'
+
+/** One side of a diff: a stored mapping, or YAML a search emitted. Exactly one. */
+export type ConfigSource = { config: ConfigMapping } | { yaml: string }
 
 /**
  * What the engine makes of a configuration.
@@ -39,4 +42,23 @@ export function useValidatedConfig(config: ConfigMapping | undefined) {
 export function useSearchableCount(config: ConfigMapping | undefined): number | null {
   const { data } = useValidatedConfig(config)
   return data ? data.searchable_parameters.length : null
+}
+
+/**
+ * Compare two configurations that need not be versions of anything.
+ *
+ * The promote dialog's diff. Both sides are canonicalised server-side before comparison, so
+ * omitted defaults and key order do not read as changes a search made (spec section 15.1).
+ */
+export function useConfigDiff(from: ConfigSource | null, to: ConfigSource | null) {
+  return useQuery({
+    queryKey: ['config', 'diff', JSON.stringify(from), JSON.stringify(to)],
+    enabled: from !== null && to !== null,
+    queryFn: async (): Promise<ConfigDiffResponse> => {
+      if (from === null || to === null) throw new Error('two configurations are required')
+      const result = await api.POST('/api/v1/config/diff', { body: { from, to } })
+      return unwrap(result)
+    },
+    ...IMMUTABLE,
+  })
 }

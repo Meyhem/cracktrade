@@ -73,3 +73,27 @@ export function useImportStrategy() {
     },
   })
 }
+
+export function useForkStrategy() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: {
+      strategyId: string
+      name: string
+      version?: number
+    }): Promise<CreatedStrategy> => {
+      const result = await api.POST('/api/v1/strategies/{strategy_id}/fork', {
+        params: { path: { strategy_id: input.strategyId } },
+        body:
+          input.version === undefined
+            ? { name: input.name }
+            : { name: input.name, version: input.version },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.strategies.all })
+    },
+  })
+}

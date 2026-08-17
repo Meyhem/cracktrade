@@ -146,7 +146,24 @@ last thing anyone needs.
 Every phase ends with `./scripts/check.sh` green and a commit and push. Spec updates land in the
 same commit as the code they describe.
 
-### Phase 4 — The three run views, and the actions that hang off them
+### Phase 4 — The three run views, and the actions that hang off them — **DONE**
+
+Landed: `POST /config/diff` and its spec amendment; the searchable-parameter count wired to
+`/config/validate`; `lib/result.ts`; all three run views; Promote, Fork and Validate; the limits
+panel mounted. 52 web tests, 181 API tests.
+
+Two things found by dumping real payloads to build against rather than reading the brief:
+
+**`Trade.is_open` serialised as the string `"False"`** — a `numpy.bool_` reaching the
+serializer's `str()` fallback. Truthy in JavaScript, so §5.2's "open trades are never counted"
+would have dropped every trade from every aggregate. Fixed at the domain boundary; spec §11
+amended; two repo tests.
+
+**Suppression does not reach the `result` blob.** §15.2 promises withheld figures are never
+sent, §15.1 requires the blob be passed through unaltered, and both cannot hold. §15.1 wins;
+the floor is applied client-side at one chokepoint (`figuresOf`). Spec §15.2 clarified.
+
+The original phase-4 text follows, for what each view was built to say.
 
 The stub in [`RunViewPage.tsx`](../web/src/features/runs/RunViewPage.tsx) keeps its header,
 failure path and cancellation copy; everything below the fold gets built per kind.

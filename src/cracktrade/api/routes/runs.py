@@ -10,14 +10,18 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response, status
 
 from cracktrade.api.dependencies import Work
+from cracktrade.api.schemas.responses import VersionOut
 from cracktrade.api.schemas.runs import (
     LaunchRunRequest,
+    PromotedStrategy,
+    PromoteRequest,
     RunDetail,
     RunList,
     RunOut,
     SeriesCatalog,
     SeriesPoints,
 )
+from cracktrade.api.services.promote import promote
 from cracktrade.api.services.runs import (
     kind_named,
     launch,
@@ -26,6 +30,7 @@ from cracktrade.api.services.runs import (
     parse_statuses,
     request_cancellation,
     require_run,
+    run_details,
     series_catalog,
     series_points,
 )
@@ -80,9 +85,31 @@ def get_runs(
 
 @router.get("/runs/{run_id}", response_model=RunDetail)
 def get_run(run_id: UUID, work: Work) -> RunDetail:
-    """One run, with the engine's serialised result passed through verbatim."""
-    row = require_run(work, run_id)
-    return RunDetail(run=RunOut.of(row), result=row.run.result, error=row.run.error)
+    """One run: the engine's serialised result verbatim, its checks, and what it changed."""
+    return RunDetail.of(run_details(work, run_id))
+
+
+@router.post(
+    "/runs/{run_id}/promote",
+    response_model=PromotedStrategy,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_promote(run_id: UUID, body: PromoteRequest, work: Work) -> PromotedStrategy:
+    """Turn a run's winning configuration into a strategy of its own.
+
+    One transaction: the strategy, its v1, and a backtest already queued against it -- so the
+    promoted strategy is never sitting there with no numbers at all, inviting the reader to
+    supply them from memory of a run that measured a different config.
+
+    409 if the run is a backtest (nothing to promote), has not succeeded, or the name is taken.
+    """
+    promoted = promote(work, run_id=run_id, name=body.name)
+    return PromotedStrategy(
+        strategy_id=promoted.strategy_id,
+        version=VersionOut.of(promoted.version),
+        backtest_run_id=promoted.backtest.id,
+        carried_warning=promoted.carried_warning,
+    )
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunOut, status_code=status.HTTP_202_ACCEPTED)

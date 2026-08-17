@@ -212,8 +212,11 @@ Detail header + Config tab in one call:
     "run_id": "…", "run_number": 22, "version": 7, "finished_at": "…",
     "summary": "out-of-sample +6.6% vs +149.0% buy-and-hold, profitable in 2/4 folds",
     "failures": [ "deflated Sharpe P=0.00, below the 0.95 bar for 4800 trials", "…" ],
+    "checks": [ { "name": "…", "label": "…", "passed": false, "plain": "…",
+                  "stat": "…", "detail": "…" } ],
     "meta": "4 folds · anchored · calmar"
   },
+  "verdict_run_id": "…",
   "promoted_warning": null    // for promoted strategies whose own validation hasn't passed:
                               // { "origin_run_id", "origin_run_number", "parent_name", "text" }
 }
@@ -386,12 +389,15 @@ the list row, plus:
     { "name": "trade_count",   "passed": false, "stat": "16 of 20 needed" }
   ],
   "config_diff": [             // optimize/walk_forward: winning config vs the run's own
-                               // base version — the Resulting-config pane and promote dialog
+                               // base version — the Resulting-config pane and promote dialog.
+                               // `low`/`high` are null for a walk-forward: each fold
+                               // re-optimizes, so there is no single range to report.
     { "path": "indicators.rsi_ind.window", "old": 21, "new": 16, "low": 11, "high": 32,
       "at_bound": false },
     { "path": "indicators.sma_long.window", "old": 200, "new": 300, "low": 100, "high": 300,
       "at_bound": true }
-  ]
+  ],
+  "default_promote_name": "momentum_v2_opt22"   // null when the run cannot be promoted
 }
 ```
 
@@ -411,7 +417,12 @@ transaction: create strategy (`origin: promoted`, parent = the run's strategy,
 this moment), create v1 from `optimized_yaml`, and queue a backtest — "so the promoted strategy
 is never sitting there with no numbers at all".
 
-`201` → `{ "strategy": {…}, "backtest_run": {…} }`.
+`201` → `{ "strategy_id", "version": {…}, "backtest_run_id", "carried_warning" }`.
+
+`carried_warning` is `true` unless the source run is a walk-forward that itself returned
+credible — promoting an optimize always carries it, whatever the parent's verdict says (spec
+§14.7). `name` is optional; omitted, the server uses the `default_promote_name` that
+`GET /runs/{id}` offers, and a taken name is a `409` rather than a name nobody chose.
 
 ### `POST /runs/{id}/cancel` — open question §10
 

@@ -40,8 +40,7 @@ router = APIRouter(tags=["strategies"])
 
 
 def _detail(work: Work, strategy_id: UUID) -> StrategyDetail:
-    details = strategy_details(work, strategy_id)
-    return strategy_detail(details.strategy, details.overview, details.head)
+    return strategy_detail(strategy_details(work, strategy_id))
 
 
 def _created(work: Work, created: Created) -> CreatedStrategy:

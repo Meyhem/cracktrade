@@ -324,9 +324,29 @@ and an immutable record.
   bars — no yfinance in tests); SSE relay test; suppression honesty test (list rows carry no
   withheld figures).
 
-### Phase 7 — Promotion and the verdict surface
+### Phase 7 — Promotion and the verdict surface — **DONE**
 
 Goal: close the loop that makes the product coherent.
+
+**Findings.**
+
+- *The warning is stricter than planned, deliberately.* The plan said the snapshot comes from
+  "the run/parent verdict". Implementing it forced the question: does a credible parent
+  walk-forward clear a promotion from a later *optimize*? It must not — the optimization moved
+  the parameters, so the run that passed measured different values. `origin_not_credible` is
+  now set unless the source run is itself a credible walk-forward, and a test pins the case
+  where the parent is credible and the promotion still warns. Recorded as spec §14.7.
+- *One parameter, two addresses.* The walk-forward config diff first reported
+  `indicators.rsi_ind.params.window` while the optimize branch (reading the engine's own
+  `changes`) reported `indicators.rsi_ind.window` — the canonical stored `config` nests an
+  indicator's settings under `params`, the YAML form flattens them. Both sides now go through
+  the flattened form, and spec §15.1 records that a parameter path is always the engine's.
+- *Module cycle, caught by design rather than by the interpreter.* `promoted_warning` was
+  written into `promote.py`, which made `strategies → promote → strategies`. It moved to a new
+  `services/verdict.py` that depends on repositories only, which is also where it belongs: it
+  is a verdict concern, not a promotion one.
+- *The verdict block is assembled inside `strategy_details`, not offered separately.* A detail
+  response that could be rendered without its warning is a response that eventually is.
 
 - `POST /runs/{id}/promote`: one transaction — strategy (`origin: promoted`,
   `origin_not_credible` snapshot per the design's "the verdict travels"), v1 from

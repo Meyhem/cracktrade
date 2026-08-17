@@ -1771,6 +1771,11 @@ that exists now (§12 is the authority on what a verdict means; this is only whe
 
 Version change summaries and diffs are likewise computed from the stored configs, never stored.
 
+The verdict's *supporting detail* is read from the verdict run's stored result and never
+recomputed: `checks` and `failures` are the engine's own (§12.8). A verdict rendered without
+its failures is a badge with no reason, which teaches the reader to ignore the badge, so the
+API sends the failures with every `not_credible` verdict rather than on request.
+
 ### 14.5 Run lifecycle
 
 `queued → running → succeeded | failed | cancelled`. The database is the queue: a worker claims
@@ -1810,6 +1815,33 @@ holds a version with no matching file (database ahead of code).
 fiction — the data the rollback destroys is precisely the data the design promises to keep.
 Recovery is a new forward migration.
 
+### 14.7 Promotion, and the verdict that travels with it
+
+A succeeded `optimize` or `walk_forward` can be promoted: its winning configuration becomes a
+new strategy (`origin: promoted`), recording the parent and the originating run. A `backtest`
+cannot — it runs the configuration exactly as written, so promoting it would only copy the
+parent. Promotion is one transaction: strategy, v1 from `optimized_yaml`, and a backtest
+already queued against it, so a promoted strategy is never displayed with no numbers at all —
+an empty result invites the reader to supply the run's numbers from memory, and those describe
+a different config.
+
+The promoted config is renamed to the new strategy inside its own `strategy.name`, so the
+registry and the config agree; two strategies sharing one internal name would collide on
+export. The chosen name is refused when taken rather than adjusted: a strategy appearing under
+a name nobody chose is worse than being asked to choose again.
+
+**`origin_not_credible` is snapshotted at promotion time and never updated.** It is set unless
+the source run is a walk-forward that itself returned `is_credible`. Promoting an *optimize*
+result always sets it, even when the parent strategy's own walk-forward passed: the search
+moved the parameters, so the run that passed measured different values. A verdict is about a
+configuration, not about a lineage.
+
+The warning a promoted strategy displays is **derived** from that snapshot plus the strategy's
+current verdict: it is shown while `origin_not_credible` holds and the strategy's own verdict
+is not `credible`. Only the strategy's own credible walk-forward against its own head clears
+it, and editing that head brings it back — because the clearance was about a configuration, and
+the configuration has changed. Nothing rewrites the snapshot; the past stays as it was recorded.
+
 ---
 
 ## 15. HTTP interface
@@ -1833,6 +1865,19 @@ fields. Where the UI needs structure the engine does not yet expose — the per-
 table is the case in point — the fix is a contractual property on the result model, not a
 calculation in the interface. Verdict logic exists in exactly one place (§12), or it will
 eventually exist in two versions that disagree.
+
+Comparing two *configurations* is the one thing the interface computes, and it is not an
+exception to the rule: a diff is a relationship between two stored documents, not a judgement
+about a result (§14.4). An `optimize` result already carries its parameter moves with their
+search bounds, so those are read rather than recomputed; a walk-forward carries the winning
+config but no single set of bounds — each fold re-optimizes independently — so its diff reports
+the moves with the bounds absent rather than inventing a range that was never searched.
+
+Parameters are addressed in the **flattened** form the engine uses throughout
+(`indicators.rsi_ind.window`), on both sides of that diff and in `searchable_parameters`. The
+stored canonical `config` nests an indicator's type-specific settings under `params`; the
+interface must not leak that shape into a parameter path, or one field would have two addresses
+depending on which run produced it.
 
 ### 15.2 Guarantees carried into the API surface
 

@@ -14,13 +14,11 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from cracktrade.api.errors import FieldIssue
-from cracktrade.api.repos.rows import (
-    StrategyOverviewRow,
-    StrategyRow,
-    VersionRow,
-)
+from cracktrade.api.repos.rows import StrategyOverviewRow, VersionRow
 from cracktrade.api.services.config import ConfigReview
 from cracktrade.api.services.diff import Change, SectionDiff
+from cracktrade.api.services.strategies import StrategyDetails
+from cracktrade.api.services.verdict import PromotedWarning, VerdictBlock
 from cracktrade.serialize import to_dict
 
 
@@ -204,6 +202,78 @@ class StrategyList(BaseModel):
     totals: dict[str, int]
 
 
+class VerdictCheck(BaseModel):
+    """One robustness check behind the verdict, as the engine reported it."""
+
+    name: str
+    label: str
+    passed: bool
+    plain: str
+    stat: str
+    detail: str
+
+
+class VerdictBlockOut(BaseModel):
+    """The verdict banner: the state, the run that produced it, and what failed.
+
+    ``failures`` is the engine's own list and is present whenever the verdict is
+    ``not_credible``. A client rendering the state without it would show a red badge with no
+    reason, which is the fastest way to teach someone to ignore the badge.
+    """
+
+    state: str
+    run_id: UUID | None = None
+    run_number: int | None = None
+    version: int | None = None
+    finished_at: str | None = None
+    summary: str | None = None
+    failures: list[str] = []
+    checks: list[VerdictCheck] = []
+    meta: str | None = None
+
+    @classmethod
+    def of(cls, verdict: VerdictBlock) -> VerdictBlockOut:
+        return cls(
+            state=verdict.state.value,
+            run_id=verdict.run_id,
+            run_number=verdict.run_number,
+            version=verdict.version,
+            finished_at=verdict.finished_at,
+            summary=verdict.summary,
+            failures=list(verdict.failures),
+            checks=[
+                VerdictCheck(
+                    name=check.name,
+                    label=check.label,
+                    passed=check.passed,
+                    plain=check.plain,
+                    stat=check.stat,
+                    detail=check.detail,
+                )
+                for check in verdict.checks
+            ],
+            meta=verdict.meta,
+        )
+
+
+class PromotedWarningOut(BaseModel):
+    """Shown until a promoted strategy's own walk-forward passes."""
+
+    origin_run_id: UUID
+    origin_run_number: int
+    parent_name: str | None
+    text: str
+
+    @classmethod
+    def of(cls, warning: PromotedWarning) -> PromotedWarningOut:
+        return cls(
+            origin_run_id=warning.origin_run_id,
+            origin_run_number=warning.origin_run_number,
+            parent_name=warning.parent_name,
+            text=warning.text,
+        )
+
+
 class StrategyDetail(BaseModel):
     """The detail header plus the head configuration."""
 
@@ -214,8 +284,9 @@ class StrategyDetail(BaseModel):
     origin_not_credible: bool
     head: VersionOut
     counts: dict[str, int]
-    verdict: str
+    verdict: VerdictBlockOut
     verdict_run_id: UUID | None
+    promoted_warning: PromotedWarningOut | None
 
 
 class CreatedStrategy(BaseModel):
@@ -293,10 +364,9 @@ class MetaResponse(BaseModel):
     limits: list[str]
 
 
-def strategy_detail(
-    row: StrategyRow, overview: StrategyOverviewRow, head: VersionRow
-) -> StrategyDetail:
+def strategy_detail(details: StrategyDetails) -> StrategyDetail:
     """Assemble the detail payload from the pieces each layer owns."""
+    row, overview = details.strategy, details.overview
     return StrategyDetail(
         id=row.id,
         name=row.name,
@@ -308,15 +378,18 @@ def strategy_detail(
             origin_run_id=row.origin_run_id,
         ),
         origin_not_credible=row.origin_not_credible,
-        head=VersionOut.of(head),
+        head=VersionOut.of(details.head),
         counts={
             "optimize": overview.optimize_runs,
             "backtest": overview.backtest_runs,
             "walk_forward": overview.walk_forward_runs,
             "versions": overview.versions,
         },
-        verdict=overview.verdict.value,
+        verdict=VerdictBlockOut.of(details.verdict),
         verdict_run_id=overview.verdict_run_id,
+        promoted_warning=(
+            PromotedWarningOut.of(details.warning) if details.warning is not None else None
+        ),
     )
 
 

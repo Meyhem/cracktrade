@@ -340,4 +340,6 @@ def test_a_strategy_with_runs_but_no_validation_is_unvalidated(
     strategy_id = _strategy(client)
     _launch(client, strategy_id, "backtest")
     _work_the_queue(db_url)
-    assert client.get(f"{BASE}/strategies/{strategy_id}").json()["verdict"] == "unvalidated"
+    detail = client.get(f"{BASE}/strategies/{strategy_id}").json()
+    assert detail["verdict"]["state"] == "unvalidated"
+    assert detail["verdict"]["summary"] is None

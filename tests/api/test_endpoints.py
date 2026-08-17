@@ -169,7 +169,11 @@ def test_creating_a_strategy_starts_it_never_run(client: TestClient) -> None:
     """No run is launched on creation, and the list must say so rather than imply neutrality."""
     detail = _create(client)
     assert detail["head"]["version"] == 1
-    assert detail["verdict"] == "never_run"
+    assert detail["verdict"]["state"] == "never_run"
+    # Nothing to point at: never-run is the absence of a walk-forward, not a failed one.
+    assert detail["verdict"]["run_id"] is None
+    assert detail["verdict"]["failures"] == []
+    assert detail["promoted_warning"] is None
     assert detail["counts"]["versions"] == 1
     assert detail["lineage"]["origin"] == "authored"
 

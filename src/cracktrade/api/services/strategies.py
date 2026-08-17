@@ -23,6 +23,8 @@ from cracktrade.api.repos.rows import (
 )
 from cracktrade.api.services.config import field_issue, strategy_from
 from cracktrade.api.services.diff import summarise
+from cracktrade.api.services.verdict import PromotedWarning, VerdictBlock, promoted_warning
+from cracktrade.api.services.verdict import block as verdict_block
 from cracktrade.config import Strategy, dump_strategy
 from cracktrade.errors import ConfigError, StrategyValidationError
 
@@ -188,6 +190,46 @@ def fork_strategy(
     )
 
 
+def create_promoted(
+    work: UnitOfWork,
+    *,
+    name: str,
+    yaml_text: str,
+    parent_strategy_id: UUID,
+    origin_run_id: UUID,
+    origin_not_credible: bool,
+    note: str,
+) -> Created:
+    """Create a strategy from a run's winning configuration.
+
+    The winning YAML is stored as the engine emitted it, and the strategy is *renamed* in the
+    stored config so that the config's own ``strategy.name`` and the registry agree -- a
+    promoted config that still called itself by its parent's name would put two different
+    strategies under one name in every file the user later exports.
+
+    Kept here beside the other creation workflows rather than in
+    :mod:`cracktrade.api.services.promote`, which owns the decisions (what to call it, whether
+    the warning travels) but not the writing.
+    """
+    strategy = _validated(None, yaml_text)
+    renamed = dict(_config_of(strategy))
+    renamed["strategy"] = {**renamed.get("strategy", {}), "name": name}
+    strategy = _validated(renamed, None)
+
+    return _create(
+        work,
+        strategy=strategy,
+        name=name,
+        origin=StrategyOrigin.PROMOTED,
+        version_origin=VersionOrigin.PROMOTED,
+        yaml_text=dump_strategy(strategy),
+        note=note,
+        parent_strategy_id=parent_strategy_id,
+        origin_run_id=origin_run_id,
+        origin_not_credible=origin_not_credible,
+    )
+
+
 def save_version(
     work: UnitOfWork,
     *,
@@ -291,13 +333,27 @@ class StrategyDetails:
     strategy: StrategyRow
     overview: StrategyOverviewRow
     head: VersionRow
+    verdict: VerdictBlock
+    warning: PromotedWarning | None
 
 
 def strategy_details(work: UnitOfWork, strategy_id: UUID) -> StrategyDetails:
-    """The strategy, its derived overview, and its head version."""
+    """The strategy, its derived overview, its head version, and its verdict.
+
+    The verdict and the promoted warning are assembled here rather than left to the caller so
+    that no screen can render the header without them. A detail page showing a promoted
+    strategy's numbers with the warning omitted is exactly the failure this project exists to
+    prevent, and making it a separate optional call is how that omission happens.
+    """
     row = require_strategy(work, strategy_id)
     overview = StrategyRepo(work.connection).overview(strategy_id)
     head = VersionRepo(work.connection).require_head(strategy_id)
     # A strategy is always written with its v1, so a head implies an overview row.
     assert overview is not None
-    return StrategyDetails(strategy=row, overview=overview, head=head)
+    return StrategyDetails(
+        strategy=row,
+        overview=overview,
+        head=head,
+        verdict=verdict_block(work, overview),
+        warning=promoted_warning(work, overview),
+    )

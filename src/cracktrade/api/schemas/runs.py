@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 
 from cracktrade.api.repos.rows import RunOverviewRow
 from cracktrade.api.schemas.requests import Body
-from cracktrade.api.services.runs import headline, is_promotable
+from cracktrade.api.schemas.responses import VersionOut
+from cracktrade.api.services.runs import ParameterMove, RunDetails, headline, is_promotable
+from cracktrade.api.services.verdict import Check
 
 
 class LaunchRunRequest(Body):
@@ -85,17 +87,97 @@ class RunList(BaseModel):
     total: int
 
 
+class CheckOut(BaseModel):
+    """One robustness check, exactly as the engine reported it."""
+
+    name: str
+    label: str
+    passed: bool
+    plain: str
+    stat: str
+    detail: str
+
+    @classmethod
+    def of(cls, check: Check) -> CheckOut:
+        return cls(
+            name=check.name,
+            label=check.label,
+            passed=check.passed,
+            plain=check.plain,
+            stat=check.stat,
+            detail=check.detail,
+        )
+
+
+class ParameterMoveOut(BaseModel):
+    """One parameter the winning config moved, against the run's own base version."""
+
+    path: str
+    old: Any = None
+    new: Any = None
+    low: float | None = None
+    high: float | None = None
+    at_bound: bool = False
+
+    @classmethod
+    def of(cls, move: ParameterMove) -> ParameterMoveOut:
+        return cls(
+            path=move.path,
+            old=move.old,
+            new=move.new,
+            low=move.low,
+            high=move.high,
+            at_bound=move.at_bound,
+        )
+
+
 class RunDetail(BaseModel):
     """One run, with the engine's own serialised result passed through untouched.
 
     ``result`` is exactly what ``cracktrade.serialize.to_dict`` produced, contractual derived
     properties included (spec section 15.1). Nothing here reshapes it, and nothing recomputes a
-    verdict from it.
+    verdict from it: ``checks`` is the engine's own list, read out of that same result.
     """
 
     run: RunOut
     result: dict[str, Any] | None
     error: dict[str, Any] | None
+    checks: list[CheckOut]
+    config_diff: list[ParameterMoveOut]
+    #: The name the promote dialog pre-fills. ``None`` when the run cannot be promoted.
+    default_promote_name: str | None
+
+    @classmethod
+    def of(cls, details: RunDetails) -> RunDetail:
+        run = details.row.run
+        return cls(
+            run=RunOut.of(details.row),
+            result=run.result,
+            error=run.error,
+            checks=[CheckOut.of(check) for check in details.checks],
+            config_diff=[ParameterMoveOut.of(move) for move in details.moves],
+            default_promote_name=details.default_promote_name,
+        )
+
+
+class PromoteRequest(Body):
+    """The promote dialog. ``name`` defaults to the server's suggestion."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class PromotedStrategy(BaseModel):
+    """What a promotion produced.
+
+    ``carried_warning`` is not decoration: it says the new strategy starts flagged, and the
+    client is expected to show that rather than present a fresh-looking strategy whose numbers
+    came from an unvalidated search.
+    """
+
+    strategy_id: UUID
+    version: VersionOut
+    backtest_run_id: UUID
+    carried_warning: bool
 
 
 class SeriesCatalog(BaseModel):

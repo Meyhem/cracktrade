@@ -16,10 +16,16 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+import yaml
+
 from cracktrade.api.db.uow import UnitOfWork
 from cracktrade.api.errors import ConflictError, NotFoundError, ValidationFailedError
 from cracktrade.api.repos import RunRepo, SeriesRepo, VersionRepo
 from cracktrade.api.repos.rows import RunKind, RunOverviewRow, RunRow, RunStatus
+from cracktrade.api.services.config import strategy_from
+from cracktrade.api.services.diff import summarise
+from cracktrade.api.services.verdict import Check, checks_of
+from cracktrade.config import dump_strategy
 from cracktrade.domain import MIN_TRADES_TO_JUDGE
 from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, OBJECTIVES
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
@@ -152,6 +158,34 @@ def request_cancellation(work: UnitOfWork, run_id: UUID) -> RunRow:
     return repo.request_cancel(run_id)
 
 
+@dataclass(frozen=True, slots=True)
+class RunDetails:
+    """One run's page: the run, its verbatim result, and the two things derived from it.
+
+    ``checks`` and ``moves`` are assembled here rather than left to the client so that the
+    "Every check" table and the Resulting-config pane read the same stored result the headline
+    does. A client deriving either itself would be a second implementation of the verdict.
+    """
+
+    row: RunOverviewRow
+    checks: tuple[Check, ...]
+    moves: tuple[ParameterMove, ...]
+    default_promote_name: str | None
+
+
+def run_details(work: UnitOfWork, run_id: UUID) -> RunDetails:
+    """Everything the run page renders."""
+    row = require_run(work, run_id)
+    run = row.run
+    base = VersionRepo(work.connection).require(run.strategy_id, run.version).config
+    return RunDetails(
+        row=row,
+        checks=checks_of(run.result),
+        moves=config_diff(run, base),
+        default_promote_name=promote_name(row) if is_promotable(run) else None,
+    )
+
+
 def series_catalog(work: UnitOfWork, run_id: UUID) -> dict[str, list[int]]:
     """Which chart series a run captured, and for which folds."""
     require_run(work, run_id)
@@ -235,12 +269,98 @@ def headline(run: RunRow) -> dict[str, Any] | None:
     return summary
 
 
+@dataclass(frozen=True, slots=True)
+class ParameterMove:
+    """One parameter the search moved, with the range it was allowed to move within.
+
+    ``low`` and ``high`` are ``None`` for a walk-forward, whose result records the winning
+    config but not the bounds each fold searched -- the folds re-optimize independently, so
+    there is no single range to report. Saying so beats inventing one.
+    """
+
+    path: str
+    old: Any
+    new: Any
+    low: float | None
+    high: float | None
+    at_bound: bool
+
+
+def config_diff(run: RunRow, base: dict[str, Any]) -> tuple[ParameterMove, ...]:
+    """What the winning configuration changed, against the run's own base version.
+
+    An optimize result already carries this as structured ``changes``, bounds included, so it
+    is read rather than recomputed. A walk-forward does not, so its winning config is diffed
+    against the base -- the same comparison the version diff makes, minus the bounds.
+    """
+    result = run.result
+    if run.status is not RunStatus.SUCCEEDED or result is None:
+        return ()
+
+    changes = result.get("changes")
+    if isinstance(changes, list):
+        return tuple(
+            ParameterMove(
+                path=str(change.get("path", "")),
+                old=change.get("old_value"),
+                new=change.get("new_value"),
+                low=change.get("low"),
+                high=change.get("high"),
+                at_bound=bool(change.get("at_bound")),
+            )
+            for change in changes
+            if isinstance(change, dict)
+        )
+
+    yaml_text = result.get("optimized_yaml")
+    if not isinstance(yaml_text, str):
+        return ()
+    # The winning config renames itself after the run's strategy; a name is not a parameter.
+    return tuple(
+        ParameterMove(
+            path=change.path, old=change.old, new=change.new, low=None, high=None, at_bound=False
+        )
+        for change in summarise(_flattened(base), _flattened(yaml_text))
+        if not change.path.startswith("strategy.")
+    )
+
+
+def _flattened(config: dict[str, Any] | str) -> dict[str, Any]:
+    """A configuration in the shape the engine addresses its parameters by.
+
+    ``model_dump`` collects an indicator's type-specific settings under ``params``, so a window
+    is ``indicators.rsi_ind.params.window`` there but ``indicators.rsi_ind.window`` in an
+    optimize result's ``changes``. Both sides of this diff go through the YAML form, which is
+    the flattened one, so a client gets *one* address per field regardless of which kind of run
+    it is looking at.
+    """
+    strategy = (
+        strategy_from(config, None) if isinstance(config, dict) else strategy_from(None, config)
+    )
+    loaded = yaml.safe_load(dump_strategy(strategy))
+    return dict(loaded) if isinstance(loaded, dict) else {}
+
+
 def is_promotable(run: RunRow) -> bool:
     """Whether this run has a winning configuration to promote."""
     return run.status is RunStatus.SUCCEEDED and run.kind in {
         RunKind.OPTIMIZE,
         RunKind.WALK_FORWARD,
     }
+
+
+#: What each promotable kind is called in a default strategy name.
+_ABBREVIATION: dict[RunKind, str] = {RunKind.OPTIMIZE: "opt", RunKind.WALK_FORWARD: "wf"}
+
+
+def promote_name(row: RunOverviewRow) -> str:
+    """The name the promote dialog offers, e.g. ``momentum_v2_opt22``.
+
+    Only a suggestion, and only ever a suggestion. If it is taken, the unique constraint
+    refuses the promotion as a conflict rather than the server quietly picking something else:
+    a strategy appearing under a name nobody chose is worse than being asked to choose again.
+    """
+    return f"{row.strategy_name}_{_ABBREVIATION[row.run.kind]}{row.run.number}"
 
 
 def parse_kinds(values: str | None) -> tuple[RunKind, ...] | None:

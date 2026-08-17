@@ -184,6 +184,14 @@ export type Run = Omit<
   params: Record<string, unknown>
 }
 
+/** `RunDetail` with its nested run narrowed, and the two loose blobs named. */
+export type RunDetailNarrowed = Omit<RunDetail, 'run' | 'error' | 'result'> & {
+  run: Run
+  error: RunError | null
+  /** The engine's own serialisation, passed through untouched. Narrowed with guards. */
+  result: Record<string, unknown> | null
+}
+
 export type StrategyRow = Omit<StrategySummary, 'verdict' | 'last_run_kind' | 'last_run_status'> & {
   verdict: VerdictState
   last_run_kind: RunKind | null

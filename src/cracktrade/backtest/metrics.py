@@ -122,7 +122,11 @@ def extract_trades(portfolio: vbt.Portfolio, index: pd.DatetimeIndex) -> tuple[T
         # An open position's exit_idx points at the last bar, which is where it is marked to
         # market rather than where it was sold. Reporting that as an exit date would invent a
         # trade that has not happened.
-        is_open = status[position] != _CLOSED
+        # bool(), like the float() and int() on every field below it. numpy's comparison
+        # returns np.bool_, which is not a `bool` -- and the serializer's fallback renders an
+        # unrecognised type with str(), so an uncoerced value reaches a client as the *string*
+        # "False", which is truthy in JavaScript. Every closed trade would read as open.
+        is_open = bool(status[position] != _CLOSED)
         closed_at = min(exit_idx[position], bars - 1)
         trades.append(
             Trade(

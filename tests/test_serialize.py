@@ -209,3 +209,41 @@ def test_the_verdict_travels_with_the_report(walk_forward_report: Any) -> None:
     assert payload["failures"] == [
         check["detail"] for check in payload["checks"] if not check["passed"]
     ]
+
+
+def _walk(value: Any, path: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        return [pair for key, item in value.items() for pair in _walk(item, f"{path}.{key}")]
+    if isinstance(value, list):
+        return [
+            pair for index, item in enumerate(value) for pair in _walk(item, f"{path}[{index}]")
+        ]
+    return [(path, value)]
+
+
+def test_no_value_serialises_as_a_stringified_python_object(backtest_result: Any) -> None:
+    """The serializer's last resort is ``str(value)``, and that is a trap worth a test.
+
+    ``Trade.is_open`` reached this fallback as a ``numpy.bool_`` -- not a ``bool``, not an
+    ``int``, not a ``str`` -- and every closed trade serialised as the *string* ``"False"``.
+    That is truthy in JavaScript, so a client filtering open trades out of an aggregate would
+    have dropped all of them while looking entirely correct (spec sections 8, 11).
+
+    The engine coerces at the domain boundary, where every neighbouring field already does.
+    This checks the coercion holds for the whole payload rather than for the one field that
+    was found by hand, because the next numpy scalar to leak in will look exactly as harmless.
+    """
+    leaked = [
+        (path, value)
+        for path, value in _walk(_serialised(backtest_result))
+        if isinstance(value, str) and value in {"True", "False", "None", "nan", "inf", "-inf"}
+    ]
+    assert leaked == []
+
+
+def test_an_open_trade_flag_is_a_json_boolean(backtest_result: Any) -> None:
+    """Spec section 8: open trades are never counted in an aggregate. That needs a boolean."""
+    trades = _serialised(backtest_result)["trades"]
+    assert trades, "the fixture is only meaningful with trades in it"
+    assert all(isinstance(trade["is_open"], bool) for trade in trades)
+    assert all(isinstance(trade["is_winner"], bool) for trade in trades)

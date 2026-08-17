@@ -1449,6 +1449,21 @@ public fields: `Metrics`, `Trade`, `YearReturn`, `BenchmarkComparison`, `DataVin
 `VariantResult`, `BacktestResult`, and — from Phase 8 — `OptimizationResult`, `ParameterChange`,
 `SearchDiagnostics`.
 
+**[AMENDED — 2026-08-17.]** "No pandas or vectorbt types" includes **numpy scalars**, and the
+boundary must coerce rather than assume. `np.bool_` is not a `bool`, `np.float64` is not a
+`float`, and neither is caught by an `isinstance` check for the type the field declares. The
+serializer's last resort is `str(value)` (§11 above), so an uncoerced value does not fail — it
+renders as the string `"False"`, which is **truthy in JavaScript**. `Trade.is_open` shipped this
+way: every closed trade told a client it was open, and §8's rule that open trades are never
+counted in an aggregate would have silently dropped the entire trade list while every screen
+looked correct.
+
+Coerce at construction, where the surrounding fields already do. Two repo tests hold the line:
+one asserts `is_open` and `is_winner` serialise as JSON booleans, and one walks an entire
+serialised result asserting no value came out as `"True"`, `"False"`, `"None"`, `"nan"` or
+`"inf"` — because the next numpy scalar to leak in will look exactly as harmless as this one
+did.
+
 `cracktrade.strategy.required_warmup(strategy)` returns the bars a strategy needs before any
 indicator is defined. Interfaces pass it, plus a margin, to `load_history`, which is how D11 is
 enforced without the CLI reimplementing the calculation.

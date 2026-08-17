@@ -1,0 +1,6 @@
+/* Mantine supplies the reset and the theming; this file is for the few app-wide rules that
+   are not a component's business. */
+
+body {
+  margin: 0;
+}

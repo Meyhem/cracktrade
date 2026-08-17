@@ -12,6 +12,11 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "cracktrade-api", "serve"],
       "port": 8000
+    },
+    {
+      "name": "worker",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "cracktrade-api", "worker"]
     }
   ]
 }

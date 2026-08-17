@@ -55,6 +55,24 @@ uv run pytest -m causality
 mypy runs strict; ruff has the full rule set enabled. Both must be clean, and the test suite green,
 before anything is considered done.
 
+The web UI lives in `web/` and carries the same bar — `tsc` strict (plus
+`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`), oxlint with warnings denied,
+prettier, and vitest:
+
+```bash
+npm --prefix web run check
+```
+
+```bash
+./scripts/check.sh
+```
+
+The second runs both gates; that is the one to run before pushing. The UI's TypeScript types are
+generated from the running server (`npm --prefix web run gen:api`) into `web/src/api/schema.gen.ts`,
+which is committed: an API shape that changes shows up as a diff in review rather than as a
+runtime surprise. `docs/API.md` has drifted from the implementation in places — the OpenAPI
+document is the contract the client is built against.
+
 ## Git
 
 Commit and push at the end of every completed phase, feature, or fix — no need to ask.

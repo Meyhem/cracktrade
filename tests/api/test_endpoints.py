@@ -162,6 +162,119 @@ def test_supplying_both_forms_is_refused(client: TestClient) -> None:
     assert response.status_code >= 400
 
 
+# --------------------------------------------------------------------------- config diff
+
+
+def _changes(body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        change["path"]: (change["old"], change["new"])
+        for group in body["groups"]
+        for change in group["changes"]
+    }
+
+
+def test_config_diff_reports_moved_leaves_under_their_section(client: TestClient) -> None:
+    moved = _config()
+    moved["indicators"] = [{"name": "sma_long", "type": "sma", "window": 150}]
+    body = client.post(
+        f"{BASE}/config/diff", json={"from": {"config": _config()}, "to": {"config": moved}}
+    ).json()
+
+    assert _changes(body) == {"indicators.sma_long.window": (200.0, 150.0)}
+    indicators = next(group for group in body["groups"] if group["section"] == "indicators")
+    assert len(indicators["changes"]) == 1
+
+
+def test_config_diff_lists_unchanged_sections_too(client: TestClient) -> None:
+    """ "Indicators: no changes" is information; leaving it out asks the reader to infer it."""
+    body = client.post(
+        f"{BASE}/config/diff", json={"from": {"config": _config()}, "to": {"config": _config()}}
+    ).json()
+
+    assert _changes(body) == {}
+    assert [group["section"] for group in body["groups"]] == [
+        "strategy",
+        "universe",
+        "execution",
+        "indicators",
+        "entry",
+        "exit",
+        "position_sizing",
+    ]
+
+
+def test_config_diff_flags_the_sections_that_break_comparability(client: TestClient) -> None:
+    moved = _config()
+    moved["execution"]["commission_pct"] = 0.2
+    body = client.post(
+        f"{BASE}/config/diff", json={"from": {"config": _config()}, "to": {"config": moved}}
+    ).json()
+
+    execution = next(group for group in body["groups"] if group["section"] == "execution")
+    assert execution["consequence"] is not None
+    unchanged = next(group for group in body["groups"] if group["section"] == "entry")
+    assert unchanged["consequence"] is None
+
+
+def test_config_diff_canonicalises_both_sides_before_comparing(client: TestClient) -> None:
+    """The guarantee the Promote dialog rests on.
+
+    One side is a mapping the user stored, the other is YAML a search emitted. Key order and
+    defaults the user omitted differ between the two representations and are not changes. A
+    dialog whose whole job is to say which numbers a machine chose must not name a field the
+    search never touched.
+    """
+    canonical = client.post(f"{BASE}/config/validate", json={"config": _config()}).json()
+    body = client.post(
+        f"{BASE}/config/diff",
+        json={"from": {"config": _config()}, "to": {"yaml": canonical["canonical_yaml"]}},
+    ).json()
+
+    assert _changes(body) == {}
+
+
+def test_config_diff_paths_are_the_paths_the_editor_and_optimizer_use(
+    client: TestClient,
+) -> None:
+    """One path per fact, across three surfaces that all name the same leaf.
+
+    Pinned because it broke once already: canonicalising through the pydantic model instead of
+    through the YAML writer nests indicator parameters under ``params``, and a promote dialog
+    naming ``indicators.sma_long.params.window`` while the editor offers to search
+    ``indicators.sma_long.window`` presents one parameter as two.
+    """
+    moved = _config()
+    moved["indicators"] = [{"name": "sma_long", "type": "sma", "window": 150}]
+    moved["exit"] = {"stop_loss_pct": 7.0}
+
+    diff = client.post(
+        f"{BASE}/config/diff", json={"from": {"config": _config()}, "to": {"config": moved}}
+    ).json()
+    validated = client.post(f"{BASE}/config/validate", json={"config": _config()}).json()
+
+    searchable = {parameter["path"] for parameter in validated["searchable_parameters"]}
+    assert set(_changes(diff)) == {"indicators.sma_long.window", "exit.stop_loss_pct"}
+    assert set(_changes(diff)) <= searchable
+
+
+def test_config_diff_refuses_an_invalid_side(client: TestClient) -> None:
+    """Unlike /config/validate: there is no half-typed state to support here."""
+    broken = _config()
+    broken["exit"] = {}
+    response = client.post(
+        f"{BASE}/config/diff", json={"from": {"config": _config()}, "to": {"config": broken}}
+    )
+    assert response.status_code >= 400
+
+
+def test_config_diff_refuses_a_side_supplying_both_forms(client: TestClient) -> None:
+    response = client.post(
+        f"{BASE}/config/diff",
+        json={"from": {"config": _config(), "yaml": VALID_YAML}, "to": {"config": _config()}},
+    )
+    assert response.status_code >= 400
+
+
 # --------------------------------------------------------------------------- strategies
 
 

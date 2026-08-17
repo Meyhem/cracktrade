@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from cracktrade.api.errors import FieldIssue
+from cracktrade.api.services.diff import SectionDiff, diff_by_section
 from cracktrade.config import Strategy, dump_strategy, parse_strategy
 from cracktrade.errors import ConfigError, CracktradeError, StrategyValidationError
 from cracktrade.indicators import RAW_SERIES
@@ -145,6 +146,46 @@ def review_yaml(text: str) -> ConfigReview:
             errors=(FieldIssue(path="", message="a strategy file must be a YAML mapping"),),
         )
     return review_mapping(data)
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigComparison:
+    """Two configurations compared, grouped by section, with both YAML panes."""
+
+    groups: tuple[SectionDiff, ...]
+    from_yaml: str
+    to_yaml: str
+
+
+def compare_configs(older: Strategy, newer: Strategy) -> ConfigComparison:
+    """Compare two configurations that need not be versions of anything.
+
+    Both sides are canonicalised before the comparison so the two are described the same way.
+    Diffing what the user typed against what a search emitted would report key order and
+    omitted defaults as changes, and a promote dialog that claims the optimizer moved a field
+    it never touched is worse than no dialog: it is the one screen whose whole job is to say
+    precisely which numbers a machine chose.
+
+    Canonicalisation goes through the YAML writer rather than through ``model_dump``. The two
+    disagree: the model nests an indicator's parameters under ``params``, so a window would be
+    addressed ``indicators.sma_long.params.window`` here and ``indicators.sma_long.window``
+    everywhere else -- in the version diff, which reads stored configs, and in the searchable
+    parameters the editor shows, which use the optimizer's addressing (spec section 9.1). One
+    path per fact, and the YAML form is the one the user is reading in the pane beside it.
+    """
+    from_yaml = dump_strategy(older)
+    to_yaml = dump_strategy(newer)
+    return ConfigComparison(
+        groups=diff_by_section(_mapping_of(from_yaml), _mapping_of(to_yaml)),
+        from_yaml=from_yaml,
+        to_yaml=to_yaml,
+    )
+
+
+def _mapping_of(canonical_yaml: str) -> dict[str, Any]:
+    parsed = yaml.safe_load(canonical_yaml)
+    assert isinstance(parsed, dict)
+    return parsed
 
 
 def strategy_from(data: dict[str, Any] | None, text: str | None) -> Strategy:

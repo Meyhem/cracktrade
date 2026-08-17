@@ -1879,6 +1879,23 @@ stored canonical `config` nests an indicator's type-specific settings under `par
 interface must not leak that shape into a parameter path, or one field would have two addresses
 depending on which run produced it.
 
+**[AMENDED — 2026-08-17.]** Two diffs exist, and the second is why the rule above needs a
+mechanism rather than only a prohibition. `GET /strategies/{id}/diff` compares two versions of
+one strategy. `POST /config/diff` compares two *configurations*, neither of which need be a
+version — the promote dialog's case, where one side is what a search emitted and is not a
+version of anything until the user adopts it. It refuses an invalid side with a 4xx rather than
+answering 200 as `/config/validate` does: there is no half-typed state to support, and a diff
+against something that is not a strategy has nothing to say.
+
+Both sides of a configuration diff are canonicalised **through the YAML writer**, and the
+comparison runs on that form. Canonicalising through the pydantic model instead satisfies the
+"describe both sides the same way" requirement and violates the paragraph above, because
+`model_dump` is where the `params` nesting lives — a promote dialog would name
+`indicators.sma_long.params.window` while the editor offers to search
+`indicators.sma_long.window`, presenting one parameter as two. The YAML form is also what the
+user is reading in the pane beside the diff, so a listed change corresponds to a visible line.
+A repo test pins the three surfaces to one path.
+
 ### 15.2 Guarantees carried into the API surface
 
 - **No delete.** No endpoint deletes a strategy, version, or run (§14.2).

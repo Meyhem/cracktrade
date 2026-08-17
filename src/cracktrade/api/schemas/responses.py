@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from cracktrade.api.errors import FieldIssue
 from cracktrade.api.repos.rows import StrategyOverviewRow, VersionRow
-from cracktrade.api.services.config import ConfigReview
+from cracktrade.api.services.config import ConfigComparison, ConfigReview
 from cracktrade.api.services.diff import Change, SectionDiff
 from cracktrade.api.services.health import Health
 from cracktrade.api.services.strategies import StrategyDetails
@@ -321,6 +321,22 @@ class DiffResponse(BaseModel):
     groups: list[SectionDiffOut]
     from_yaml: str
     to_yaml: str
+
+
+class ConfigDiffResponse(BaseModel):
+    """Two configurations compared. No version refs: one side may not be a version at all."""
+
+    groups: list[SectionDiffOut]
+    from_yaml: str
+    to_yaml: str
+
+    @classmethod
+    def of(cls, comparison: ConfigComparison) -> ConfigDiffResponse:
+        return cls(
+            groups=[SectionDiffOut.of(section) for section in comparison.groups],
+            from_yaml=comparison.from_yaml,
+            to_yaml=comparison.to_yaml,
+        )
 
 
 class VersionSummaryRef(BaseModel):

@@ -72,6 +72,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Diff Configs
+         * @description Compare two configurations, neither of which need be a stored version.
+         *
+         *     The Promote dialog's diff. ``GET /strategies/{id}/diff`` cannot serve it: that compares two
+         *     versions of one strategy, and the configuration a search produced is not a version of
+         *     anything until the user adopts it. Invalid input is a 4xx here rather than the 200 that
+         *     ``/config/validate`` returns -- there is no half-typed state to support, and a diff against
+         *     a configuration that is not a strategy has nothing to say.
+         */
+        post: operations["diff_configs_api_v1_config_diff_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategies": {
         parameters: {
             query?: never;
@@ -473,6 +499,30 @@ export interface components {
             stat: string;
             /** Detail */
             detail: string;
+        };
+        /**
+         * ConfigDiffRequest
+         * @description Two configurations to compare, each in either form.
+         *
+         *     Deliberately not addressed by version. The version-to-version diff answers "what did I
+         *     change"; this answers "what am I about to adopt", where one side is a configuration a
+         *     search produced and has no version at all until the user promotes it.
+         */
+        ConfigDiffRequest: {
+            from: components["schemas"]["ValidateRequest"];
+            to: components["schemas"]["ValidateRequest"];
+        };
+        /**
+         * ConfigDiffResponse
+         * @description Two configurations compared. No version refs: one side may not be a version at all.
+         */
+        ConfigDiffResponse: {
+            /** Groups */
+            groups: components["schemas"]["SectionDiffOut"][];
+            /** From Yaml */
+            from_yaml: string;
+            /** To Yaml */
+            to_yaml: string;
         };
         /**
          * CreateStrategyRequest
@@ -1223,6 +1273,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diff_configs_api_v1_config_diff_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigDiffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDiffResponse"];
                 };
             };
             /** @description Validation Error */

@@ -9,12 +9,14 @@ from fastapi import APIRouter, Query, status
 
 from cracktrade.api.dependencies import Work
 from cracktrade.api.schemas.requests import (
+    ConfigDiffRequest,
     CreateStrategyRequest,
     ForkStrategyRequest,
     ImportStrategyRequest,
     ValidateRequest,
 )
 from cracktrade.api.schemas.responses import (
+    ConfigDiffResponse,
     CreatedStrategy,
     Issue,
     StrategyDetail,
@@ -23,7 +25,12 @@ from cracktrade.api.schemas.responses import (
     ValidateResponse,
     strategy_detail,
 )
-from cracktrade.api.services.config import review_mapping, review_yaml
+from cracktrade.api.services.config import (
+    compare_configs,
+    review_mapping,
+    review_yaml,
+    strategy_from,
+)
 from cracktrade.api.services.strategies import (
     Created,
     create_strategy,
@@ -67,6 +74,24 @@ def validate_config(body: ValidateRequest) -> ValidateResponse:
         return ValidateResponse.of(review_yaml(body.yaml))
     assert body.config is not None
     return ValidateResponse.of(review_mapping(body.config))
+
+
+@router.post("/config/diff", response_model=ConfigDiffResponse)
+def diff_configs(body: ConfigDiffRequest) -> ConfigDiffResponse:
+    """Compare two configurations, neither of which need be a stored version.
+
+    The Promote dialog's diff. ``GET /strategies/{id}/diff`` cannot serve it: that compares two
+    versions of one strategy, and the configuration a search produced is not a version of
+    anything until the user adopts it. Invalid input is a 4xx here rather than the 200 that
+    ``/config/validate`` returns -- there is no half-typed state to support, and a diff against
+    a configuration that is not a strategy has nothing to say.
+    """
+    return ConfigDiffResponse.of(
+        compare_configs(
+            strategy_from(body.from_.config, body.from_.yaml),
+            strategy_from(body.to.config, body.to.yaml),
+        )
+    )
 
 
 # --------------------------------------------------------------------------- reading

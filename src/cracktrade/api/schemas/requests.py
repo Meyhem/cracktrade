@@ -30,6 +30,20 @@ class ValidateRequest(Body):
     yaml: str | None = None
 
 
+class ConfigDiffRequest(Body):
+    """Two configurations to compare, each in either form.
+
+    Deliberately not addressed by version. The version-to-version diff answers "what did I
+    change"; this answers "what am I about to adopt", where one side is a configuration a
+    search produced and has no version at all until the user promotes it.
+    """
+
+    from_: ValidateRequest = Field(alias="from")
+    to: ValidateRequest
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
 class CreateStrategyRequest(Body):
     """The New-strategy dialog."""
 

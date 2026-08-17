@@ -1,6 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router'
 import { AppShell } from '../components/AppShell'
-import { EnginePanel } from '../features/engine/EnginePanel'
+import { StrategyListPage } from '../features/strategies/StrategyListPage'
 
 /**
  * Routes.
@@ -15,7 +15,7 @@ export const router = createBrowserRouter([
     Component: AppShell,
     children: [
       { index: true, element: <Navigate replace to="/strategies" /> },
-      { path: 'strategies', Component: EnginePanel },
+      { path: 'strategies', Component: StrategyListPage },
     ],
   },
 ])

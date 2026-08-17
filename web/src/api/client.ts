@@ -10,9 +10,19 @@ import { networkError, toApiError } from './errors'
  * normalised in middleware so no caller ever inspects a status code.
  *
  * The generated paths already carry the `/api/v1` prefix, so the base is the origin: the
- * dev server proxies that prefix straight through to the API.
+ * dev server proxies that prefix straight through to the API. The origin is spelled out
+ * rather than left relative because `fetch` outside a browser — jsdom under vitest — rejects
+ * a relative URL, and a client that only works in one of the two is a client whose tests
+ * prove nothing.
  */
-export const api = createClient<paths>({ baseUrl: '/' })
+export const api = createClient<paths>({
+  baseUrl: window.location.origin,
+  // Resolved per call rather than captured when this module loads. openapi-fetch otherwise
+  // snapshots `globalThis.fetch` at construction, which freezes in whatever was installed at
+  // import time — under test that is the real one, and every mocked request would quietly go
+  // to the network instead.
+  fetch: (request) => globalThis.fetch(request),
+})
 
 api.use({
   async onResponse({ response }) {

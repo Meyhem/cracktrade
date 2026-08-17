@@ -58,9 +58,17 @@ def load_strategy(path: Path) -> Strategy:
     return _apply_semantic_checks(read_strategy_file(path))
 
 
-def build_strategy(data: Mapping[str, Any]) -> Strategy:
-    """Validate an in-memory mapping. The API interface's entry point."""
-    return _apply_semantic_checks(parse_strategy(data))
+def build_strategy(data: Mapping[str, Any], *, source: str | None = None) -> Strategy:
+    """Validate an in-memory mapping. The API interface's entry point.
+
+    Args:
+        data: the parsed mapping.
+        source: the YAML text ``data`` was parsed from, when there is one. Structural errors
+            then carry the line that caused them (spec section 3.9), which is what lets an
+            editor put a marker in the gutter rather than a message in a banner. Semantic
+            errors have no line: they are about the strategy as a whole, not about one key.
+    """
+    return _apply_semantic_checks(parse_strategy(data, source=source))
 
 
 def required_warmup(strategy: Strategy) -> int:

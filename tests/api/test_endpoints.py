@@ -147,6 +147,46 @@ def test_malformed_yaml_reports_the_line(client: TestClient) -> None:
     assert body["errors"][0]["line"]
 
 
+def test_a_structural_error_in_yaml_carries_its_line_and_still_names_its_field(
+    client: TestClient,
+) -> None:
+    """Spec 3.9 promises the offending line where recoverable; the editor marks the gutter.
+
+    The two halves have to arrive separately. The engine renders the location as
+    ``path (line N)``, and a client that got only that string would have to parse the line back
+    out to know which field to attach the message to -- so a config with a line number would
+    lose the field attribution a config without one keeps.
+    """
+    body = client.post(
+        f"{BASE}/config/validate",
+        json={"yaml": VALID_YAML.replace("initial_capital: 10000.0", "initial_capital: -1")},
+    ).json()
+
+    issue = next(issue for issue in body["errors"] if issue["path"] == "execution.initial_capital")
+    assert issue["line"] == 8
+    assert "(line" not in issue["path"]
+
+
+def test_the_same_error_from_a_mapping_has_no_line_and_the_same_path(client: TestClient) -> None:
+    """A mapping was never text, so there is no line to report and none is invented."""
+    broken = _config()
+    broken["execution"]["initial_capital"] = -1
+    body = client.post(f"{BASE}/config/validate", json={"config": broken}).json()
+
+    issue = next(issue for issue in body["errors"] if issue["path"] == "execution.initial_capital")
+    assert issue["line"] is None
+
+
+def test_prose_containing_a_colon_is_not_mistaken_for_a_field(client: TestClient) -> None:
+    """`field_issue` splits on ": ", and the engine's own prose contains colons too."""
+    from cracktrade.api.services.config import field_issue
+
+    text = "this strategy has no optimizable parameters: every numeric field is pinned"
+    issue = field_issue(text)
+    assert issue.path == ""
+    assert issue.message == text
+
+
 def test_a_shadowed_stop_warns_without_invalidating(client: TestClient) -> None:
     config = _config()
     config["exit"] = {"atr_stop_multiplier": 2.5, "stop_loss_pct": 5.0}

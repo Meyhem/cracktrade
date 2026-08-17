@@ -451,6 +451,19 @@ missing from the config."; Pydantic's `"Value error, "` prefix is stripped.
 **[NEW]** Additionally: the offending YAML line number where recoverable, and a `did you mean`
 suggestion for unknown keys within edit distance 2 of a valid key.
 
+**[AMENDED — 2026-08-17.]** "Where recoverable" means: whenever the caller had the YAML text and
+passed it. `build_strategy` takes an optional `source` for exactly this, and
+`POST /config/validate` passes it when the request supplied `yaml`. Before this, that endpoint
+parsed the YAML and then threw the text away, so the line number promised here was reachable from
+the CLI and from nowhere else — an editor could mark a syntax error's line and no other.
+
+On the wire the path and the line are **separate fields, never merged**. The engine renders a
+located error as `<path> (line N): <message>`, and an interface that received only that string
+would have to parse the line back out to know which field to attach the message to — meaning an
+error *with* a line would lose the field attribution an error *without* one keeps, which is
+backwards. Semantic errors (an unknown indicator type, a signal that does not resolve) carry a
+path and no line: they are judgements about the strategy, not about one key in the file.
+
 ### 3.10 Worked example
 
 Adapted from `src/bot/generator.py:282-319` — single-ticker, `window` on `rolling_max` sourced from

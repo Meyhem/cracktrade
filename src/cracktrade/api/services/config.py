@@ -11,6 +11,7 @@ halfway through typing is exactly what this is for.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,11 @@ from cracktrade.strategy import build_strategy, strategy_warnings
 
 #: Separator the engine uses when rendering "<dotted.path>: <message>" (spec section 3.9).
 _PATH_SEPARATOR = ": "
+
+#: The left-hand side of that rendering: a dotted path, optionally annotated with the YAML line
+#: it came from. Matched exactly rather than merely split on, because the whole point is to tell
+#: a path apart from prose that happens to contain a colon.
+_LOCATION = re.compile(r"^(?P<path>[^\s:]+?)(?: \(line (?P<line>\d+)\))?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,14 +61,25 @@ class ConfigReview:
 def field_issue(text: str, line: int | None = None) -> FieldIssue:
     """Split an engine issue into the field it belongs to and the message about it.
 
-    The engine renders these as ``path: message`` (spec section 3.9). Splitting on the first
-    separator is what lets the editor put an error on the field that caused it rather than in a
-    banner above the form. A message with no path is kept whole rather than guessed at.
+    The engine renders these as ``path: message``, or as ``path (line N): message`` when it was
+    given the YAML the mapping came from (spec section 3.9). Splitting them apart is what lets
+    the editor put an error on the field that caused it rather than in a banner above the form,
+    and put a marker on the line in the YAML pane rather than nowhere at all.
+
+    A message with no recognisable location is kept whole rather than guessed at. The location
+    has to match a dotted path exactly, because the alternative -- splitting on the first
+    ``": "`` and hoping -- turns any prose containing a colon into a field name.
     """
-    path, separator, message = text.partition(_PATH_SEPARATOR)
-    if not separator or " " in path:
+    location, separator, message = text.partition(_PATH_SEPARATOR)
+    match = _LOCATION.match(location) if separator else None
+    if match is None:
         return FieldIssue(path="", message=text, line=line)
-    return FieldIssue(path=path, message=message, line=line)
+    found = match.group("line")
+    return FieldIssue(
+        path=match.group("path"),
+        message=message,
+        line=int(found) if found is not None else line,
+    )
 
 
 def _namespace(strategy: Strategy) -> tuple[str, ...]:
@@ -111,11 +128,15 @@ def _review(strategy: Strategy) -> ConfigReview:
     )
 
 
-def review_mapping(data: dict[str, Any]) -> ConfigReview:
-    """Validate an already-parsed configuration."""
+def review_mapping(data: dict[str, Any], source: str | None = None) -> ConfigReview:
+    """Validate an already-parsed configuration.
+
+    ``source`` is the YAML the mapping was parsed from, when the caller has it. It buys nothing
+    but line numbers on the errors, and costs nothing when absent.
+    """
     install()
     try:
-        return _review(build_strategy(data))
+        return _review(build_strategy(data, source=source))
     except StrategyValidationError as error:
         return ConfigReview(valid=False, errors=tuple(field_issue(text) for text in error.issues))
     except CracktradeError as error:
@@ -145,7 +166,7 @@ def review_yaml(text: str) -> ConfigReview:
             valid=False,
             errors=(FieldIssue(path="", message="a strategy file must be a YAML mapping"),),
         )
-    return review_mapping(data)
+    return review_mapping(data, source=text)
 
 
 @dataclass(frozen=True, slots=True)

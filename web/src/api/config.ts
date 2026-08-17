@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './client'
 import { IMMUTABLE, queryKeys } from './keys'
 import type { ConfigDiffResponse, ConfigMapping, ValidateResponse } from './types'
@@ -20,7 +20,7 @@ export type ConfigSource = { config: ConfigMapping } | { yaml: string }
  */
 export function useValidatedConfig(config: ConfigMapping | undefined) {
   return useQuery({
-    queryKey: queryKeys.validate(JSON.stringify(config ?? null)),
+    queryKey: queryKeys.validate('config', JSON.stringify(config ?? null)),
     enabled: config !== undefined,
     queryFn: async (): Promise<ValidateResponse> => {
       // `enabled` already prevents this; the check is what makes that readable to the compiler.
@@ -28,6 +28,39 @@ export function useValidatedConfig(config: ConfigMapping | undefined) {
       const result = await api.POST('/api/v1/config/validate', { body: { config } })
       return unwrap(result)
     },
+    ...IMMUTABLE,
+  })
+}
+
+/**
+ * The same question, asked about YAML text.
+ *
+ * The editor's own validator. It sends the text rather than a parsed mapping for two reasons:
+ * the server reports a syntax error on the line that caused it, and a structural error against
+ * text carries the line it came from (spec §3.9) — which is what the YAML pane's gutter marks.
+ * Parsing client-side first and sending the mapping would throw both away.
+ *
+ * There is deliberately no second, client-side implementation of validity. What makes a
+ * configuration a strategy is the engine's judgement (spec §3.1), and a form that decided for
+ * itself would agree with the engine until the schema next changed, then disagree silently —
+ * in the one screen whose job is to say what is wrong.
+ *
+ * The previous answer is kept on screen while the next one is fetched. That is a statement
+ * about errors only: an error the user has not fixed yet stays visible instead of blinking out
+ * on each keystroke and back in. It is emphatically *not* a licence to act on it — the save
+ * control gates on whether the answer describes the text currently in the editor, because
+ * "valid" about the text of half a second ago is not a claim about the text on screen.
+ */
+export function useValidatedYaml(text: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.validate('yaml', text ?? ''),
+    enabled: text !== undefined,
+    queryFn: async (): Promise<ValidateResponse> => {
+      if (text === undefined) throw new Error('no configuration to validate')
+      const result = await api.POST('/api/v1/config/validate', { body: { yaml: text } })
+      return unwrap(result)
+    },
+    placeholderData: keepPreviousData,
     ...IMMUTABLE,
   })
 }

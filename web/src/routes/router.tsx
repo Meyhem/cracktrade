@@ -4,6 +4,7 @@ import { StrategyListPage } from '../features/strategies/StrategyListPage'
 import { StrategyLayout } from '../features/strategy/StrategyLayout'
 import { RunsTab } from '../features/runs/RunsTab'
 import { RunViewPage } from '../features/runs/RunViewPage'
+import { ConfigTab } from '../features/config/ConfigTab'
 import { ComingSoon } from '../components/ComingSoon'
 
 /**
@@ -25,7 +26,7 @@ export const router = createBrowserRouter([
         Component: StrategyLayout,
         children: [
           { index: true, element: <Navigate replace to="config" /> },
-          { path: 'config', element: <ComingSoon what="The configuration editor" /> },
+          { path: 'config', Component: ConfigTab },
           { path: 'optimizations', element: <RunsTab kind="optimize" /> },
           { path: 'backtests', element: <RunsTab kind="backtest" /> },
           { path: 'validation', element: <RunsTab kind="walk_forward" /> },

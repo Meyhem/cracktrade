@@ -49,8 +49,14 @@ export const queryKeys = {
       ['runs', 'series', runId, name, fold] as const,
   },
 
-  /** Editor validation, keyed by the exact text so identical edits reuse the answer. */
-  validate: (yaml: string) => ['validate', yaml] as const,
+  /**
+   * Editor validation, keyed by the exact input so identical edits reuse the answer.
+   *
+   * `form` distinguishes the two request shapes. The same configuration sent as a mapping and
+   * as text does not come back the same: only the text carries line numbers (spec §3.9), and
+   * a shared key would let one answer be served for the other request.
+   */
+  validate: (form: 'config' | 'yaml', source: string) => ['validate', form, source] as const,
 } as const
 
 /**

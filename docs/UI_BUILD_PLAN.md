@@ -24,14 +24,14 @@ every screen where a user reads a number.
 | §4 Launch dialogs, long-running run UX | **Done** — SSE + polling, progress, cancel, failure categories |
 | §2.2 Run tables | **Done** — per-kind columns, staleness, empty states |
 | §2.3–2.5 Run views | **Stub** — header and failure path only; result keys dumped as chips |
-| §3 Config editor | **Placeholder** |
+| §3 Config editor | **Done** — both modes, per-field search controls, signal editor, save with diff |
 | §5 Charts tab | **Placeholder** |
 | §2.6 History, diff, restore, comparison | **Placeholder** |
 | §4 Validate, Fork, Promote | **Missing** — all three have live endpoints |
 
-Three tabs route to `ComingSoon` ([`router.tsx:28`](../web/src/routes/router.tsx)). The strategy
-detail index redirects to `config`, so *landing on a strategy currently shows a placeholder* —
-which is the strongest argument in §4 below about ordering.
+Two tabs still route to `ComingSoon` ([`router.tsx`](../web/src/routes/router.tsx)): charts and
+history. The strategy detail index redirects to `config`, which as of phase 5 is the editor
+rather than a placeholder.
 
 ---
 
@@ -188,16 +188,45 @@ failure path and cancellation copy; everything below the fold gets built per kin
 
 Opens with D-17 (`POST /config/diff`) server-side.
 
-### Phase 5 — The config editor
+### Phase 5 — The config editor — **DONE**
 
-Form and YAML modes synchronised, per-field pin/bounds controls showing the effective search
-range, the signal expression editor with `namespace` autocomplete, the parenthesisation fix
-offered as an edit, the bare-numeric-literal hint, the two adjacent unit conventions made
-explicit with resolved values, dirty state surviving navigation and warning on unload, and save
-creating a version with note and diff preview. Errors attach to fields and collect in a summary
-panel; warnings never block.
+Landed: both modes over one draft, per-field pin/bounds controls with the engine's search range
+inline, the signal editor with completion, the parenthesisation fix and the literal hint, the
+two unit conventions resolved in words, drafts surviving navigation with an unload warning, and
+save with note and diff preview. 83 web tests, 718 Python tests.
 
-No server work. The largest single phase, and the one with the most component tests.
+**The draft is text, and the form is a projection over it.** The other arrangement — an object
+as the source of truth, serialised into the YAML pane on demand — is simpler until someone
+imports a commented file, changes one window in the form, and finds their comments gone. Every
+form write goes through `yaml`'s document API, which edits nodes in place. `save_version` stores
+the text it is given verbatim as `config_yaml`, so this round trip is what decides whether a
+user's own file survives being edited by the form. Verified end to end against a running server:
+a form-shaped edit comes back byte-identical, comments included.
+
+**One validator, and it is the server's.** The brief asks for client-side validation on every
+change. What makes a configuration a strategy is the engine's judgement (spec §3.1), and a
+second implementation of it in the form would agree until the schema next changed and then
+disagree silently, in the screen whose job is to say what is wrong. So: debounced round trips to
+`/config/validate`, with "checking" as a real state — the save gates on whether the answer
+describes the text currently on screen, while the *display* of issues keeps the last answer so an
+unfixed error does not blink on every keystroke. Two different claims, deliberately.
+
+Two things found by looking at the live render rather than at the tests:
+
+**The resolved-value hint was itself wrong.** `commission_pct: 0.05` rendered as "0.1% = $5.00"
+— `percent()` rounds to one decimal, doubling the number in the hint whose entire purpose is to
+stop someone misreading this field by a factor of a hundred.
+
+**Unset optional fields offered a search toggle.** `exit.trailing_stop_pct` with no value is not
+a stop being tuned between bounds; it is a stop that does not exist, and a control saying
+"searched — range unknown" says the opposite.
+
+Opens with a server change after all: **§3.9's promised line numbers were unreachable from the
+API.** `POST /config/validate` parsed the YAML and threw the text away, so the line number the
+spec promises existed for the CLI and nowhere else — an editor could mark a syntax error's line
+and no other. `build_strategy` now takes an optional `source`, and path and line arrive as
+separate fields so an error *with* a line does not lose the field attribution an error *without*
+one keeps. Spec §3.9 amended.
 
 ### Phase 6 — Charts
 

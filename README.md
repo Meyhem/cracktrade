@@ -193,8 +193,16 @@ so tests cannot influence one another and none of them touch the development dat
 
 ### Running the API
 
-Apply the schema once, then start the two processes. They are separate on purpose: a
-walk-forward is minutes of CPU-bound work and must not sit inside a request.
+`./scripts/dev.sh up` starts the database, applies pending migrations, and starts the server,
+worker and web UI as tracked background process groups — `down` stops exactly what it started,
+`status` shows what's running and who holds ports 8000/5173 if it wasn't this script, and `logs`
+follows any of them. It exists because `uv run cracktrade-api serve` is really three processes
+(the `uv` wrapper, the console script, and whatever it forks); killing only the one you can see
+leaves the rest orphaned and still holding the port or a worker lease. `./scripts/dev.sh --help`
+lists every command; pass a subset of `api`, `worker`, `web` to any command to target just those.
+
+The manual equivalent, for a terminal-per-process workflow. They are separate processes on
+purpose: a walk-forward is minutes of CPU-bound work and must not sit inside a request.
 
 ```bash
 uv run cracktrade-api db migrate

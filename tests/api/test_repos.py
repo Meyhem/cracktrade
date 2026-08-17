@@ -49,6 +49,7 @@ def _seed(
     version = versions.append(
         strategy_id=strategy.id,
         origin=VersionOrigin.CREATED,
+        after=0,
         config=config,
         config_yaml="strategy:\n  name: momentum_v2\n",
     )
@@ -117,9 +118,14 @@ def test_versions_are_numbered_from_one_without_gaps(db: psycopg.Connection[Tupl
         config=CONFIG,
         config_yaml="yaml",
         note="widened the RSI window",
+        after=1,
     )
     third = repo.append(
-        strategy_id=strategy_id, origin=VersionOrigin.EDITED, config=CONFIG, config_yaml="yaml"
+        strategy_id=strategy_id,
+        origin=VersionOrigin.EDITED,
+        config=CONFIG,
+        config_yaml="yaml",
+        after=2,
     )
     db.commit()
     assert (second.version, third.version) == (2, 3)
@@ -152,6 +158,41 @@ def test_a_missing_version_is_reported_not_guessed(db: psycopg.Connection[TupleR
         repo.require(strategy_id, 99)
 
 
+def test_an_append_after_a_head_that_already_moved_is_refused(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The half of the race the unique constraint does not catch.
+
+    Two saves that overlap compute the same version number and the unique index rejects one --
+    that is the case below. The dangerous half is the one that does *not* overlap: a second
+    saver whose insert begins after the first has committed recomputes ``max(version)``, sees
+    the new head, takes the number after it, and succeeds. Nothing collides, so nothing objects,
+    and a user who edited v1 is told their v3 was saved while v2's change is gone from it.
+
+    Pinned deterministically rather than by racing threads, because that is what it is: not a
+    timing artefact but an append whose stated base is not the head, which the statement can see
+    for itself.
+    """
+    strategy_id, _ = _seed(db)
+    repo = VersionRepo(db)
+    repo.append(
+        strategy_id=strategy_id,
+        origin=VersionOrigin.EDITED,
+        config=CONFIG,
+        config_yaml="first",
+        after=1,
+    )
+
+    with pytest.raises(ConflictError, match="reload and retry"):
+        repo.append(
+            strategy_id=strategy_id,
+            origin=VersionOrigin.EDITED,
+            config=CONFIG,
+            config_yaml="second",
+            after=1,
+        )
+
+
 def test_concurrent_appends_cannot_both_win(db_url: str) -> None:
     """Two saves reading the same head: one commits, the other is told to reload and retry.
 
@@ -175,6 +216,7 @@ def test_concurrent_appends_cannot_both_win(db_url: str) -> None:
                     origin=VersionOrigin.EDITED,
                     config=CONFIG,
                     config_yaml="b",
+                    after=1,
                 )
 
     with psycopg.connect(db_url) as first, ThreadPoolExecutor(max_workers=1) as pool:
@@ -184,6 +226,7 @@ def test_concurrent_appends_cannot_both_win(db_url: str) -> None:
                 origin=VersionOrigin.EDITED,
                 config=CONFIG,
                 config_yaml="a",
+                after=1,
             )
             pending = pool.submit(second_save)
             # Give the other thread time to reach the index and block on it, so that both
@@ -436,7 +479,11 @@ def test_a_run_against_an_older_version_reads_as_stale(
         strategy_id=strategy_id, version=head, kind=RunKind.BACKTEST, params={}, seed=0
     )
     VersionRepo(db).append(
-        strategy_id=strategy_id, origin=VersionOrigin.EDITED, config=CONFIG, config_yaml="yaml"
+        strategy_id=strategy_id,
+        origin=VersionOrigin.EDITED,
+        config=CONFIG,
+        config_yaml="yaml",
+        after=1,
     )
     db.commit()
     overview = runs.overview(old.id)

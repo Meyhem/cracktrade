@@ -7,7 +7,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
-from cracktrade.api.errors import NotFoundError
+from cracktrade.api.errors import ConflictError, NotFoundError
 from cracktrade.api.repos.base import Repository
 from cracktrade.api.repos.rows import VersionOrigin, VersionRow
 
@@ -40,16 +40,29 @@ class VersionRepo(Repository):
         origin: VersionOrigin,
         config: dict[str, Any],
         config_yaml: str,
+        after: int,
         note: str | None = None,
         restored_from: int | None = None,
     ) -> VersionRow:
-        """Write the next version.
+        """Write the version following ``after``, or refuse.
 
-        The number is computed inside the caller's transaction, from the strategy's own rows,
-        rather than passed in. Two concurrent saves can still both read the same head; the
-        unique constraint then rejects the loser, which the translation layer reports as a
-        conflict to retry. That is the correct outcome -- the alternative, letting one silently
-        overwrite the other, loses an edit while appearing to succeed.
+        The number is computed inside the statement, from the strategy's own rows, rather than
+        passed in. ``after`` is the version the caller believes is currently the head -- ``0``
+        when writing a strategy's first -- and it is checked **in this statement**, not by the
+        caller beforehand.
+
+        That distinction is the whole point. A check in the service followed by an insert leaves
+        a window, and under ``READ COMMITTED`` a second saver whose insert begins after the
+        first one commits recomputes ``max(version)`` against the *new* head, takes the next
+        number and succeeds. Both requests are then answered 201, both having declared they
+        edited v1, and the second silently discarded the first: the last-write-wins failure spec
+        section 15.2 forbids, wearing a success code. It was not a narrow window either -- two
+        saves a couple of milliseconds apart opened it reliably.
+
+        Guarded here there is no window. Either the ``HAVING`` sees a moved head and writes
+        nothing, or two inserts overlap closely enough to compute the same number and the unique
+        constraint rejects one. Both are a conflict, and the caller has no use for the
+        difference.
         """
         row = self._fetch_one(
             f"""
@@ -60,6 +73,7 @@ class VersionRepo(Repository):
               coalesce(max(version), 0) + 1,
               %s, %s, %s, %s, %s
             FROM strategy_version WHERE strategy_id = %s
+            HAVING coalesce(max(version), 0) = %s
             RETURNING {_COLUMNS}
             """,
             (
@@ -70,9 +84,14 @@ class VersionRepo(Repository):
                 config_yaml,
                 note,
                 strategy_id,
+                after,
             ),
         )
-        assert row is not None
+        if row is None:
+            # Worded exactly as the unique-constraint path is translated: the two are the same
+            # answer to the same question, and a caller that could tell them apart would only
+            # be learning how close the race was.
+            raise ConflictError("the strategy was modified concurrently; reload and retry")
         return _version(row)
 
     def head(self, strategy_id: UUID) -> VersionRow | None:

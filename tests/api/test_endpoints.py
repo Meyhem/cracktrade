@@ -557,6 +557,106 @@ def test_a_diff_against_a_missing_version_is_404(client: TestClient) -> None:
     assert response.status_code == 404
 
 
+def _with_window(config: dict[str, Any], indicator: str, window: int) -> dict[str, Any]:
+    """One indicator's window moved, in the ``params``-nested form a version is stored in."""
+    return {
+        **config,
+        "indicators": [
+            {**item, "params": {**item["params"], "window": window}}
+            if item["name"] == indicator
+            else item
+            for item in config["indicators"]
+        ],
+    }
+
+
+def test_the_version_diff_addresses_a_parameter_the_way_every_other_surface_does(
+    client: TestClient,
+) -> None:
+    """The fourth surface of the §15.1 rule, and the one that was breaking it.
+
+    Versions are stored as ``model_dump``, which nests type-specific indicator settings under
+    ``params``. Diffing two stored configs directly therefore named the leaf
+    ``indicators.sma_long.params.window`` while ``POST /config/diff``, the editor's searchable
+    parameters and the optimizer's parameter paths all name it ``indicators.sma_long.window`` --
+    one field with two addresses, decided by which endpoint the reader happened to be looking at.
+    """
+    created = _create(client)
+    seed = created["head"]["config"]
+    moved = _with_window(seed, "sma_long", 150)
+    client.post(
+        f"{BASE}/strategies/{created['id']}/versions",
+        json={"base_version": 1, "config": moved},
+    )
+
+    diff = client.get(f"{BASE}/strategies/{created['id']}/diff", params={"from": 1, "to": 2}).json()
+    validated = client.post(f"{BASE}/config/validate", json={"config": seed}).json()
+    searchable = {parameter["path"] for parameter in validated["searchable_parameters"]}
+
+    assert set(_changes(diff)) == {"indicators.sma_long.window"}
+    assert set(_changes(diff)) <= searchable
+
+
+def test_the_history_summary_uses_the_same_paths_as_the_diff(client: TestClient) -> None:
+    """The timeline's one-line summary is the same question, so it is the same answer."""
+    created = _create(client)
+    client.post(
+        f"{BASE}/strategies/{created['id']}/versions",
+        json={
+            "base_version": 1,
+            "config": _with_window(created["head"]["config"], "sma_long", 150),
+        },
+    )
+
+    history = client.get(f"{BASE}/strategies/{created['id']}/versions").json()
+    assert [change["path"] for change in history[0]["change_summary"]] == [
+        "indicators.sma_long.window"
+    ]
+
+
+def test_the_diff_panes_are_written_in_one_hand(client: TestClient) -> None:
+    """An import keeps its own formatting; a diff of it against a later save must not.
+
+    ``import_strategy`` deliberately stores the uploaded document byte for byte, so serving the
+    stored text as the panes puts a user's flow-style YAML beside the canonical block style of
+    the next save. Every line then highlights as changed, and the structured summary above --
+    correctly reporting one moved number -- corresponds to nothing the reader can find below it.
+    """
+    terse = (
+        "strategy: {name: terse_import}\n"
+        "universe: {ticker: NVDA, start_date: 2018-01-01, end_date: 2025-12-31}\n"
+        "execution: {initial_capital: 10000, slippage_pct: 0.1, commission_pct: 0.05}\n"
+        "indicators: [{name: sma_long, type: sma, window: 200}]\n"
+        "entry: {signal: close > sma_long}\n"
+        "exit: {stop_loss_pct: 5.0}\n"
+    )
+    imported = client.post(
+        f"{BASE}/strategies/import", json={"yaml": terse, "filename": "terse.yaml"}
+    ).json()["strategy"]
+    edited = {**imported["head"]["config"]}
+    edited["exit"] = {**edited["exit"], "stop_loss_pct": 7.0}
+    client.post(
+        f"{BASE}/strategies/{imported['id']}/versions",
+        json={"base_version": 1, "config": edited},
+    )
+
+    diff_url = f"{BASE}/strategies/{imported['id']}/diff"
+    body = client.get(diff_url, params={"from": 1, "to": 2}).json()
+    before = body["from_yaml"].splitlines()
+    after = body["to_yaml"].splitlines()
+
+    assert set(_changes(body)) == {"exit.stop_loss_pct"}
+    # One moved number, so exactly one line may differ between the panes.
+    assert len(before) == len(after)
+    assert [line for old, line in zip(before, after, strict=True) if old != line] == [
+        "  stop_loss_pct: 7.0"
+    ]
+
+    # The stored document itself is untouched: only the comparison canonicalises.
+    stored = client.get(f"{BASE}/strategies/{imported['id']}/versions/1").json()
+    assert stored["yaml"] == terse
+
+
 # --------------------------------------------------------------------------- the surface itself
 
 

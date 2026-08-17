@@ -87,6 +87,7 @@ def _seed(db: psycopg.Connection[TupleRow], ticker: str = TICKER) -> UUID:
         origin=VersionOrigin.CREATED,
         config=_config(ticker),
         config_yaml="yaml",
+        after=0,
     )
     db.commit()
     return strategy.id
@@ -157,6 +158,7 @@ def test_a_launch_pins_the_head_version(db: psycopg.Connection[TupleRow]) -> Non
         origin=VersionOrigin.EDITED,
         config=_config(),
         config_yaml="yaml",
+        after=1,
     )
     db.commit()
 

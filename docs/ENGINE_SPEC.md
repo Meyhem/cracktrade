@@ -1978,6 +1978,31 @@ comparison runs on that form. Canonicalising through the pydantic model instead 
 user is reading in the pane beside the diff, so a listed change corresponds to a visible line.
 A repo test pins the three surfaces to one path.
 
+**[AMENDED — 2026-08-17.]** The rule binds the *version* diff too, and it was not being
+followed there. `GET /strategies/{id}/diff` and the history timeline's change summaries read
+the stored `config`, which is `model_dump` output — so they addressed a window as
+`indicators.sma_long.params.window` while the other three surfaces called that same leaf
+`indicators.sma_long.window`. It is the second address the paragraph above prohibits, arrived
+at by reading a stored document rather than by canonicalising badly. Both now route the stored
+form through the YAML writer before comparing, and **one** function answers "what changed
+between these two configs" — for the timeline, for the diff, and for the save path's
+nothing-changed refusal.
+
+The diff's **YAML panes are re-dumped from the stored configs** rather than served as the
+stored text, for the same reason. An imported version keeps the uploaded file's own formatting
+(deliberately: reading back an import should return what the user wrote), so pairing it with a
+later save set a flow-style document beside canonical block style — every line highlighted, and
+a structured summary correctly reporting one moved number sitting above a pane in which nothing
+could be found. `GET /strategies/{id}/versions/{v}` is unaffected and still returns the stored
+text. Only the comparison canonicalises, because only the comparison needs both sides described
+the same way.
+
+A version the *current* engine can no longer validate — an indicator retired from the registry,
+say — cannot be canonicalised, and is still a truthful record of what the user believed. The
+comparison falls back to the stored form for that pair rather than failing, both sides or
+neither: canonicalising one side alone would report every indicator parameter as removed from
+one address and added at another, which reads as a rewrite of the strategy.
+
 ### 15.2 Guarantees carried into the API surface
 
 - **No delete.** No endpoint deletes a strategy, version, or run (§14.2).
@@ -2003,6 +2028,23 @@ A repo test pins the three surfaces to one path.
 - **Optimistic concurrency on config saves.** A save states the version it was based on and is
   refused if the head has moved, because a silent last-write-wins on an append-only history
   loses an edit while appearing to succeed. A save that changes nothing creates no version.
+
+  **[AMENDED — 2026-08-17.]** The check belongs **in the insert**, not in the service ahead of
+  it. `strategy_version.version` is computed as `max(version) + 1` within the statement, and the
+  service compared the head to the caller's stated base beforehand; under `READ COMMITTED` those
+  are two different reads. A second saver whose insert begins after the first commits recomputes
+  the maximum against the *new* head, takes the number after it, and succeeds — no collision, so
+  the unique constraint never fires. Both requests are answered `201`, both declaring they
+  edited v1, and the second has silently discarded the first.
+
+  This was not a theoretical window. It was found by widening the service-side gap by about two
+  milliseconds — the canonicalisation above — after which a two-thread save raced it open on the
+  first attempt; before that it had sat unreproduced under twenty-five runs of the same test,
+  which is exactly how a defect of this shape hides. The append now carries the expected head
+  (`0` when writing a strategy's first version) and checks it in the same statement that writes,
+  so either the guard sees a moved head and writes nothing, or two inserts overlap closely
+  enough to compute the same number and the unique index rejects one. Both are reported as the
+  same conflict; the difference between them is only how close the race was.
 - **Stream discipline** (§13.2) applies to the API processes: diagnostics to stderr, structured,
   never into a response body.
 

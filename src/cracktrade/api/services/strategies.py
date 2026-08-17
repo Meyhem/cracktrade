@@ -22,9 +22,9 @@ from cracktrade.api.repos.rows import (
     VersionRow,
 )
 from cracktrade.api.services.config import field_issue, strategy_from
-from cracktrade.api.services.diff import summarise
 from cracktrade.api.services.verdict import PromotedWarning, VerdictBlock, promoted_warning
 from cracktrade.api.services.verdict import block as verdict_block
+from cracktrade.api.services.versions import differences
 from cracktrade.config import Strategy, dump_strategy
 from cracktrade.errors import ConfigError, StrategyValidationError
 
@@ -111,6 +111,7 @@ def _create(
         config=_config_of(strategy),
         config_yaml=yaml_text,
         note=note,
+        after=0,
     )
     return Created(strategy=row, version=version)
 
@@ -245,6 +246,11 @@ def save_version(
     if the head has moved. Last-write-wins on an append-only history would lose someone's edit
     while reporting success, which is the worst of both.
 
+    The head is read here for the message and for the no-op check, but the decision is made by
+    the insert itself (``VersionRepo.append``'s ``after``). A check here alone is losable: the
+    work between the two -- validation, canonicalisation -- is a window a second saver can
+    commit inside, and this one was wide enough to lose in practice.
+
     A save that changes nothing is refused too. Versions are the unit in which runs are made
     comparable, and one that differs from its parent in no respect would only add noise to a
     history whose job is to explain results.
@@ -259,7 +265,7 @@ def save_version(
 
     strategy = _validated(config, yaml_text)
     new_config = _config_of(strategy)
-    if not summarise(head.config, new_config):
+    if not differences(head.config, new_config):
         raise ConflictError("nothing changed, so no version was created")
 
     return versions.append(
@@ -268,6 +274,7 @@ def save_version(
         config=new_config,
         config_yaml=yaml_text if yaml_text is not None else dump_strategy(strategy),
         note=note,
+        after=base_version,
     )
 
 
@@ -293,6 +300,7 @@ def restore_version(
         config_yaml=target.config_yaml,
         note=note or f"restored the complete config of v{version}",
         restored_from=version,
+        after=head.version,
     )
 
 

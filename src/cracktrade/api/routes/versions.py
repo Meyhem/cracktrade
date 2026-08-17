@@ -75,8 +75,8 @@ def diff_versions(
             result.newer, head=result.newer.version == result.head_version
         ),
         groups=[SectionDiffOut.of(section) for section in result.groups],
-        from_yaml=result.older.config_yaml,
-        to_yaml=result.newer.config_yaml,
+        from_yaml=result.older_yaml,
+        to_yaml=result.newer_yaml,
     )
 
 

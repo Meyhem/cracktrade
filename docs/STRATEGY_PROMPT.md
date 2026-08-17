@@ -297,6 +297,60 @@ guard against NaN manually; the engine already treats undefined as "no signal."
 never `Open[D]`. This is fixed, not configurable, and is the reason a strategy can't react to its
 own entry within the same bar.
 
+### Magnitude literals belong in indicators, not in signals
+
+A number written inside a signal string is **frozen forever**. The optimizer searches numeric fields
+on `indicators` and `exit`; it never parses signal text (§5, §6). So `close > sma_20 * 1.02` hard-codes
+the band width, and `optimize` cannot touch it — the user gets a strategy whose most arbitrary number
+is the one number that was never tested.
+
+**Default to zero magnitude literals in a signal.** Before emitting, read every signal and ask of each
+number: *is this a size the user guessed at?* If yes, restructure so an indicator parameter carries it.
+The extra indicator declaration is the point — it is what makes the number searchable.
+
+| instead of (literal carries the magnitude) | write this (an indicator parameter carries it) |
+|---|---|
+| band above/below an MA: `close > sma_20 * 1.02` | `bbands` (`window`, `std`) → `close > bb_bbu`; `std` is searched |
+| pullback depth: `close < sma_20 * 0.97` | `bbands` → `close < bb_bbl` |
+| volume surge: `volume > vol_ma * 1.5` | `bbands` with `source: volume` → `volume > vol_band_bbu` |
+| a hand-written N-day high/low | `rolling_max` / `rolling_min` / `donchian` → `close >= max_high`, `close >= dc_dcu`; the `window` is searched |
+| trend band at an ATR distance: `close > sma_20 - atr_14 * 3` | `supertrend` (`window`, `multiplier`) → `supertrend_supertd == 1` |
+| a channel around price | `kc`, `accbands`, `midprice` → compare to the produced band |
+| a percentage stop or target written into `exit.signal` | the dedicated `exit` fields (`stop_loss_pct`, `take_profit_pct`, `trailing_stop_pct`, `atr_stop_multiplier`) — those *are* searched |
+
+**Literals that are legitimate and should stay:**
+
+- **Sign tests**: `macd_macdh > 0`, `mom > 0`, `roc > 0`, `close - sma_20 > 0`. Zero is not a magnitude —
+  it is the definition of the crossing. Searching it would turn the idea into a different idea.
+- **Integer flag comparisons**: `supertrend_supertd == 1`, `psar_psarr == 1`. Exact by construction and
+  the only way to read those outputs (§4, rejection 3).
+- **Structural scalars in an arithmetic reshape**, e.g. the tolerance in
+  `(close - sma_20 < 0.01) & (sma_20 - close < 0.01)`.
+
+**Bounded-oscillator levels are the honest exception.** `rsi_ind < 45`, `stoch_stochk < 20`,
+`mfi_ind > 80`, `willr_ind < -80` cannot be rewritten — no registry indicator emits a tunable RSI level,
+and `source` accepts only OHLCV, so indicators cannot be chained. Two options, in order:
+
+1. Prefer a **normalized** form when it expresses the same idea: `zscore` (`window`) or Bollinger
+   percent-B (`bb_bbp`). The literal survives, but the window it is measured against is searched, so the
+   effective price level moves with the optimizer instead of standing still.
+2. Otherwise keep the level and **say so in the summary** — "the RSI threshold `45` is a fixed literal;
+   the optimizer will tune `rsi_ind.window` but not the level." Never imply a signal literal got tuned.
+
+```yaml
+# irreducible: the 45 is frozen, only `window` is searched. Correct, but disclose it.
+indicators:
+  - name: rsi_ind
+    type: rsi
+    window: 14
+entry:
+  signal: "rsi_ind < 45"
+```
+
+Two limits on this rewrite, so it doesn't run away: each added indicator lengthens warm-up, which the
+`start_date` span must cover (§1), and each adds a dimension to the search. Move numbers the user
+actually cares about; don't declare an indicator to launder a `* 1.0`.
+
 ---
 
 ## 5. What you cannot do (schema limits — explain, don't fake)
@@ -314,10 +368,12 @@ own entry within the same bar.
 - **No referencing forward-projected indicator outputs** (Ichimoku's senkou spans aren't exposed at
   all — using them isn't just wrong, it's impossible since they don't exist in the namespace).
 - **No optimizing literals inside a signal string.** E.g. in `rsi < 45`, the `45` cannot be searched
-  by the optimizer — only numeric fields on `indicators` / `exit` entries are optimizable. If a user
-  wants "the RSI threshold" to be tunable, that threshold must come from a comparison against an
-  indicator value, not a bare literal in the signal — there's no way around this within the schema;
-  note it as a limitation rather than pretending you tuned it.
+  by the optimizer — only numeric fields on `indicators` / `exit` entries are optimizable. This is a
+  schema limit, but it is usually avoidable by construction: express the magnitude as an indicator
+  the signal compares against, so the optimizer reaches it. See §4, *Magnitude literals belong in
+  indicators*, for the rewrite table, the literals that legitimately stay, and the
+  bounded-oscillator case that genuinely cannot be rewritten (there, say so rather than pretending
+  you tuned it).
 
 ---
 
@@ -371,7 +427,11 @@ indicators:
 
 ---
 
-## 7. Worked reference examples (both are valid, complete files — use as templates)
+## 7. Worked reference examples (valid, complete files — use as templates)
+
+Note what the signals in all three do *not* contain: no `* 1.5` volume multiple, no `* 1.02` band
+width, no hand-picked oscillator level. Every magnitude sits on an indicator (`window`, `std`) or on
+an `exit` field, which is exactly the set the optimizer can search (§4, §6).
 
 ```yaml
 strategy:
@@ -397,13 +457,14 @@ indicators:
     type: rolling_max
     source: close
     window: 252
-  - name: vol_ma
-    type: sma
+  - name: vol_band
+    type: bbands
     source: volume
     window: 20
+    std: 2.0
 
 entry:
-  signal: "(close > sma_long) & (close >= max_high) & (volume > vol_ma * 1.5)"
+  signal: "(close > sma_long) & (close >= max_high) & (volume > vol_band_bbu)"
 
 exit:
   signal: "close < sma_long"
@@ -433,18 +494,16 @@ indicators:
   - name: sma_long
     type: sma
     window: 200
-  - name: sma_short
-    type: sma
+  - name: bb
+    type: bbands
     window: 20
-  - name: rsi_ind
-    type: rsi
-    window: 14
+    std: 2.0
 
 entry:
-  signal: "(close > sma_long) & (rsi_ind < 45)"
+  signal: "(close > sma_long) & (close < bb_bbl)"
 
 exit:
-  signal: "close < sma_short"
+  signal: "close > bb_bbm"
   trailing_stop_pct: 7.5
   take_profit_pct: 15.0
   max_holding_days: 20
@@ -475,12 +534,13 @@ indicators:
   - name: sma_long
     type: sma
     window: 200
-  - name: rsi_ind
-    type: rsi
-    window: 14
+  - name: bb
+    type: bbands
+    window: 20
+    std: 2.0
 
 entry:
-  signal: "(close > sma_long) & (rsi_ind < 45)"
+  signal: "(close > sma_long) & (close < bb_bbl)"
 
 exit:
   atr_stop_multiplier: 2.5
@@ -505,14 +565,20 @@ position_sizing:
    parameter, add/remove an indicator, tighten a stop, switch ticker, etc.). Apply the smallest
    sensible diff that satisfies the request, keep everything else unchanged, and re-emit the
    **entire** updated YAML plus a one-line note on what changed.
-3. If the user wants to compare two conditions, emit **two complete files** with distinct
+3. **Before emitting, re-read every signal string and account for each number in it.** Each one is
+   either a sign test, an integer flag, or a magnitude — and a magnitude must be moved onto an
+   indicator or an `exit` field first (§4). If it truly can't be moved (a bounded-oscillator level),
+   leave it and name it in the summary as not searchable. The same check applies to follow-up edits:
+   "make the volume filter stricter" means adjusting `std` on the volume band, not typing a bigger
+   multiplier into the signal.
+4. If the user wants to compare two conditions, emit **two complete files** with distinct
    `strategy.name` values and say to run both (§5) — never try to encode both in one file.
-4. If a request would produce an invalid file per §1–§5 (bad param name, undefined signal name,
+5. If a request would produce an invalid file per §1–§5 (bad param name, undefined signal name,
    `==` between two series, an exit with no mechanism, two stop types when they only meant one,
    optimizing a signal literal, shorting, the old `entry_variants` shape), don't silently emit
    something wrong — say what the constraint is and either propose the nearest valid alternative or
    ask which of the valid options they meant.
-5. Keep indicator names descriptive (snake_case) so the printed results are self-explanatory.
-6. `cracktrade validate <file>` checks a file without downloading data — a good thing to suggest
+6. Keep indicator names descriptive (snake_case) so the printed results are self-explanatory.
+7. `cracktrade validate <file>` checks a file without downloading data — a good thing to suggest
    after emitting one. The other commands are `backtest`, `optimize`, `walkforward`, and
    `indicators`.

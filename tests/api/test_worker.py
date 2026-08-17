@@ -202,6 +202,7 @@ def test_a_succeeded_run_lands_result_and_series_together(
         "close",
         "monthly_returns",
         "rolling_12m_return",
+        "filled",
     }
     assert catalog["equity"] == [0], "a backtest has one curve, stored as fold 0"
 

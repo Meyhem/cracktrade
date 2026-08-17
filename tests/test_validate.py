@@ -344,6 +344,51 @@ def test_the_benchmark_covers_the_same_out_of_sample_span(report: ValidationRepo
     assert isinstance(report.beats_buy_and_hold, bool)
 
 
+# ------------------------------------------------------------- 12.9: per-fold trades
+
+
+def test_each_fold_reports_the_trades_it_actually_took(report: ValidationReport) -> None:
+    """Already computed, previously discarded: the runner evaluates each fold as a backtest."""
+    assert any(fold.trades for fold in report.folds)
+    for fold in report.folds:
+        assert len(fold.trades) >= fold.metrics.total_trades
+
+
+def test_a_folds_trades_fall_inside_its_own_test_window(report: ValidationReport) -> None:
+    """The trades belong to that fold's parameter vector, and to the window it was scored on."""
+    for fold in report.folds:
+        for trade in fold.trades:
+            assert fold.first_test_bar <= trade.entry_date <= fold.last_test_bar
+
+
+def test_the_folds_partition_their_trades_rather_than_sharing_them(
+    report: ValidationReport,
+) -> None:
+    """No trade appears twice.
+
+    The windows are contiguous and non-overlapping by construction (section 12.1), so a trade
+    turning up in two folds would mean a fold was scored on bars another fold also claimed.
+    That is what would make pooling look harmless, and it is the assumption section 12.9
+    forbids relying on.
+    """
+    entries = [trade.entry_date for fold in report.folds for trade in fold.trades]
+
+    assert len(entries) == len(set(entries))
+
+
+def test_the_total_trade_count_stays_a_count_not_a_pooled_sample(
+    report: ValidationReport,
+) -> None:
+    """``total_trades`` sums the folds' *closed* counts and claims nothing more.
+
+    It says how much evidence the exercise produced. It is not a sample from one strategy, and
+    the per-fold lists are longer than it whenever a fold ended holding a position -- an open
+    trade is drawn but never counted (spec section 12.9).
+    """
+    assert report.total_trades == sum(fold.metrics.total_trades for fold in report.folds)
+    assert report.total_trades <= sum(len(fold.trades) for fold in report.folds)
+
+
 def test_the_walk_forward_report_renders(report: ValidationReport) -> None:
     from rich.console import Console
 

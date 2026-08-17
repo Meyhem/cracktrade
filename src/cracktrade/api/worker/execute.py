@@ -172,6 +172,10 @@ def _store_series(
             ("close", to_dict(bundle.close)),
             ("monthly_returns", to_dict(bundle.monthly_returns)),
             ("rolling_12m_return", to_dict(bundle.rolling_12m_return)),
+            # Dates only, and deliberately no values column: this series says *which* bars
+            # were forward-filled so a chart can mark them, and inventing a value per date
+            # would make it look like a measurement.
+            ("filled", {"dates": to_dict(bundle.filled)}),
         ):
             repo.put(run_id=run.id, name=name, points=points, fold=fold)
 

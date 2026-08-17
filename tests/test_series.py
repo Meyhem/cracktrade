@@ -14,6 +14,7 @@ recompute into -- but it is why this module exists at all.
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from cracktrade.backtest import run_backtest
@@ -123,6 +124,66 @@ def test_the_rolling_window_is_trailing(market: MarketData) -> None:
     assert any(value != 0.0 for value in rolling[ROLLING_WINDOW:])
 
 
+# --------------------------------------------------------------------------- filled bars
+
+
+def test_filled_bars_are_named_not_merely_counted(market: MarketData) -> None:
+    """A chart cannot mark a bar it was only told the number of.
+
+    ``DataVintage.filled_bars`` says how many bars repeated the previous session; this says
+    which. Without the dates a time-domain chart has no option but to draw a straight line
+    through a price that never traded (spec section 8.1, amended 2026-08-17).
+    """
+    filled = pd.Series(False, index=market.frame.index)
+    filled.iloc[5] = True
+    filled.iloc[9] = True
+    tracked = MarketData(
+        ticker=market.ticker,
+        frame=market.frame,
+        requested_start=market.requested_start,
+        requested_end=market.requested_end,
+        filled=filled,
+    )
+
+    result = run_backtest(strategy_with(), tracked, capture_series=True)
+    assert result.series is not None
+    assert result.series.filled == (
+        market.frame.index[5].date(),
+        market.frame.index[9].date(),
+    )
+    assert result.vintage.filled_bars == 2
+
+
+def test_untracked_provenance_marks_nothing(market: MarketData) -> None:
+    """An empty tuple is not a claim that nothing was filled.
+
+    The fixture's provider never recorded provenance. Reporting no marks is the only honest
+    answer -- the vintage block is where "none" and "not recorded" are told apart.
+    """
+    result = run_backtest(strategy_with(), market, capture_series=True)
+    assert result.series is not None
+    assert market.filled is None
+    assert result.series.filled == ()
+
+
+def test_an_optimization_marks_only_the_filled_bars_it_charted(market: MarketData) -> None:
+    """The window is the test window, so a filled bar in the train half is not on this chart."""
+    filled = pd.Series(False, index=market.frame.index)
+    filled.iloc[2] = True
+    filled.iloc[-3] = True
+    tracked = MarketData(
+        ticker=market.ticker,
+        frame=market.frame,
+        requested_start=market.requested_start,
+        requested_end=market.requested_end,
+        filled=filled,
+    )
+
+    result = optimize(strategy_with(), tracked, epochs=2, seed=SEED, workers=1, capture_series=True)
+    assert result.series is not None
+    assert result.series.filled == (market.frame.index[-3].date(),)
+
+
 # --------------------------------------------------------------------------- the other runners
 
 
@@ -197,6 +258,7 @@ def test_series_survive_serialisation(market: MarketData) -> None:
         "close",
         "monthly_returns",
         "rolling_12m_return",
+        "filled",
     }
     assert len(series["equity"]["dates"]) == len(series["equity"]["values"])
     assert isinstance(series["equity"]["dates"][0], str)

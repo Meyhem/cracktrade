@@ -117,6 +117,11 @@ def walk_forward(
             metrics=outcome.result.test_metrics,
             train_metrics=outcome.result.train_metrics,
             parameters={change.path: change.new_value for change in outcome.result.changes},
+            # Already computed: each fold is evaluated as a full backtest before all but its
+            # metrics were discarded. Keeping the list is what lets a fold be looked at rather
+            # than only scored -- and it is the only honest per-trade view a walk-forward has,
+            # since the folds ran different configurations.
+            trades=outcome.result.trades,
         )
         for index, (division, outcome) in enumerate(zip(splits, outcomes, strict=True))
     )

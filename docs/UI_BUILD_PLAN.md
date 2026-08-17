@@ -25,13 +25,13 @@ every screen where a user reads a number.
 | §2.2 Run tables | **Done** — per-kind columns, staleness, empty states |
 | §2.3–2.5 Run views | **Stub** — header and failure path only; result keys dumped as chips |
 | §3 Config editor | **Done** — both modes, per-field search controls, signal editor, save with diff |
-| §5 Charts tab | **Placeholder** |
+| §5 Charts tab | **Done** — run and fold selectors, four groups, §5.2 as designed states |
 | §2.6 History, diff, restore, comparison | **Placeholder** |
 | §4 Validate, Fork, Promote | **Missing** — all three have live endpoints |
 
-Two tabs still route to `ComingSoon` ([`router.tsx`](../web/src/routes/router.tsx)): charts and
-history. The strategy detail index redirects to `config`, which as of phase 5 is the editor
-rather than a placeholder.
+One tab still routes to `ComingSoon` ([`router.tsx`](../web/src/routes/router.tsx)): history.
+The strategy detail index redirects to `config`, which as of phase 5 is the editor rather than a
+placeholder.
 
 ---
 
@@ -122,7 +122,7 @@ These change what gets built and are the reason this is a plan rather than a fir
 | D-15 | **G-3, optimization benchmark** | (a) add `BenchmarkComparison` to `OptimizationResult`; (b) derive yearly benchmark returns client-side from `benchmark_equity`; (c) omit benchmark bars on optimization runs | **(a)**. (b) puts a second definition of a published number in the client, which is the failure mode this repo is organised against |
 | D-16 | **D-14/D-15 and stored results** | Both change the serialised result shape. Runs already in the database were stored under the old shape | Render defensively from what a run recorded; no backfill, no migration. A run is an immutable record of what was computed, and inventing a benchmark for an old one is the same lie as any other |
 | D-17 | **Promote diff (§2.4)** | (a) generalise the diff service to compare two configs rather than two versions, exposed as `POST /config/diff`; (b) client-side text diff of `optimized_yaml` against the head's YAML | **(a)** — **decided, built**. §4 calls this "the single most important anti-footgun in the app"; a text diff cannot produce the section grouping that separates "the ticker moved" from "an RSI window moved by one" |
-| D-18 | **Charting library** | Not yet chosen. §5.7 forbids dual axes, requires shared crosshair/brush across charts 1–3, zero-inclusive axes, and PNG export | Decide at the top of phase 7, not now. Phases 4–6 need no charts beyond the run views' inline equity/drawdown, which the same choice will serve |
+| D-18 | **Charting library** | §5.7 forbids dual axes, requires shared crosshair/brush across charts 1–3, zero-inclusive axes, and PNG export | **Apache ECharts — decided, built** in phase 6. Already a dependency; `connect`, `getDataURL`, heatmaps and `markLine`/`markArea` cover §5.7 directly. Full import rather than `echarts/core`: a missed registration fails by silently not drawing part of a chart |
 
 D-14, D-15 and D-17 are engine- and API-side work inside a UI plan. That is expected — the brief's
 own appendix predicted it — but it means phases 4 and 7 each open with a server change and a spec
@@ -228,19 +228,59 @@ and no other. `build_strategy` now takes an optional `source`, and path and line
 separate fields so an error *with* a line does not lose the field attribution an error *without*
 one keeps. Spec §3.9 amended.
 
-### Phase 6 — Charts
+### Phase 6 — Charts — **DONE**
 
-Opens with D-14, D-15 and D-18 — per-fold trades and the optimization benchmark land in the
-engine with a spec update, then the tab is built against them.
+**D-18 decided: Apache ECharts**, already a dependency and unused until now. Chosen against
+§5.7 rather than on general merit: canvas rendering for a decade of daily bars, `connect` for a
+genuinely shared crosshair and brush across charts 1–3, `getDataURL` for PNG export, and
+first-class heatmaps, `markLine`, `markArea` and `visualMap` that charts 3, 7, 12 and 13 need.
+The *whole* library is imported rather than the tree-shakeable `echarts/core` build: a missed
+registration there fails by not drawing part of a chart, which is the one failure mode this
+application cannot tolerate quietly.
 
-Run selector with the seriousness ordering and stale marking, fold selector for validation runs
-defaulting to Combined with §5.1's explanatory empty state, four labelled groups behind a sticky
-nav rail, and §5.2's suppression rules treated as designed states rather than error handling.
-Combined-view Group C stitches fold windows chronologically client-side, since a walk-forward
-stores no whole-run series by construction.
+D-14 and D-15 landed first, with a third engine change the brief implied and nothing provided:
+§5.7 requires forward-filled bars to be marked on time-domain charts, and only their *count*
+was recorded. `RunSeries.filled` now carries the dates (spec §8.1, amended).
 
-The suppressed and absent-series states get tests. They are the states most likely to regress
-into silently rendering a figure, and that regression is invisible until it has misled someone.
+**Where this deviates from §5.1, and why.** The brief says Group C stitches fold windows and
+stays available in Combined view. The monthly grid does, and marks the months where two folds
+each contributed a half rather than compounding them. Charts 8 and 9 aggregate over a calendar
+year and a trailing twelve months, and in a six-fold walk-forward *every* such window crosses a
+boundary — compounding across one states a return for a strategy that was never traded. Both
+refuse in Combined view and point at the fold selector. That is narrower than §5.1's wording and
+the only reading that does not invent a number.
+
+§5.4's "total return recomputed with the single best trade removed" is reported in **currency**,
+as two sums of realised P&L, not as a percentage. Removing a trade from a compounded curve
+changes the capital every later trade was sized against, so an honest version needs the engine's
+simulation; a percentage computed in the client would wear the headline return's label while
+measuring something else. Both sums are of the same kind, which is what the question needs.
+
+Five defects the tests were happy with and the live render was not, all found by looking:
+
+1. **Five of nine charts drew nothing.** ECharts is rebuilt when Mantine's colour scheme
+   resolves, and the option effect — keyed on the option, which had not changed — did not re-run,
+   so the new instance never received one. No error, correct size, blank frame. Charts that
+   happened to re-render afterwards healed themselves, which is why four worked and five did not.
+   The option is now applied inside the effect that creates the instance.
+2. **The price chart claimed a series "was not recorded"** in a walk-forward's combined view.
+   It waives the trade floor (§5.2's sole exception) and had been waiving the *whole* state,
+   turning "these folds ran different configurations" into a false statement about the run.
+3. **The stability axis labelled a −20% perturbation "−120%"** — `StabilityPoint.multiplier` is
+   a fractional change applied as `value * (1 + m)`, read here as a multiple, on the one chart
+   whose entire subject is how far a parameter can move.
+4. **The confidence intervals were plotted as fractions on an axis formatted `%`**, so a total
+   return of +209% read as "+2%". They were also drawn with the stacked-invisible-offset trick,
+   which breaks for a negative low — an interval running −33% to +209% was drawn entirely right
+   of zero, directly above a caption saying it straddled zero. Now two charts on separate scales
+   (the two statistics differ by three orders of magnitude and §5.7 forbids a second axis), each
+   a two-point line segment, at the precision the CLI already uses for each.
+5. **The deflated Sharpe's luck threshold was off-chart**, because ECharts does not extend an
+   axis to fit a mark line. The bar sat alone looking like a result rather than a failure.
+
+Also fixed in passing: `parameters_at_bound` serialises as `ParameterChange` objects, not names,
+so the optimization view's "widen the range and run again" warning had never once rendered
+against a real payload while the per-row badge beside it kept working.
 
 ### Phase 7 — Version history and comparison
 

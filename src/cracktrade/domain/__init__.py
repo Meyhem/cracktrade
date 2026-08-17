@@ -84,6 +84,15 @@ class RunSeries:
     monthly_returns: MonthlyReturns
     rolling_12m_return: Series
 
+    #: The bars in this window that were forward-filled rather than observed. Held as the
+    #: dates themselves rather than as a per-bar mask: they are usually a handful out of
+    #: thousands, and a chart marks them individually.
+    #:
+    #: ``DataVintage.filled_bars`` counts them; this says *where* they are, which is what a
+    #: time-domain chart needs in order to mark them instead of drawing a straight line
+    #: through a price that was never traded (spec section 8.1).
+    filled: tuple[date, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class Trade:
@@ -300,6 +309,16 @@ class OptimizationResult:
     convergence_message: str
     most_common_failure: str | None
 
+    #: Buying and holding the ticker across the *test* window, on the same bars and under the
+    #: same cost model. Without it the report answers "did the search improve the strategy"
+    #: -- which ``baseline_test_metrics`` already answers -- and never "is the result worth
+    #: owning". An optimized 13% on a ticker that returned 40% reads as a success until this
+    #: is beside it (spec section 9.5, audit finding B1).
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    benchmark: BenchmarkComparison | None = None
+
     #: Test-window chart series, present only when the caller asked for them.
     series: RunSeries | None = None
 
@@ -340,6 +359,11 @@ class FoldResult:
     metrics: Metrics
     train_metrics: Metrics
     parameters: dict[str, float]
+
+    #: The fold's own out-of-sample trades. Every fold re-optimizes, so these belong to
+    #: :attr:`parameters` and to no other fold's vector: they can be read per fold and must
+    #: never be pooled across folds into one distribution (spec section 12.9).
+    trades: tuple[Trade, ...] = ()
 
     @property
     def was_profitable(self) -> bool:

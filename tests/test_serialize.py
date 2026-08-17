@@ -106,6 +106,7 @@ OPTIMIZE_KEYS = frozenset(
         "improvement_pct",
         "overfitting_gap_pct",
         "parameters_at_bound",
+        "benchmark",
         "series",
     }
 )

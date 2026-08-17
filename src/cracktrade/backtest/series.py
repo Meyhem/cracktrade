@@ -119,4 +119,20 @@ def capture(
         close=_series(close),
         monthly_returns=_monthly(equity, holdings),
         rolling_12m_return=_rolling_annual(equity),
+        filled=_filled_dates(data, offset),
     )
+
+
+def _filled_dates(data: MarketData, offset: int) -> tuple[date, ...]:
+    """Which bars in the captured window repeated the previous session rather than trading.
+
+    ``None`` means the provider did not track provenance, which is not the same as "none were
+    filled". An empty tuple is returned either way and the vintage block is where the two are
+    told apart -- a chart cannot mark bars nobody recorded.
+    """
+    if data.filled is None:
+        return ()
+    marked = data.filled.iloc[offset:]
+    index = marked.index[marked.to_numpy(dtype=bool)]
+    assert isinstance(index, pd.DatetimeIndex)
+    return _dates_of(index)

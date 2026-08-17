@@ -1087,6 +1087,20 @@ Consequences that follow from that, and are tested:
 Capture is opt-in because the CLI prints numbers. Turning it on must not change a result, which
 is asserted the same way the progress hooks are.
 
+**[AMENDED — 2026-08-17.]** `RunSeries` additionally carries `filled`: the dates within the
+captured window that were forward-filled rather than observed (§4.3). Held as dates rather than
+as a per-bar mask, because they are a handful out of thousands and a chart marks them
+individually.
+
+`DataVintage.filled_bars` already counts them. Counting is enough to *warn* about a history and
+not enough to *draw* one: a chart given only a count has no choice but to run a straight line
+through a price that never traded, which is the one thing §4.3 says a filled bar must not be
+allowed to look like. When the provider tracked no provenance the tuple is empty, which is not a
+claim that nothing was filled — the vintage block is where those two are told apart.
+
+The API stores it under the series name `filled`, with a `dates` column and deliberately no
+`values` column. A value per date would make it look like a measurement.
+
 ---
 
 ## 9. Optimization engine
@@ -1304,6 +1318,28 @@ recorded in the result, so re-fitting is at least visible in the output.
   parameter belongs to the one strategy);
 - the trade list for the test window;
 - search diagnostics: evaluations performed, failures, wall time, seed, convergence message.
+
+**[AMENDED — 2026-08-17.]** Plus `benchmark`, a `BenchmarkComparison` against buying and holding
+the ticker across the **test window**, scored from `test.offset` on both sides so the hold is
+credited with exactly the bars the strategy could have traded.
+
+`baseline_test_metrics` was already there and answers a different question. It is the *user's own
+configuration* measured out of sample, so the pair says whether the search did anything. Neither
+says whether the result is worth owning: an optimization that lifted a strategy from 9% to 13% on
+a ticker that returned 40% reads as a clear success against the baseline and is a failure. That
+is audit finding B1, which §8 fixed for backtests and which an optimization run reproduced in
+full — the more persuasive place to reproduce it, since an improvement figure is on screen next
+to it.
+
+The comparison and the captured benchmark curve (§8.1) are built from **one** hold portfolio.
+Two simulations of the same buy-and-hold agree today and are free to diverge later, and a
+benchmark line that disagrees with the benchmark number printed under it is worse than either
+alone.
+
+The field is optional in the dataclass so that results serialised before it existed still load.
+Runs already in the database are not backfilled and no migration invents one: a stored run is a
+record of what was computed, and a benchmark computed today from today's prices is not a fact
+about a run from last month (D-16).
 
 ---
 
@@ -1660,6 +1696,24 @@ The tuple is emitted in the order below. The CLI leads with the verdict, not the
 A result failing (1), or with PBO > 0.5, or flagged unstable, is reported as such before any
 profitable-looking number is shown.
 
+### 12.9 Per-fold trades
+
+**[NEW — decided 2026-08-17.]** `FoldResult` carries `trades`: that fold's own out-of-sample
+trade list. Nothing is recomputed to produce it — the runner already evaluates each fold as a
+full backtest and previously kept only the metrics.
+
+**These may be read per fold and must never be pooled across folds.** Every fold re-optimizes
+from scratch, so a fold's trades belong to that fold's parameter vector and to no other. A
+histogram of all folds' trades together, or a spliced per-trade equity line, would describe a
+configuration that was never run — the same reason §8.1 refuses to splice fold equity curves,
+and the reason `ValidationReport` publishes a distribution rather than a pooled result.
+
+`ValidationReport.total_trades` remains a *count* summed across folds, which is legitimate: it
+says how much evidence the exercise produced in total, and makes no claim that the trades came
+from one strategy.
+
+An interface offering a fold selector therefore scopes its trade-level views to the selected
+fold, and shows nothing rather than a pooled aggregate when no fold is selected.
 
 ---
 

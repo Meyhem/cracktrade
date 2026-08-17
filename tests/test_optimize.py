@@ -364,6 +364,50 @@ def test_the_baseline_is_measured_on_the_same_window_as_the_result() -> None:
     )
 
 
+# ------------------------------------------------- B1: the hurdle is owning the ticker
+
+
+def test_the_result_is_measured_against_buying_and_holding() -> None:
+    """Audit finding B1, in the place it is most persuasive.
+
+    ``baseline_test_metrics`` says whether the search did anything. It cannot say whether the
+    answer is worth owning, and an improvement figure printed next to a result invites exactly
+    that reading (spec section 9.5, amended 2026-08-17).
+    """
+    result = optimized()
+
+    assert result.benchmark is not None
+    assert result.benchmark.excess_return_pct == pytest.approx(
+        result.test_metrics.total_return_pct - result.benchmark.benchmark.total_return_pct
+    )
+    assert result.benchmark.beats_buy_and_hold == (result.benchmark.excess_return_pct > 0)
+
+
+def test_the_benchmark_covers_the_test_window_and_not_the_fitted_one() -> None:
+    """The hold has to be over the bars the strategy was reported on, or it compares nothing.
+
+    Scored bars rather than raw window length: the test window carries a warm-up prefix the
+    strategy could not act on, and crediting the hold with it would hand the benchmark return
+    the strategy was structurally unable to capture.
+    """
+    result = optimized()
+
+    assert result.benchmark is not None
+    assert result.benchmark.benchmark.bars == result.test_metrics.bars == result.test_bars
+
+
+def test_the_benchmark_curve_and_the_benchmark_number_come_from_one_simulation() -> None:
+    """A chart that disagrees with the figure printed under it is worse than either alone."""
+    result = optimize(
+        strategy_with(), trending_market(760), epochs=2, workers=1, capture_series=True
+    )
+
+    assert result.benchmark is not None
+    assert result.series is not None
+    final = result.series.benchmark_equity.values[-1]
+    assert final == pytest.approx(result.benchmark.benchmark.final_equity)
+
+
 def test_the_optimized_yaml_carries_the_one_entry_and_exit_it_started_with() -> None:
     """No pruning step exists any more: a strategy is one entry rule and one exit rule.
 

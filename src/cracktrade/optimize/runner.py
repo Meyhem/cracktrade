@@ -26,10 +26,17 @@ from cracktrade.backtest import (
     extract_trades,
     run_simulation,
 )
+from cracktrade.backtest.benchmark import compare
 from cracktrade.backtest.series import capture
 from cracktrade.config import dump_strategy
 from cracktrade.control import NO_CONTROL, RunControl
-from cracktrade.domain import Metrics, OptimizationResult, ParameterChange, RunSeries
+from cracktrade.domain import (
+    BenchmarkComparison,
+    Metrics,
+    OptimizationResult,
+    ParameterChange,
+    RunSeries,
+)
 from cracktrade.errors import CracktradeError
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import Parameter, discover_parameters, inject
@@ -49,6 +56,8 @@ from cracktrade.strategy import build_strategy, required_warmup
 
 if TYPE_CHECKING:
     import numpy.typing as npt
+    import pandas as pd
+    import vectorbt as vbt
 
     from cracktrade.config import Strategy
     from cracktrade.data import MarketData
@@ -174,7 +183,17 @@ def optimize_split(
     _warn_if_unhealthy(diagnostics)
 
     test_metrics, test_returns = _evaluate(optimized, division.test)
-    series = _capture_test_series(optimized, division.test) if capture_series else None
+
+    # One buy-and-hold portfolio, shared by the reported comparison and the chart series. Two
+    # simulations of the same hold would agree today and are free to diverge later, and a
+    # benchmark curve that disagrees with the benchmark number printed under it is worse than
+    # either alone.
+    hold = buy_and_hold_portfolio(
+        division.test.data,
+        optimized.execution,
+        optimized.position_sizing,
+        start_bar=division.test.offset,
+    )
 
     result = OptimizationResult(
         strategy_name=strategy.strategy.name,
@@ -198,7 +217,8 @@ def optimize_split(
         elapsed_seconds=diagnostics.elapsed_seconds,
         convergence_message=diagnostics.message,
         most_common_failure=diagnostics.most_common_failure,
-        series=series,
+        benchmark=_hold_comparison(optimized, division.test, test_metrics, test_returns, hold),
+        series=_capture_test_series(optimized, division.test, hold) if capture_series else None,
     )
 
     return SplitOutcome(
@@ -207,7 +227,7 @@ def optimize_split(
         parameters=parameters,
         values=outcome.values,
         trial_sharpes=tuple(fitness.trial_sharpes) if diagnostics.counts_exact else (),
-        test_returns=test_returns,
+        test_returns=np.asarray(test_returns.to_numpy(), dtype=np.float64),
     )
 
 
@@ -301,16 +321,40 @@ def _train_score(
     return objective(metrics), metrics.sharpe_ratio
 
 
-def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, npt.NDArray[np.float64]]:
-    """Score a strategy on the test window, returning its metrics and its returns."""
+def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, pd.Series]:
+    """Score a strategy on the test window, returning its metrics and its returns.
+
+    The returns keep their index. The information ratio subtracts one return series from
+    another, and on bare arrays that subtraction is positional -- correct only while both
+    happen to be the same length, and silently wrong the day one is not.
+    """
     simulation = run_simulation(strategy, test.data)
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
         offset=test.offset,
     )
-    returns = simulation.portfolio.returns().iloc[test.offset :].to_numpy()
-    return metrics, np.asarray(returns, dtype=np.float64)
+    return metrics, simulation.portfolio.returns().iloc[test.offset :]
+
+
+def _hold_comparison(
+    strategy: Strategy,
+    test: TestWindow,
+    metrics: Metrics,
+    returns: pd.Series,
+    hold: vbt.Portfolio,
+) -> BenchmarkComparison:
+    """Measure the optimized strategy against buying and holding the same test window.
+
+    Scored from ``test.offset`` on both sides, so the benchmark is credited with exactly the
+    bars the strategy was able to trade and no warm-up prefix it could not have acted on.
+    """
+    return compare(
+        metrics,
+        extract_metrics(hold, risk_free_rate=strategy.execution.risk_free_rate, offset=test.offset),
+        strategy_returns=returns,
+        benchmark_returns=hold.returns().iloc[test.offset :],
+    )
 
 
 def _evaluate_train(strategy: Strategy, train: TrainWindow) -> Metrics:
@@ -378,7 +422,7 @@ def _warn_if_unhealthy(diagnostics: SearchDiagnostics) -> None:
         )
 
 
-def _capture_test_series(strategy: Strategy, test: TestWindow) -> RunSeries:
+def _capture_test_series(strategy: Strategy, test: TestWindow, hold: vbt.Portfolio) -> RunSeries:
     """Chart series for the out-of-sample window, and only for it.
 
     An optimization run's charts must describe the window the search never saw. Capturing over
@@ -386,12 +430,9 @@ def _capture_test_series(strategy: Strategy, test: TestWindow) -> RunSeries:
     numbers that were not.
     """
     simulation = run_simulation(strategy, test.data)
-    benchmark = buy_and_hold_portfolio(
-        test.data, strategy.execution, strategy.position_sizing, start_bar=test.offset
-    )
     return capture(
         portfolio=simulation.portfolio,
-        benchmark=benchmark,
+        benchmark=hold,
         data=test.data,
         offset=test.offset,
     )

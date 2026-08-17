@@ -37,7 +37,19 @@ export type SeriesCatalog = Schemas['SeriesCatalog']
 export type SeriesPoints = Schemas['SeriesPoints']
 
 export type ValidateResponse = Schemas['ValidateResponse']
+export type ConfigDiffResponse = Schemas['ConfigDiffResponse']
 export type SearchableParameter = Schemas['SearchableParameterOut']
+
+/**
+ * A configuration, as the wire carries it.
+ *
+ * Deliberately an open mapping rather than a modelled type. What makes a configuration a
+ * strategy is the engine's judgement, not a schema's (spec section 3.1), and a hand-written
+ * mirror of the config shape here would be a second definition that drifts the first time an
+ * indicator gains a field. Screens read it through validation, which answers with the engine's
+ * own verdict.
+ */
+export type ConfigMapping = Schemas['VersionOut']['config']
 export type Issue = Schemas['Issue']
 export type MetaResponse = Schemas['MetaResponse']
 export type HealthResponse = Schemas['HealthResponse']

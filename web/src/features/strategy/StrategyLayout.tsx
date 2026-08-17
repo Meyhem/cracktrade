@@ -148,13 +148,7 @@ export function StrategyLayout() {
         <Outlet />
 
         {launchKind && (
-          <LaunchRunModal
-            kind={launchKind}
-            onClose={() => setLaunchKind(null)}
-            opened
-            searchableParameters={1}
-            strategyId={strategy.id}
-          />
+          <LaunchRunModal kind={launchKind} onClose={() => setLaunchKind(null)} opened />
         )}
       </Stack>
     </StrategyContext>

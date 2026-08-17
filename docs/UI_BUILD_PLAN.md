@@ -121,7 +121,7 @@ These change what gets built and are the reason this is a plan rather than a fir
 | D-14 | **G-1, per-fold trades** | (a) extend `FoldResult` to carry its fold's `Trade` list — the walk-forward runner already evaluates each fold as a full backtest before discarding all but `metrics`; (b) ship the fold selector with Group B showing a "not recorded for folds" state | **(a)**, in phase 7. The engine already computes it; (b) writes an empty state that exists only to apologise for a field we chose not to keep, and §5.1 makes the per-fold view the whole point of the selector |
 | D-15 | **G-3, optimization benchmark** | (a) add `BenchmarkComparison` to `OptimizationResult`; (b) derive yearly benchmark returns client-side from `benchmark_equity`; (c) omit benchmark bars on optimization runs | **(a)**. (b) puts a second definition of a published number in the client, which is the failure mode this repo is organised against |
 | D-16 | **D-14/D-15 and stored results** | Both change the serialised result shape. Runs already in the database were stored under the old shape | Render defensively from what a run recorded; no backfill, no migration. A run is an immutable record of what was computed, and inventing a benchmark for an old one is the same lie as any other |
-| D-17 | **Promote diff (§2.4)** | (a) generalise the diff service to compare two configs rather than two versions, exposed as `POST /config/diff`; (b) client-side text diff of `optimized_yaml` against the head's YAML | **(a)**. §4 calls this "the single most important anti-footgun in the app"; a text diff cannot produce the section grouping that separates "the ticker moved" from "an RSI window moved by one" |
+| D-17 | **Promote diff (§2.4)** | (a) generalise the diff service to compare two configs rather than two versions, exposed as `POST /config/diff`; (b) client-side text diff of `optimized_yaml` against the head's YAML | **(a)** — **decided, built**. §4 calls this "the single most important anti-footgun in the app"; a text diff cannot produce the section grouping that separates "the ticker moved" from "an RSI window moved by one" |
 | D-18 | **Charting library** | Not yet chosen. §5.7 forbids dual axes, requires shared crosshair/brush across charts 1–3, zero-inclusive axes, and PNG export | Decide at the top of phase 7, not now. Phases 4–6 need no charts beyond the run views' inline equity/drawdown, which the same choice will serve |
 
 D-14, D-15 and D-17 are engine- and API-side work inside a UI plan. That is expected — the brief's
@@ -207,6 +207,15 @@ metric-across-versions chart; and the two permanent warnings about iterated sear
 The Δ rules get unit tests before the table renders. Every one of them is a rule about refusing
 to show a number, and a comparison table that quietly compares the wrong two runs is precisely
 the "authoritative and wrong" output the project is organised against.
+
+**Check before building the timeline:** the two diffs canonicalise differently. `POST
+/config/diff` compares both sides through the YAML writer (spec §15.1, amended 2026-08-17);
+`GET /strategies/{id}/diff` compares the *stored* configs. Where both sides were written by
+`save_version` that is consistent, but an imported config is stored as the user wrote it, so a
+diff between an import and a later save may report defaults the user merely omitted —
+`execution.risk_free_rate: null → 0.04` — as though they were edits. Verify against a real
+imported strategy before the timeline renders change summaries; if it reproduces, the fix is to
+canonicalise the version diff the same way, and it is a spec amendment, not a UI workaround.
 
 ---
 

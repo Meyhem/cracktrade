@@ -13,6 +13,8 @@ import {
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { useMeta } from '../../api/metaContext'
+import { useSearchableCount } from '../../api/config'
+import { useStrategyContext } from '../strategy/context'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { duration, runKindLabel } from '../../lib/format'
 import { useLaunchRun } from './queries'
@@ -45,19 +47,18 @@ export function LaunchRunModal({
   opened,
   onClose,
   kind,
-  strategyId,
-  /** Empty when every numeric field is pinned; the engine refuses to search nothing. */
-  searchableParameters,
 }: {
   opened: boolean
   onClose: () => void
   kind: RunKind
-  strategyId: string
-  searchableParameters: number
 }) {
+  const strategy = useStrategyContext()
   const { meta, defaultsFor } = useMeta()
   const launch = useLaunchRun()
   const defaults = defaultsFor(kind)
+  // Zero when every numeric field is pinned; the engine refuses to search nothing. `null`
+  // while the answer is still in flight, which is not the same fact and must not read as one.
+  const searchableParameters = useSearchableCount(opened ? strategy.head.config : undefined)
 
   const [objective, setObjective] = useState(defaults.objective)
   const [epochs, setEpochs] = useState(defaults.epochs)
@@ -91,7 +92,7 @@ export function LaunchRunModal({
           : { objective, epochs, folds, scheme }
 
     launch.mutate(
-      { strategyId, kind, params },
+      { strategyId: strategy.id, kind, params },
       {
         onSuccess: (run) => {
           notifications.show({

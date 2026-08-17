@@ -143,13 +143,7 @@ export function RunsTab({ kind }: { kind: RunKind }) {
         </Table>
       )}
 
-      <LaunchRunModal
-        kind={kind}
-        onClose={() => setLaunchOpen(false)}
-        opened={launchOpen}
-        searchableParameters={1}
-        strategyId={strategy.id}
-      />
+      <LaunchRunModal kind={kind} onClose={() => setLaunchOpen(false)} opened={launchOpen} />
     </>
   )
 }

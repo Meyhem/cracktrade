@@ -1,4 +1,4 @@
-import type { EngineMeta, Run, StrategyRow } from '../api/types'
+import type { EngineMeta, Run, StrategyDetail, StrategyRow } from '../api/types'
 
 /**
  * Fixtures shaped like the real payloads.
@@ -96,6 +96,33 @@ export function strategyRow(overrides: Partial<StrategyRow> = {}): StrategyRow {
     last_run_kind: 'optimize',
     last_run_status: 'succeeded',
     last_run_at: '2026-08-17T08:00:00Z',
+    ...overrides,
+  }
+}
+
+export function strategyDetail(overrides: Partial<StrategyDetail> = {}): StrategyDetail {
+  return {
+    id: '11111111-1111-1111-1111-111111111111',
+    name: 'rsi_pullback',
+    created_at: '2026-08-01T09:00:00Z',
+    lineage: { origin: 'authored' },
+    origin_not_credible: false,
+    head: {
+      version: 3,
+      origin: 'edited',
+      restored_from: null,
+      note: null,
+      created_at: '2026-08-17T09:00:00Z',
+      config: {
+        strategy: { name: 'rsi_pullback' },
+        universe: { ticker: 'NVDA', start_date: '2023-01-01', end_date: '2025-12-31' },
+      },
+      yaml: 'strategy:\n  name: rsi_pullback\n',
+    },
+    counts: { versions: 3, backtest: 1, optimize: 2, walk_forward: 0 },
+    verdict: { state: 'unvalidated', failures: [], checks: [] },
+    verdict_run_id: null,
+    promoted_warning: null,
     ...overrides,
   }
 }

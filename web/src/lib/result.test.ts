@@ -6,6 +6,7 @@ import {
   closedTrades,
   figuresOf,
   metricsOf,
+  optimizationResult,
   tradesOf,
   validationResult,
 } from './result'
@@ -87,6 +88,46 @@ describe('trades', () => {
     const broken = tradesOf({ trades: [{ entry_date: '2020-01-01', is_open: 'False' }] })
     expect(broken[0]?.isOpen).toBe(false)
     expect(closedTrades(broken)).toHaveLength(1)
+  })
+})
+
+describe('the optimization result', () => {
+  it('names the parameters that finished on a bound', () => {
+    // `parameters_at_bound` is a list of ParameterChange objects, not of names. Read as
+    // strings it filtered down to nothing every time, which left the "widen the range and run
+    // again" warning permanently hidden while the per-row badge kept rendering — a missing
+    // warning that looked exactly like a run with nothing to warn about.
+    const result = optimizationResult({
+      parameters_at_bound: [
+        { path: 'indicators.sma_long.window', old_value: 200, new_value: 300, at_bound: true },
+      ],
+    })
+    expect(result.parametersAtBound).toEqual(['indicators.sma_long.window'])
+  })
+
+  it('reports no benchmark for a run recorded before the engine computed one', () => {
+    // Older runs are not backfilled (D-16). Null has to stay null: `improvement_pct` answers
+    // whether the search did anything, and passing it off as the benchmark would answer a
+    // different question under the same label.
+    expect(optimizationResult({ improvement_pct: 4 }).benchmark).toBeNull()
+  })
+})
+
+describe('the folds of a walk-forward', () => {
+  it('keeps each fold’s trades with the fold that took them', () => {
+    const report = validationResult({
+      folds: [
+        { index: 0, trades: [{ entry_date: '2021-03-02', pnl: 12, is_open: false }] },
+        { index: 1, trades: [{ entry_date: '2022-06-08', pnl: -4, is_open: false }] },
+      ],
+    })
+    expect(report.folds[0]?.trades.map((trade) => trade.pnl)).toEqual([12])
+    expect(report.folds[1]?.trades.map((trade) => trade.pnl)).toEqual([-4])
+  })
+
+  it('reads a fold recorded before trades were kept as an empty list', () => {
+    const report = validationResult({ folds: [{ index: 0, metrics: { total_trades: 9 } }] })
+    expect(report.folds[0]?.trades).toEqual([])
   })
 })
 

@@ -5,6 +5,7 @@ import { StrategyLayout } from '../features/strategy/StrategyLayout'
 import { RunsTab } from '../features/runs/RunsTab'
 import { RunViewPage } from '../features/runs/RunViewPage'
 import { ConfigTab } from '../features/config/ConfigTab'
+import { ChartsTab } from '../features/charts/ChartsTab'
 import { ComingSoon } from '../components/ComingSoon'
 
 /**
@@ -30,7 +31,7 @@ export const router = createBrowserRouter([
           { path: 'optimizations', element: <RunsTab kind="optimize" /> },
           { path: 'backtests', element: <RunsTab kind="backtest" /> },
           { path: 'validation', element: <RunsTab kind="walk_forward" /> },
-          { path: 'charts', element: <ComingSoon what="The charts tab" /> },
+          { path: 'charts', Component: ChartsTab },
           { path: 'history', element: <ComingSoon what="The version history" /> },
           { path: 'runs/:runId', Component: RunViewPage },
         ],

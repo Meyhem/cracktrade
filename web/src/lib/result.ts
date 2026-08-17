@@ -266,8 +266,17 @@ export type ParameterChange = {
   atBound: boolean
 }
 
-export function changesOf(source: Json | null): ParameterChange[] {
-  return records(source, 'changes').map((entry) => ({
+/**
+ * The parameter diff.
+ *
+ * `key` exists because the engine publishes the same shape twice: `changes` is every parameter
+ * the search touched, and the `parameters_at_bound` property is the subset that finished on an
+ * edge — a list of `ParameterChange` objects, not of names. Read as strings it came back empty
+ * every time, which silently disabled the "widen the range and run again" warning while the
+ * per-row badge beside it kept working, so nothing looked broken.
+ */
+export function changesOf(source: Json | null, key = 'changes'): ParameterChange[] {
+  return records(source, key).map((entry) => ({
     path: text(entry, 'path') ?? '',
     oldValue: number(entry, 'old_value'),
     newValue: number(entry, 'new_value'),
@@ -288,6 +297,15 @@ export type Fold = {
   trainMetrics: Metrics | null
   parameters: Record<string, number | null>
   wasProfitable: boolean | null
+  /**
+   * This fold's own trades, and only this fold's.
+   *
+   * Empty for a run recorded before the engine kept them (spec §12.9, decided 2026-08-17);
+   * nothing backfills one, so a screen reading this must treat empty as "not recorded" rather
+   * than as "took no trades" — `foldTrades` in `features/charts/series.ts` is where that
+   * distinction is drawn.
+   */
+  trades: Trade[]
 }
 
 export function foldsOf(source: Json | null): Fold[] {
@@ -305,6 +323,7 @@ export function foldsOf(source: Json | null): Fold[] {
         Object.entries(parameters).map(([path, value]) => [path, asNumber(value)]),
       ),
       wasProfitable: flag(entry, 'was_profitable'),
+      trades: tradesOf(entry),
     }
   })
 }
@@ -497,6 +516,15 @@ export type OptimizationResult = {
   improvementPct: number | null
   overfittingGapPct: number | null
   parametersAtBound: string[]
+  /**
+   * Buying and holding across the same test window.
+   *
+   * Null for a run recorded before the engine computed one (spec §9.5, amended 2026-08-17).
+   * Null is the honest rendering: `improvementPct` beside it answers whether the search did
+   * anything, and a screen that filled the gap by subtracting the baseline would be labelling
+   * that answer as the other one.
+   */
+  benchmark: Benchmark | null
 }
 
 export function optimizationResult(source: Json | null): OptimizationResult {
@@ -521,9 +549,8 @@ export function optimizationResult(source: Json | null): OptimizationResult {
     mostCommonFailure: text(source, 'most_common_failure'),
     improvementPct: number(source, 'improvement_pct'),
     overfittingGapPct: number(source, 'overfitting_gap_pct'),
-    parametersAtBound: asArray(field(source, 'parameters_at_bound'))
-      .map(asString)
-      .filter((name): name is string => name !== null),
+    parametersAtBound: changesOf(source, 'parameters_at_bound').map((change) => change.path),
+    benchmark: benchmarkOf(source),
   }
 }
 

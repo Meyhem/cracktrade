@@ -114,10 +114,29 @@ describe('the optimization view', () => {
   })
 
   it('warns when a parameter finished on the edge of its range', () => {
+    // The engine serialises this property as a list of `ParameterChange` *objects*, not of
+    // names. The fixture used to say strings, which is what let a reader that filtered them
+    // out pass: the banner never rendered against a real payload, while the per-row badge
+    // beside it did, so nothing looked broken.
     renderWithProviders(
-      <OptimizationView result={result({ parameters_at_bound: ['indicators.sma.window'] })} />,
+      <OptimizationView
+        result={result({
+          parameters_at_bound: [
+            {
+              path: 'indicators.sma.window',
+              old_value: 20,
+              new_value: 30,
+              low: 10,
+              high: 30,
+              moved: true,
+              at_bound: true,
+            },
+          ],
+        })}
+      />,
     )
     expect(screen.getByText(/the range was the binding constraint/i)).toBeInTheDocument()
+    expect(screen.getByText(/indicators\.sma\.window/)).toBeInTheDocument()
   })
 
   it('still shows what the search did when the figures are suppressed', () => {

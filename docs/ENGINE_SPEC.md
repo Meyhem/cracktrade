@@ -1715,6 +1715,38 @@ from one strategy.
 An interface offering a fold selector therefore scopes its trade-level views to the selected
 fold, and shows nothing rather than a pooled aggregate when no fold is selected.
 
+### 12.10 Comparing versions of one strategy
+
+**[NEW — decided 2026-08-17.]** An interface that tabulates a strategy's versions against each
+other is running a search, and the rules that make one honest belong here rather than in a
+screen.
+
+**One run speaks for a version, and it is the latest, not the best.** Optimization and
+walk-forward runs are seeded searches: running one three times against an unchanged config
+produces three different answers. Reporting the maximum over them is choosing the best of *N*
+trials, uncounted by §12.3's trial count and invisible in the result — so a version would be
+rewarded for having been run more often, on the same screen that warns against exactly that.
+Recency is not a function of the outcome; it also reads the freshest price data and is the
+answer the user last saw. Where a version has more than one run of the kind, the count is shown.
+
+**A movement between two versions may only be computed between comparable runs**: the same run
+kind, the same objective, and — where applicable — the same fold count and scheme. Where the
+nearest earlier version's run is not comparable, the comparison walks back to one that is and
+names the versions it stepped over; where none exists, it reports no movement and says why. It
+never falls back across run kinds. A version with no run of the selected kind reports nothing,
+not zero and not its neighbour's figures, and below the trade floor (§8) the trade count is the
+only figure it shows.
+
+**Two runs whose price-frame digests differ (§4.4) carry a caveat**, because prices are
+retroactively adjusted and a version can appear to have improved when only the history moved.
+
+**A walk-forward has no combined drawdown, Sharpe or excess over buy-and-hold**, and an
+interface must leave those blank rather than assemble one. `ValidationReport` publishes per-fold
+metrics and a benchmark and nothing else, for the reason §8.1 gives: each fold re-optimizes, so
+there is no single equity curve to measure. Averaging folds, or borrowing `DeflatedSharpe.observed`
+— which is a *per-period* Sharpe where `Metrics.sharpe_ratio` is annualised — would produce a
+number that looked exactly like the backtest column beside it and meant something else.
+
 ---
 
 ## 13. Interface surface

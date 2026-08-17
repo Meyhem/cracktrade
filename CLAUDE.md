@@ -11,10 +11,12 @@ substance lives in the library; interfaces only parse and render.
 
 **`docs/ENGINE_SPEC.md` is the contract.** It is normative, not a summary. If the code and the
 spec disagree, one of them is a bug — decide which, fix it, and record the decision in the spec.
-Never let them drift silently. It is also the only normative document: the phased build plan and
-the reverse-engineering spec that preceded it were deleted once the build finished, so a decision
-that is not in the spec is not recorded anywhere. `docs/AUDIT.md` is a dated review, kept as
-history rather than as a live checklist.
+Never let them drift silently. It is also the only normative document: the reverse-engineering
+spec, the engine's phased build plan and the web UI's were each deleted once the build they
+described finished, so a decision that is not in the spec is not recorded anywhere.
+`docs/UI_PROMPT.md` is the UI brief — an input, kept for what the screens were asked to say, and
+not a record of what was decided. `docs/AUDIT.md` is a dated review, kept as history rather than
+as a live checklist.
 
 **Verify library behaviour, never assume it.** Several defaults in vectorbt 1.0.0 are actively
 wrong for this engine and were found only by probing: `signals.clean` deletes an exit that collides

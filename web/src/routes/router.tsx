@@ -6,7 +6,7 @@ import { RunsTab } from '../features/runs/RunsTab'
 import { RunViewPage } from '../features/runs/RunViewPage'
 import { ConfigTab } from '../features/config/ConfigTab'
 import { ChartsTab } from '../features/charts/ChartsTab'
-import { ComingSoon } from '../components/ComingSoon'
+import { HistoryTab } from '../features/history/HistoryTab'
 
 /**
  * Routes.
@@ -32,7 +32,7 @@ export const router = createBrowserRouter([
           { path: 'backtests', element: <RunsTab kind="backtest" /> },
           { path: 'validation', element: <RunsTab kind="walk_forward" /> },
           { path: 'charts', Component: ChartsTab },
-          { path: 'history', element: <ComingSoon what="The version history" /> },
+          { path: 'history', Component: HistoryTab },
           { path: 'runs/:runId', Component: RunViewPage },
         ],
       },

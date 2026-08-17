@@ -74,7 +74,7 @@ Per legacy `uv.lock`, retained:
 | `pydantic` | ≥ 2.7 | schema |
 
 **[NEW — decided 2026-08-16.]** The `api` layer (§15) adds `fastapi`, `uvicorn`,
-`psycopg[binary,pool]` (raw SQL, no ORM — §15.3 D-6), and `sse-starlette`, all `>=` pinned:
+`psycopg[binary,pool]` (raw SQL, no ORM — §15.4 D-6), and `sse-starlette`, all `>=` pinned:
 none of them shapes a result the way the engine pins above do. Any api-layer library behaviour
 a result depends on gets an exact pin plus a pinning test at the moment it is first relied on,
 same rule as everywhere.
@@ -1892,7 +1892,41 @@ depending on which run produced it.
 - **Stream discipline** (§13.2) applies to the API processes: diagnostics to stderr, structured,
   never into a response body.
 
-### 15.3 Process and access decisions
+### 15.3 Operational surface
+
+**Request identity.** Every response carries `x-request-id`; every log line written while
+handling that request carries the same id; every problem+json body repeats it. A user reporting
+a failure has, on screen, the token that finds the exact log lines — without guessing from a
+timestamp which of several concurrent requests was theirs. A client-supplied id is honoured so
+a trace survives a proxy, but only after being bounded and reduced to unreserved characters: a
+header is attacker-controlled input and a log file is read by tools that split on newlines. An
+over-long id is *replaced*, never truncated — a truncated id is a different id wearing the
+caller's.
+
+**Health.** `GET /api/v1/health` reports database reachability and migration state, `200` when
+both hold and `503` otherwise, with the reason in the body. Two consequences follow, and both
+are load-bearing:
+
+- It reads without writing. `plan` creates the ledger when it is absent, which is correct
+  before migrating and wrong for a check — an observation that creates a table has changed what
+  it was asked to observe. `inspect` is the read-only twin.
+- It takes the connection *pool*, not a unit of work. The unit-of-work dependency borrows a
+  connection before a route body runs, so a health route declaring it would fail with an
+  unexplained 500 in exactly the case the endpoint exists to describe.
+
+For the same reason the pool opens **without waiting** for its first connection: a server that
+refuses to start because the database blipped cannot be asked why it is unhappy. Start-up
+validation happens where it can act — `cracktrade-api serve` and `worker` both check
+reachability and the migration state *before* the call that never returns, and refuse to
+proceed against a half-applied schema.
+
+**Shutdown.** On `SIGINT`/`SIGTERM` the worker stops claiming and its in-flight run ends
+`cancelled` at the next checkpoint. That is a more accurate record than being killed and swept
+as abandoned a minute later: an operator stopped it deliberately, and `cancelled` says so while
+`engine_failure` would not. A second signal exits immediately, and the run it interrupts is
+failed honestly on lease expiry (§14.5) — which is what a killed worker should leave behind.
+
+### 15.4 Process and access decisions
 
 | # | Decision |
 | --- | --- |

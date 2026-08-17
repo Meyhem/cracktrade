@@ -1,6 +1,6 @@
 """``cracktrade-api`` command-line entry point.
 
-Three subcommands over one codebase (spec section 15.3, D-12):
+Three subcommands over one codebase (spec section 15.4, D-12):
 
 * ``serve``   -- the HTTP server;
 * ``worker``  -- the run executor, a separate process by design;
@@ -15,6 +15,7 @@ then they exit :data:`NOT_IMPLEMENTED` rather than printing a success they did n
 from __future__ import annotations
 
 import sys
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
@@ -29,7 +30,7 @@ from cracktrade.api.app import API_PREFIX
 from cracktrade.api.db.console import render_migrate, render_status, render_verify
 from cracktrade.api.db.migrate import plan
 from cracktrade.api.settings import load_api_settings
-from cracktrade.api.worker.runner import run_forever
+from cracktrade.api.worker.runner import run_forever, shutdown_on_signal
 from cracktrade.errors import CracktradeError
 from cracktrade.log import configure
 
@@ -154,7 +155,9 @@ def worker() -> None:
             raise typer.Exit(NOT_MIGRATED)
 
     err_console.print("worker ready; waiting for runs")
-    run_forever(settings)
+    halt = threading.Event()
+    with shutdown_on_signal(halt):
+        run_forever(settings, stop=halt)
 
 
 @db_app.command("migrate")

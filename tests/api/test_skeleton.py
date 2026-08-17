@@ -94,7 +94,7 @@ def test_defaults_match_the_compose_database() -> None:
 
 
 def test_binds_loopback_by_default() -> None:
-    """There is no authentication (spec section 15.3, D-5), so exposure must be deliberate."""
+    """There is no authentication (spec section 15.4, D-5), so exposure must be deliberate."""
     assert IsolatedApiSettings().host == "127.0.0.1"
 
 

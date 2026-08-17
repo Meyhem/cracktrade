@@ -1,6 +1,6 @@
 """Server-sent events, relayed from LISTEN/NOTIFY.
 
-The one genuinely asynchronous component (spec section 15.3, D-13). It owns an async
+The one genuinely asynchronous component (spec section 15.4, D-13). It owns an async
 connection of its own and needs no repository: it forwards notifications and nothing more.
 
 Clients that cannot use SSE poll ``GET /runs?status=queued,running`` instead, which is why the

@@ -1,10 +1,9 @@
-# cracktrade HTTP API — draft v1
+# cracktrade HTTP API
 
-**Status: proposal for review, not yet normative.** Once approved, the decisions here get
-recorded in `docs/ENGINE_SPEC.md` (the only normative document) and this file becomes the
-implementation reference. The schema it is served by is
-[`0001_initial.sql`](../src/cracktrade/api/db/migrations/0001_initial.sql), with its semantics
-normative in `docs/ENGINE_SPEC.md` §14.
+**Status: the endpoint reference for what shipped.** The normative semantics live in
+`docs/ENGINE_SPEC.md` §14 (persistence) and §15 (interface); this file describes shapes. Where
+the two disagree, the spec wins and this file is the bug. The schema is
+[`0001_initial.sql`](../src/cracktrade/api/db/migrations/0001_initial.sql).
 
 Scope: every endpoint the Claude-Design UI (`Cracktrade.dc.html`) needs — no more. The UI is a
 React + TypeScript + Mantine SPA; the API is a thin interface over the library, per the
@@ -28,7 +27,11 @@ fallback.
   `overfitting_gap_pct`, `at_bound`, ...). The API never reshapes or recomputes engine numbers.
   Non-finite floats are `null` (spec §13.1).
 - Timestamps ISO-8601 UTC (`2026-08-16T09:41:00Z`); dates plain `YYYY-MM-DD`; IDs are UUIDs.
-- Errors are `application/problem+json`: `{type, title, status, detail}`. Config-validation
+- Every response carries `x-request-id`; a client-supplied one is honoured (bounded and
+  reduced to unreserved characters) so a trace survives a proxy. Problem bodies repeat it as
+  `request_id`, because a user reporting a failure copies what is on the screen.
+- Errors are `application/problem+json`: `{type, title, status, detail, instance, request_id}`.
+  Config-validation
   failures additionally carry `errors: [{path, message, line?, suggestion?}]` — the spec §3.9
   contract (aggregated, dotted paths, YAML line where recoverable, did-you-mean for unknown
   keys) so the editor can attach each error to its field.
@@ -43,6 +46,21 @@ fallback.
 ---
 
 ## 1. Meta
+
+### `GET /health`
+
+Whether this process can do its job. `200` when the database is reachable and its schema is
+current, `503` otherwise — with the reason in the body either way.
+
+```jsonc
+{
+  "ok": true, "database": true, "migrations_current": true,
+  "applied_migrations": 1, "pending_migrations": [], "migration_refusal": null,
+  "version": "0.9.0"
+}
+```
+
+It reads without writing: reporting must not create the migration ledger it is inspecting.
 
 ### `GET /meta`
 

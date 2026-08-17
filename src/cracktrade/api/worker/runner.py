@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import signal
 import socket
 import threading
 import time
@@ -144,8 +145,15 @@ def claim_one(
     engine: Engine | None = None,
     provider: MarketDataProvider | None = None,
     engine_settings: Settings | None = None,
+    stop: threading.Event | None = None,
 ) -> RunRow | None:
-    """Claim and execute one run. ``None`` when the queue is empty."""
+    """Claim and execute one run. ``None`` when the queue is empty.
+
+    ``stop`` is the process's shutdown signal. It is folded into the run's cancellation
+    predicate, so a worker asked to shut down ends its in-flight run *cancelled* at the next
+    checkpoint rather than being killed and leaving the run to be swept as abandoned minutes
+    later. Cancelled is the more accurate record: an operator stopped it deliberately.
+    """
     with unit_of_work_on(connection) as work:
         claimed = RunRepo(work.connection).claim(worker_name())
     if claimed is None:
@@ -154,6 +162,7 @@ def claim_one(
     logger.info("claimed run %s (%s)", claimed.id, claimed.kind.value)
     notify_run(connection, claimed.id, claimed.strategy_id, "running")
 
+    halt = stop
     heartbeat = Heartbeat.for_run(settings.database_url, claimed, settings.worker_heartbeat_seconds)
     with heartbeat as beat:
         finished = execute(
@@ -162,7 +171,10 @@ def claim_one(
             engine=engine,
             provider=provider,
             settings=engine_settings,
-            control=RunControl(on_progress=beat.report, should_stop=lambda: beat.cancelled),
+            control=RunControl(
+                on_progress=beat.report,
+                should_stop=lambda: beat.cancelled or (halt is not None and halt.is_set()),
+            ),
         )
 
     notify_run(connection, finished.id, finished.strategy_id, finished.status.value)
@@ -185,10 +197,43 @@ def run_forever(
 
     with psycopg.connect(settings.database_url) as connection:
         while not halt.is_set():
-            executed = claim_one(connection, settings, provider=provider)
+            executed = claim_one(connection, settings, provider=provider, stop=halt)
             if executed is None:
                 sweep_expired(connection, settings.worker_lease_seconds)
                 halt.wait(settings.worker_poll_seconds)
+    logger.info("worker %s stopped", worker_name())
+
+
+@contextlib.contextmanager
+def shutdown_on_signal(halt: threading.Event) -> Iterator[None]:
+    """Turn SIGINT and SIGTERM into the worker's ordinary stop signal.
+
+    The first signal asks: no new runs are claimed and the in-flight one stops at its next
+    checkpoint, ending ``cancelled``. A second signal restores the default handler, so an
+    impatient operator still gets an immediate exit -- and the run it interrupts is swept and
+    failed honestly on lease expiry, which is what a killed worker should leave behind.
+
+    Only installed by the ``worker`` command: signal handlers are process-global, and a library
+    function that installed them would take them away from whatever embedded it.
+    """
+    previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+
+    def _ask_to_stop(number: int, _frame: object) -> None:
+        logger.warning(
+            "%s received; finishing the current run's checkpoint, then stopping. "
+            "Signal again to exit immediately.",
+            signal.Signals(number).name,
+        )
+        halt.set()
+        signal.signal(number, previous[signal.Signals(number)])
+
+    for number in previous:
+        signal.signal(number, _ask_to_stop)
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 @contextlib.contextmanager

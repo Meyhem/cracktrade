@@ -34,6 +34,12 @@ def work_of(request: Request) -> Iterator[UnitOfWork]:
         yield work
 
 
+#: The pool itself, for the one route that must answer when the database does not.
+#:
+#: Only ``/health`` should take this. Every other route wants :data:`Work`, whose transaction
+#: boundary is the point; a route holding the raw pool is a route that can forget to open one.
+Pool = Annotated[ConnectionPool[psycopg.Connection[TupleRow]], Depends(pool_of)]
+
 #: The unit-of-work dependency, as an annotation a route can declare directly.
 #:
 #: Routes take ``work: Work`` and never name the ``db`` layer themselves, which keeps the

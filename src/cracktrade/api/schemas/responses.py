@@ -17,6 +17,7 @@ from cracktrade.api.errors import FieldIssue
 from cracktrade.api.repos.rows import StrategyOverviewRow, VersionRow
 from cracktrade.api.services.config import ConfigReview
 from cracktrade.api.services.diff import Change, SectionDiff
+from cracktrade.api.services.health import Health
 from cracktrade.api.services.strategies import StrategyDetails
 from cracktrade.api.services.verdict import PromotedWarning, VerdictBlock
 from cracktrade.serialize import to_dict
@@ -347,6 +348,30 @@ class SavedVersion(BaseModel):
 
     version: VersionOut
     stale_runs: int
+
+
+class HealthResponse(BaseModel):
+    """What the process can honestly say about itself."""
+
+    ok: bool
+    database: bool
+    migrations_current: bool
+    applied_migrations: int
+    pending_migrations: list[str]
+    migration_refusal: str | None
+    version: str
+
+    @classmethod
+    def of(cls, report: Health) -> HealthResponse:
+        return cls(
+            ok=report.ok,
+            database=report.database,
+            migrations_current=report.migrations_current,
+            applied_migrations=report.applied,
+            pending_migrations=list(report.pending),
+            migration_refusal=report.refusal,
+            version=report.version,
+        )
 
 
 class MetaResponse(BaseModel):

@@ -251,6 +251,21 @@ def plan(
     return build_plan(discover(directory), _read_ledger(connection))
 
 
+def inspect(
+    connection: psycopg.Connection[TupleRow], directory: Path = MIGRATIONS_DIR
+) -> MigrationPlan:
+    """:func:`plan`, but writing nothing at all and needing no autocommit.
+
+    For the health endpoint, which runs on a pooled connection inside a transaction. ``plan``
+    creates the ledger if it is missing, which is right when the caller is about to migrate and
+    wrong when the caller is only reporting: a health check that creates a table has changed
+    the thing it was asked to observe. A missing ledger here simply means nothing is applied.
+    """
+    exists = connection.execute("SELECT to_regclass('schema_migrations')").fetchone()
+    applied = _read_ledger(connection) if exists and exists[0] is not None else ()
+    return build_plan(discover(directory), applied)
+
+
 def migrate(
     connection: psycopg.Connection[TupleRow], directory: Path = MIGRATIONS_DIR
 ) -> tuple[Migration, ...]:

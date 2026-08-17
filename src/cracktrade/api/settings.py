@@ -31,7 +31,7 @@ class ApiSettings(BaseSettings):
     database_url: str = DEFAULT_DATABASE_URL
 
     #: Interface the server binds to. Loopback by default: there is no authentication
-    #: (spec section 15.3, D-5), so the server must not be reachable off the machine by
+    #: (spec section 15.4, D-5), so the server must not be reachable off the machine by
     #: accident.
     host: str = "127.0.0.1"
     port: int = Field(default=8000, gt=0, lt=65536)
@@ -39,6 +39,11 @@ class ApiSettings(BaseSettings):
     #: Connection-pool bounds for the API process.
     pool_min_size: int = Field(default=1, ge=0)
     pool_max_size: int = Field(default=10, ge=1)
+
+    #: How long a request waits for a connection before failing. A request that cannot get one
+    #: should say so quickly rather than hang until the client gives up, leaving a request in
+    #: flight nobody is waiting on.
+    pool_timeout_seconds: float = Field(default=10.0, gt=0)
 
     #: How often a worker refreshes the lease on the run it is executing.
     worker_heartbeat_seconds: float = Field(default=10.0, gt=0)

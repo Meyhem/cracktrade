@@ -12,7 +12,7 @@ distinction between a race and a bug is made in one place.
 
 The unit of work deliberately does not know what a repository is: repositories are built on
 top of ``db``, so a unit of work that handed them out would invert the layering that spec
-section 15.3 states and ``tests/api/test_layering.py`` enforces.
+section 15.4 states and ``tests/api/test_layering.py`` enforces.
 """
 
 from __future__ import annotations

@@ -191,10 +191,45 @@ CRACKTRADE_API_TEST_DB_REQUIRED=1 uv run pytest -m db
 Each test runs against its own database, cloned from a session template and dropped afterwards,
 so tests cannot influence one another and none of them touch the development database.
 
+### Running the API
+
+Apply the schema once, then start the two processes. They are separate on purpose: a
+walk-forward is minutes of CPU-bound work and must not sit inside a request.
+
+```bash
+uv run cracktrade-api db migrate
+```
+
+```bash
+uv run cracktrade-api serve
+```
+
+```bash
+uv run cracktrade-api worker
+```
+
+`serve` binds to loopback and there is no authentication (spec §15.4, D-5). Both commands
+refuse to start against a database with pending migrations, before the call that never
+returns — a process serving requests against half a schema fails later, inside a request, and
+far less clearly.
+
+The interactive docs are at `http://127.0.0.1:8000/api/v1/docs`, and
+`GET /api/v1/health` reports whether the database is reachable and its schema current:
+
+```bash
+curl -s localhost:8000/api/v1/health
+```
+
+Stop the worker with Ctrl-C: it finishes the current run's checkpoint and records it as
+`cancelled`, rather than being killed and swept as abandoned a minute later. Signal twice to
+exit at once.
+
+`docs/API.md` is the endpoint reference; the normative semantics are spec §14–§15.
+
 ## Status
 
-The engine, optimizer and validation suite are complete. The HTTP interface and persistence are
-being built now, phase by phase, against `docs/API_BUILD_PLAN.md`; AI-assisted strategy
-generation and the web UI come after. The core is a library and the CLI is one consumer of it,
-so adding another interface does not mean moving any logic — the engine stays stateless, and
-what the API stores is the engine's own serialized output.
+The engine, optimizer, validation suite, HTTP interface and persistence are complete. The web
+UI (React + TypeScript + Mantine) and AI-assisted strategy generation come next. The core is a
+library and the CLI is one consumer of it, so adding another interface did not mean moving any
+logic — the engine stays stateless, and what the API stores is the engine's own serialized
+output.

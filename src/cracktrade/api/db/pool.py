@@ -1,6 +1,6 @@
 """Connection pooling.
 
-Synchronous, per spec section 15.3 D-13: the server and the worker share one data layer, and
+Synchronous, per spec section 15.4 D-13: the server and the worker share one data layer, and
 an async pool for one of them would mean two implementations of every repository.
 
 The pool is owned by the process, opened once at start-up and closed at shutdown. Nothing
@@ -29,20 +29,29 @@ def build_pool(
     """Create the process's connection pool.
 
     ``open_now`` is false in tests that want to construct a pool without reaching a server.
+
+    Opening does **not** wait for the first connection. A server that refuses to start because
+    the database was briefly unreachable is a server that cannot be asked *why* it is unhappy:
+    the health endpoint is the thing that answers that, and it has to be reachable to do so.
+    Startup validation still happens, in the place that can act on it -- ``cracktrade-api
+    serve`` checks reachability and the migration state before binding a port at all.
     """
     pool: ConnectionPool[psycopg.Connection[TupleRow]] = ConnectionPool(
         conninfo=settings.database_url,
         min_size=settings.pool_min_size,
         max_size=settings.pool_max_size,
         open=False,
-        # A request that cannot get a connection should fail quickly and say so, rather than
-        # hanging until the client gives up and leaves a request in flight nobody is waiting on.
-        timeout=10.0,
+        timeout=settings.pool_timeout_seconds,
         name="cracktrade",
     )
     if open_now:
-        pool.open(wait=True, timeout=10.0)
-        logger.info("database pool open (%d-%d)", settings.pool_min_size, settings.pool_max_size)
+        pool.open(wait=False)
+        logger.info(
+            "database pool opened (%d-%d, %.0fs timeout)",
+            settings.pool_min_size,
+            settings.pool_max_size,
+            settings.pool_timeout_seconds,
+        )
     return pool
 
 

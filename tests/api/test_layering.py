@@ -1,6 +1,6 @@
 """The API layer's dependency direction, asserted rather than agreed.
 
-Spec section 15.3 states ``routes -> services -> repos -> db``, with the engine reachable only
+Spec section 15.4 states ``routes -> services -> repos -> db``, with the engine reachable only
 from services and the worker. That is the kind of rule which holds until the afternoon someone
 needs one value from a repository inside a route, so it is checked by scanning imports rather
 than by review alone.
@@ -94,7 +94,7 @@ def test_layer_imports_flow_downward(module: Path) -> None:
         target = parts[2]
         assert target in allowed, (
             f"{module.name} is in the '{layer}' layer and may not import "
-            f"cracktrade.api.{target} (spec section 15.3)"
+            f"cracktrade.api.{target} (spec section 15.4)"
         )
 
 
@@ -109,7 +109,7 @@ def test_only_services_and_the_worker_reach_the_engine(module: Path) -> None:
         if len(parts) >= 2 and parts[1] in ENGINE_PACKAGES:
             pytest.fail(
                 f"{module.name} is in the '{layer}' layer and may not import the engine "
-                f"module {name} (spec section 15.3)"
+                f"module {name} (spec section 15.4)"
             )
 
 

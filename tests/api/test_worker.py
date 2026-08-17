@@ -13,6 +13,7 @@ series intact.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -130,6 +131,9 @@ class FakeEngine:
     ) -> tuple[dict[str, Any], tuple[RunSeries, ...], bool | None, bool | None]:
         self.saw_control = control
         control.progress("working", 50.0)
+        # The real engine checks between generations and folds; this stands in for one such
+        # checkpoint, which is what makes a stop request observable in a test.
+        control.raise_if_cancelled()
         if self.raises is not None:
             raise self.raises
         return self.result, self.series, self.credible, self.suppressed
@@ -310,6 +314,32 @@ def test_a_cancelled_run_produces_no_result(db: psycopg.Connection[TupleRow]) ->
     assert finished.status is RunStatus.CANCELLED
     assert finished.result is None
     assert finished.error is None
+
+
+def test_a_shutdown_signal_cancels_the_run_in_flight(
+    db: psycopg.Connection[TupleRow], db_url: str
+) -> None:
+    """A worker asked to stop ends its run *cancelled*, not abandoned.
+
+    The alternative is being killed mid-run and leaving the row to be swept and failed on lease
+    expiry a minute later. Both records are honest, but this one is more accurate: an operator
+    stopped it deliberately, and saying so distinguishes it from a crash.
+    """
+    _queue(db, _seed(db), RunKind.OPTIMIZE)
+    halt = threading.Event()
+    halt.set()
+
+    finished = claim_one(
+        db,
+        ApiSettings(database_url=db_url, worker_heartbeat_seconds=0.05),
+        engine=FakeEngine(),
+        provider=_provider(),
+        stop=halt,
+    )
+
+    assert finished is not None
+    assert finished.status is RunStatus.CANCELLED
+    assert finished.result is None
 
 
 # --------------------------------------------------------------------------- leases

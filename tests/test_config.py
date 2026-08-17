@@ -58,7 +58,7 @@ def issues_from(data: dict[str, Any]) -> list[str]:
 # ------------------------------------------------------------------ happy path
 
 
-@pytest.mark.parametrize("name", ["momentum_breakout.yaml", "rsi_pullback.yaml"])
+@pytest.mark.parametrize("name", sorted(path.name for path in EXAMPLES.glob("*.yaml")))
 def test_shipped_examples_validate(name: str) -> None:
     strategy = read_strategy_file(EXAMPLES / name)
     assert strategy.universe.ticker

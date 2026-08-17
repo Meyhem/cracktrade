@@ -1,0 +1,29 @@
+strategy:
+  name: spy_trend_regime_v1
+
+universe:
+  ticker: SPY
+  start_date: "2007-01-01"
+  end_date: "2026-08-16"
+
+execution:
+  initial_capital: 10000.0
+  slippage_pct: 0.1
+  commission_pct: 0.05
+  risk_free_rate: 0.04
+
+indicators:
+  - name: sma_trend
+    type: sma
+    source: close
+    window: 200
+
+entry:
+  signal: "close > sma_trend"
+
+exit:
+  signal: "close < sma_trend"
+
+position_sizing:
+  type: fixed_pct
+  value: 100.0

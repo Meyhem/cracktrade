@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Badge, Group, SegmentedControl, Stack, Table, Text } from '@mantine/core'
 import type { Trade } from '../../../lib/result'
+import { ExplainedLabel } from '../../../components/Explain'
+import type { TermKey } from '../../../lib/glossary'
 import { dateOnly, integer, money, percent } from '../../../lib/format'
 
 /**
@@ -13,17 +15,17 @@ import { dateOnly, integer, money, percent } from '../../../lib/format'
 
 type Filter = 'all' | 'winners' | 'losers' | 'open'
 
-const COLUMNS = [
-  'Entry',
-  'Exit',
-  'Entry price',
-  'Exit price',
-  'Size',
-  'PnL',
-  'Return',
-  'Fees',
-  'Days',
-] as const
+const COLUMNS: { term: TermKey; label: string }[] = [
+  { term: 'trade_entry', label: 'Entry' },
+  { term: 'trade_exit', label: 'Exit' },
+  { term: 'trade_entry', label: 'Entry price' },
+  { term: 'trade_exit', label: 'Exit price' },
+  { term: 'trade_size', label: 'Size' },
+  { term: 'trade_pnl', label: 'PnL' },
+  { term: 'trade_return', label: 'Return' },
+  { term: 'trade_fees', label: 'Fees' },
+  { term: 'trade_duration', label: 'Days' },
+]
 
 /**
  * A stable identity for a row.
@@ -91,7 +93,9 @@ export function TradeList({ trades }: { trades: Trade[] }) {
         <Table.Thead>
           <Table.Tr>
             {COLUMNS.map((column) => (
-              <Table.Th key={column}>{column}</Table.Th>
+              <Table.Th key={column.label}>
+                <ExplainedLabel label={column.label} term={column.term} />
+              </Table.Th>
             ))}
           </Table.Tr>
         </Table.Thead>

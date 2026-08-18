@@ -1,5 +1,16 @@
 import { useState } from 'react'
-import { Anchor, Button, Card, Center, Group, Loader, Stack, Text, Title } from '@mantine/core'
+import {
+  Anchor,
+  Button,
+  Card,
+  Center,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Title,
+  Tooltip,
+} from '@mantine/core'
 import { Link, useParams } from 'react-router'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { StaleBadge } from '../../components/StaleBadge'
@@ -13,6 +24,7 @@ import { OptimizationView } from './view/OptimizationView'
 import { ValidationView } from './view/ValidationView'
 import { PromoteRunModal } from './PromoteRunModal'
 import { asString, field } from '../../lib/result'
+import { explanationOf } from '../../lib/glossary'
 
 /**
  * One run.
@@ -62,9 +74,11 @@ export function RunViewPage() {
             See all charts
           </Anchor>
           {run.promotable && (
-            <Button onClick={() => setPromoteOpen(true)} size="xs">
-              Promote to strategy
-            </Button>
+            <Tooltip label={explanationOf('promote')} multiline w={280}>
+              <Button onClick={() => setPromoteOpen(true)} size="xs">
+                Promote to strategy
+              </Button>
+            </Tooltip>
           )}
         </Group>
       </Group>

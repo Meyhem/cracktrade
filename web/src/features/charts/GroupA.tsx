@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Group, Stack, Switch, Text } from '@mantine/core'
 import { ChartCard } from './ChartCard'
+import { explanationOf } from '../../lib/glossary'
 import {
   CROSSHAIR,
   GRID,
@@ -165,10 +166,12 @@ function EquityChart({
       question="Did this strategy beat simply owning the ticker over the same bars?"
       state={state}
       title="Equity against buy-and-hold"
+      term="equity_curve"
       footer={
         <Group justify="space-between">
           <Switch
             checked={logScale}
+            description={explanationOf('log_scale')}
             label="Logarithmic scale"
             onChange={(event) => onLogScale(event.currentTarget.checked)}
             size="xs"
@@ -229,6 +232,7 @@ function DrawdownChart({
       question="How far below its previous best did the account sit, and for how long?"
       state={state}
       title="Drawdown"
+      term="drawdown"
       footer={
         worst && (
           <Text c="dimmed" size="xs">
@@ -326,6 +330,7 @@ function PriceChart({
       question="Where did it buy and sell, and how much of the time was it holding anything?"
       state={state}
       title="Price with trade markers"
+      term="price_with_markers"
       footer={
         <Text c="dimmed" size="xs">
           Entries are triangles, exits are diamonds, shaded bands are time in the market.

@@ -4,6 +4,7 @@ import { ProblemAlert } from '../../components/ProblemAlert'
 import { useValidatedConfig } from '../../api/config'
 import { useStrategyContext } from './context'
 import { ratio } from '../../lib/format'
+import { ExplainedLabel } from '../../components/Explain'
 
 /**
  * Checking a configuration without running anything.
@@ -86,9 +87,15 @@ export function ValidateConfigModal({ opened, onClose }: { opened: boolean; onCl
                 <Table>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Parameter</Table.Th>
-                      <Table.Th>Now</Table.Th>
-                      <Table.Th>Search range</Table.Th>
+                      <Table.Th>
+                        <ExplainedLabel term="parameter" />
+                      </Table.Th>
+                      <Table.Th>
+                        <ExplainedLabel term="value_after" />
+                      </Table.Th>
+                      <Table.Th>
+                        <ExplainedLabel term="search_range" />
+                      </Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>

@@ -5,6 +5,8 @@ import { putAt, stringAt, type Path } from './document'
 import { issuesAt } from './issues'
 import { numericLiterals, parenthesiseComparisons, referencedNames } from './signal'
 import { anchorId, type SectionProps } from './section'
+import { Explain } from '../../components/Explain'
+import type { TermKey } from '../../lib/glossary'
 
 /**
  * The signal expression editor.
@@ -25,11 +27,13 @@ export function SignalField({
   path,
   placeholder,
   section,
+  term,
 }: {
   label: string
   path: Path
   placeholder?: string
   section: SectionProps
+  term?: TermKey
 }) {
   const dotted = path.join('.')
   const expression = stringAt(section.value, path) ?? ''
@@ -60,9 +64,12 @@ export function SignalField({
 
   return (
     <Stack data-field={dotted} gap="xs" id={anchorId(dotted)}>
-      <Text fw={500} size="sm">
-        {label}
-      </Text>
+      <Group gap={4} wrap="nowrap">
+        <Text fw={500} size="sm">
+          {label}
+        </Text>
+        {term && <Explain term={term} />}
+      </Group>
 
       <Textarea
         aria-label={label}

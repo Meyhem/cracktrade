@@ -112,6 +112,7 @@ function FoldReturnsChart({ report }: { report: ValidationResult }) {
       question="Did it make money on the slices it was never fitted to?"
       state={requires(folds.length > 0, 'The fold results')}
       title="Fold returns"
+      term="fold_returns"
       footer={
         <Text c="dimmed" size="xs">
           Profitable in {report.profitableFolds ?? 0} of {folds.length} folds. The hollow bar behind
@@ -166,6 +167,7 @@ function ParameterDriftChart({ report }: { report: ValidationResult }) {
       question="Did the folds agree on where the optimum is?"
       state={requires(drift.length > 0, 'Per-fold parameters')}
       title="Parameter drift across folds"
+      term="parameter_drift"
       footer={
         <Text c="dimmed" size="xs">
           Each parameter is rescaled within its own range across the folds, because a 200-bar window
@@ -253,6 +255,7 @@ function StabilityChart({ report, threshold }: { report: ValidationResult; thres
       question="Is the optimum a plateau you could land near, or a spike you had to hit exactly?"
       state={requires(points.length > 0, 'The stability surface')}
       title="Parameter stability plateau"
+      term="stability_plateau"
       footer={
         <Text c="dimmed" size="xs">
           The lower dashed line is {Math.round(threshold * 100)}% below the baseline objective — a
@@ -312,6 +315,7 @@ function CostLadderChart({ report }: { report: ValidationResult }) {
       question="How much more could trading cost before this stops making money?"
       state={requires(scenarios.length > 0, 'The cost sensitivity scenarios')}
       title="Cost ladder"
+      term="cost_ladder"
       footer={
         <Text c="dimmed" size="xs">
           {breakEven === null
@@ -378,6 +382,7 @@ function LuckChart({ report, significance }: { report: ValidationResult; signifi
       question="Is this Sharpe better than what a search of this many trials produces from no edge at all?"
       state={requires(observed !== null, 'The deflated Sharpe')}
       title="Deflated Sharpe"
+      term="deflated_sharpe"
       footer={
         <Stack gap={4}>
           <Text size="xs">

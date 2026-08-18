@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import { Group, NumberInput, Stack, Text, TextInput } from '@mantine/core'
+import { Explain } from '../../components/Explain'
+import type { TermKey } from '../../lib/glossary'
 import { numberAt, putAt, stringAt, type Path } from './document'
 import { anchorId, matching, NO_ISSUES, NO_PATHS, type SectionProps } from './section'
 import type { Issue } from '../../api/types'
@@ -20,6 +22,7 @@ export function Field({
   hint,
   label,
   path,
+  term,
   warnings = NO_ISSUES,
 }: {
   children: ReactNode
@@ -31,15 +34,20 @@ export function Field({
   label: string
   /** The dotted path, used as the scroll anchor the issue summary jumps to. */
   path: string
+  /** The glossary entry explaining this field. Absent only where the label is a free name. */
+  term?: TermKey
   warnings?: Issue[]
 }) {
   return (
     <Stack data-field={path} gap={4} id={anchorId(path)}>
       <Group align="flex-end" gap="sm" justify="space-between" wrap="nowrap">
         <Stack gap={2} style={{ flex: 1 }}>
-          <Text fw={500} size="sm">
-            {label}
-          </Text>
+          <Group gap={4} wrap="nowrap">
+            <Text fw={500} size="sm">
+              {label}
+            </Text>
+            {term && <Explain term={term} />}
+          </Group>
           {children}
         </Stack>
         {control && <div style={{ paddingBottom: 4 }}>{control}</div>}
@@ -72,6 +80,7 @@ export function NumberField({
   section,
   step,
   suffix,
+  term,
 }: {
   /** Other dotted paths the server may address this same field by. */
   aliases?: string[]
@@ -84,6 +93,7 @@ export function NumberField({
   step?: number
   /** Rendered inside the input, because a percentage that looks like a fraction is a footgun. */
   suffix?: string
+  term?: TermKey
 }) {
   const dotted = path.join('.')
   const addressed = [dotted, ...aliases]
@@ -98,6 +108,7 @@ export function NumberField({
       label={label}
       path={dotted}
       warnings={matching(section.validation?.warnings ?? [], addressed)}
+      {...(term === undefined ? {} : { term })}
     >
       <NumberInput
         aria-label={label}
@@ -130,6 +141,7 @@ export function TextField({
   path,
   placeholder,
   section,
+  term,
 }: {
   aliases?: string[]
   description?: ReactNode
@@ -137,6 +149,7 @@ export function TextField({
   path: Path
   placeholder?: string
   section: SectionProps
+  term?: TermKey
 }) {
   const dotted = path.join('.')
   const addressed = [dotted, ...aliases]
@@ -148,6 +161,7 @@ export function TextField({
       label={label}
       path={dotted}
       warnings={matching(section.validation?.warnings ?? [], addressed)}
+      {...(term === undefined ? {} : { term })}
     >
       <TextInput
         aria-label={label}

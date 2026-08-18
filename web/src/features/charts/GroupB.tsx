@@ -106,6 +106,7 @@ function DistributionChart({ closed, state }: { closed: Trade[]; state: ChartSta
       question="How are the wins and losses actually distributed?"
       state={state}
       title="Trade return distribution"
+      term="trade_distribution"
       footer={effect && <BestTradeNote effect={effect} strip={strip} />}
     />
   )
@@ -196,6 +197,7 @@ function CumulativeChart({ closed, state }: { closed: Trade[]; state: ChartState
       question="Did the profit accumulate steadily, or arrive all at once?"
       state={state}
       title="Cumulative P&L by trade"
+      term="cumulative_pnl"
       footer={
         <Text c="dimmed" size="xs">
           The x-axis is trade sequence, not time. A staircase is a system; a cliff is one bet.
@@ -254,6 +256,7 @@ function WonAgainstLostChart({ closed, state }: { closed: Trade[]; state: ChartS
       question="How much did the winners make against what the losers cost?"
       state={state}
       title="Won against lost"
+      term="won_vs_lost"
       footer={
         <Text c="dimmed" size="xs">
           The ratio of these two bars is the profit factor

@@ -17,6 +17,7 @@ import { useSearchableCount } from '../../api/config'
 import { useStrategyContext } from '../strategy/context'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { duration, runKindLabel } from '../../lib/format'
+import { descriptionOf, explanationOf, type TermKey } from '../../lib/glossary'
 import { useLaunchRun } from './queries'
 import type { RunKind } from '../../api/types'
 
@@ -27,11 +28,17 @@ import type { RunKind } from '../../api/types'
  * what the engine would have used anyway.
  */
 
-const OBJECTIVE_EXPLANATION: Record<string, string> = {
-  calmar: 'Return against the worst drawdown. The default, and the most conservative.',
-  sortino: 'Return against downside volatility only — upside swings are not penalised.',
-  sharpe: 'Return against total volatility.',
-  legacy_pnl: 'Raw profit. Kept for comparison with older runs; not recommended.',
+/** Each objective the engine offers, mapped to the glossary entry that explains it. */
+const OBJECTIVE_TERM: Record<string, TermKey> = {
+  calmar: 'objective_calmar',
+  sortino: 'objective_sortino',
+  sharpe: 'objective_sharpe',
+  legacy_pnl: 'objective_legacy_pnl',
+}
+
+function objectiveExplanation(objective: string): string | undefined {
+  const term = OBJECTIVE_TERM[objective]
+  return term && explanationOf(term)
 }
 
 /** A rough guide, not a promise: the search cost varies with the strategy. */
@@ -136,13 +143,13 @@ export function LaunchRunModal({
                 value,
                 label: value === 'legacy_pnl' ? `${value} — not recommended` : value,
               }))}
-              description={OBJECTIVE_EXPLANATION[objective]}
+              description={objectiveExplanation(objective)}
               label="Objective"
               onChange={(value) => value && setObjective(value)}
               value={objective}
             />
             <NumberInput
-              description="Differential-evolution generations. More is a longer, more thorough search."
+              description={descriptionOf('epochs')}
               label="Epochs"
               max={200}
               min={1}
@@ -155,7 +162,7 @@ export function LaunchRunModal({
         {searches && (
           <>
             <NumberInput
-              description="Each fold is optimized and evaluated independently."
+              description={descriptionOf('folds')}
               label="Folds"
               max={20}
               min={2}
@@ -165,11 +172,11 @@ export function LaunchRunModal({
             <Select
               allowDeselect={false}
               data={meta.fold_schemes}
-              description={
+              description={`${explanationOf('training_window')} ${
                 scheme === 'anchored'
-                  ? 'The training window grows from a fixed start.'
-                  : 'The training window is a fixed length that slides forward.'
-              }
+                  ? 'This one grows from a fixed start.'
+                  : 'This one is a fixed length that slides forward.'
+              }`}
               label="Training window"
               onChange={(value) => value && setScheme(value)}
               value={scheme}
@@ -180,6 +187,7 @@ export function LaunchRunModal({
         {kind === 'optimize' && (
           <Checkbox
             checked={cache}
+            description={explanationOf('cache_prices')}
             label="Cache downloaded price history"
             onChange={(event) => setCache(event.currentTarget.checked)}
           />

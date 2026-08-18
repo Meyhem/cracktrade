@@ -1,5 +1,7 @@
 import { Alert, Card, Code, Divider, Grid, Group, Stack, Text, Title } from '@mantine/core'
 import { IconAlertTriangle } from '@tabler/icons-react'
+import { Explain } from '../../../components/Explain'
+import { explanationOf } from '../../../lib/glossary'
 import { Figure, MetricsTable, TooFewTrades } from './Figures'
 import { TradeList } from './TradeList'
 import { backtestResult, figuresOf, type Json } from '../../../lib/result'
@@ -30,27 +32,24 @@ export function BacktestView({ result }: { result: Json | null }) {
 
           {figures.shown ? (
             <Group gap="xl">
-              <Figure
-                hint="Strategy return minus buy-and-hold, over the same bars"
-                label="Excess over buy-and-hold"
-                value={points(benchmark?.excessReturnPct ?? null)}
-              />
+              <Figure term="excess" value={points(benchmark?.excessReturnPct ?? null)} />
               <Divider orientation="vertical" />
               <Figure
                 label="Strategy"
+                term="total_return"
                 value={percent(figures.metrics.totalReturnPct, { signed: true })}
               />
               <Figure
-                label="Buy and hold"
+                term="buy_and_hold"
                 value={percent(benchmark?.metrics?.totalReturnPct ?? null, { signed: true })}
               />
               <Divider orientation="vertical" />
               <Figure
-                label="Max drawdown"
                 size="md"
+                term="max_drawdown"
                 value={percent(figures.metrics.maxDrawdownPct)}
               />
-              <Figure label="Trades" size="md" value={integer(figures.metrics.totalTrades)} />
+              <Figure size="md" term="trades" value={integer(figures.metrics.totalTrades)} />
             </Group>
           ) : (
             <TooFewTrades trades={figures.trades} />
@@ -67,7 +66,10 @@ export function BacktestView({ result }: { result: Json | null }) {
 
       {figures.shown && (
         <Stack gap="xs">
-          <Title order={4}>Metrics</Title>
+          <Group gap={6}>
+            <Title order={4}>Metrics</Title>
+            <Explain term="metrics" />
+          </Group>
           <MetricsTable benchmark={benchmark?.metrics ?? null} metrics={figures.metrics} />
         </Stack>
       )}
@@ -75,25 +77,28 @@ export function BacktestView({ result }: { result: Json | null }) {
       <Grid>
         <Grid.Col span={{ base: 12, md: 6 }}>
           <Stack gap="xs">
-            <Title order={4}>Definedness</Title>
+            <Group gap={6}>
+              <Title order={4}>Definedness</Title>
+              <Explain term="definedness" />
+            </Group>
             <Card padding="md" withBorder>
               <Stack gap="xs">
                 <Group gap="xl">
                   <Figure
-                    label="Entry defined"
                     size="md"
+                    term="entry_defined"
                     value={percent(backtest.entryDefinedPct)}
                   />
                   <Figure
-                    label="Exit defined"
                     size="md"
+                    term="exit_defined"
                     value={
                       backtest.exitDefinedPct === null
                         ? 'no signal exit'
                         : percent(backtest.exitDefinedPct)
                     }
                   />
-                  <Figure label="Warm-up bars" size="md" value={integer(backtest.warmupBars)} />
+                  <Figure size="md" term="warmup_bars" value={integer(backtest.warmupBars)} />
                 </Group>
                 <Text c="dimmed" size="sm">
                   The share of bars on which the condition could actually be evaluated. Several
@@ -107,7 +112,10 @@ export function BacktestView({ result }: { result: Json | null }) {
 
         <Grid.Col span={{ base: 12, md: 6 }}>
           <Stack gap="xs">
-            <Title order={4}>Data vintage</Title>
+            <Group gap={6}>
+              <Title order={4}>Data vintage</Title>
+              <Explain term="data_vintage" />
+            </Group>
             <Card padding="md" withBorder>
               <Stack gap="xs">
                 <Text size="sm">
@@ -115,15 +123,19 @@ export function BacktestView({ result }: { result: Json | null }) {
                   → {dateOnly(backtest.vintage?.lastBar ?? null)} ·{' '}
                   {integer(backtest.vintage?.bars ?? null)} bars
                 </Text>
-                <Text size="sm">
-                  {integer(backtest.vintage?.filledBars ?? null)} forward-filled (
-                  {percent(backtest.vintage?.filledPct ?? null)}) · fetched{' '}
-                  {dateOnly(backtest.vintage?.fetchedOn ?? null)}
-                </Text>
+                <Group gap={4} wrap="nowrap">
+                  <Text size="sm">
+                    {integer(backtest.vintage?.filledBars ?? null)} forward-filled (
+                    {percent(backtest.vintage?.filledPct ?? null)}) · fetched{' '}
+                    {dateOnly(backtest.vintage?.fetchedOn ?? null)}
+                  </Text>
+                  <Explain term="forward_filled" />
+                </Group>
                 <Group gap="xs">
                   <Text c="dimmed" size="sm">
                     Price frame digest
                   </Text>
+                  <Explain term="frame_digest" />
                   <Code>{backtest.vintage?.frameDigest ?? '—'}</Code>
                 </Group>
                 <Text c="dimmed" size="sm">
@@ -140,20 +152,26 @@ export function BacktestView({ result }: { result: Json | null }) {
       {backtest.shadowedStops.length > 0 && (
         <Alert color="orange" icon={<IconAlertTriangle size={18} />} variant="light">
           <Stack gap={4}>
-            <Text fw={600} size="sm">
-              Configured stops that did nothing: {backtest.shadowedStops.join(', ')}
-            </Text>
+            <Group gap={4} wrap="nowrap">
+              <Text fw={600} size="sm">
+                Configured stops that did nothing: {backtest.shadowedStops.join(', ')}
+              </Text>
+              <Explain term="shadowed_stop" />
+            </Group>
             <Text size="sm">
-              Stops follow a priority chain — ATR, then trailing, then fixed — and only the highest
-              one set is active. {backtest.activeStop ?? 'None'} was the stop in force; the others
-              were configured and had no effect on any trade above.
+              {explanationOf('stop')} Stops follow a priority chain — ATR, then trailing, then fixed
+              — and only the highest one set is active. {backtest.activeStop ?? 'None'} was the stop
+              in force; the others were configured and had no effect on any trade above.
             </Text>
           </Stack>
         </Alert>
       )}
 
       <Stack gap="xs">
-        <Title order={4}>Trades</Title>
+        <Group gap={6}>
+          <Title order={4}>Trades</Title>
+          <Explain term="trades" />
+        </Group>
         <TradeList trades={backtest.trades} />
       </Stack>
     </Stack>

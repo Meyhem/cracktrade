@@ -1,7 +1,9 @@
-import { Card, Group, Stack, Table, Text, Tooltip } from '@mantine/core'
+import { Card, Group, Stack, Table, Text } from '@mantine/core'
 import type { ReactNode } from 'react'
 import { suppressionMessage } from '../../../lib/suppression'
 import { useMeta } from '../../../api/metaContext'
+import { Explain, ExplainedLabel } from '../../../components/Explain'
+import { termOf, type TermKey } from '../../../lib/glossary'
 import type { Metrics } from '../../../lib/result'
 import { integer, money, percent, ratio } from '../../../lib/format'
 
@@ -13,31 +15,35 @@ import { integer, money, percent, ratio } from '../../../lib/format'
  * and in particular no blank cell and no zero — both of those read as information.
  */
 
-/** One labelled number. `hint` is never the only place something important is said. */
+/**
+ * One labelled number, with its plain-language explanation attached.
+ *
+ * `term` is required rather than optional, which is the entire point: a figure that nobody
+ * thought to explain cannot be added, because it will not type-check. `label` overrides the
+ * glossary's own title only where the screen has room for something shorter.
+ */
 export function Figure({
+  term,
   label,
   value,
-  hint,
   size = 'lg',
 }: {
-  label: string
+  term: TermKey
+  label?: string
   value: string
-  hint?: string
   size?: 'lg' | 'md'
 }) {
   return (
     <Stack gap={2}>
-      <Text c="dimmed" size="xs" tt="uppercase">
-        {label}
-      </Text>
+      <Group gap={4} wrap="nowrap">
+        <Text c="dimmed" size="xs" tt="uppercase">
+          {label ?? termOf(term).title}
+        </Text>
+        <Explain term={term} />
+      </Group>
       <Text fw={600} size={size === 'lg' ? 'xl' : 'md'}>
         {value}
       </Text>
-      {hint && (
-        <Text c="dimmed" size="xs">
-          {hint}
-        </Text>
-      )}
     </Stack>
   )
 }
@@ -74,27 +80,22 @@ export function TooFewTrades({
 }
 
 /** The rows of a metrics table, in the brief's order (§2.4). */
-const ROWS: { label: string; render: (metrics: Metrics) => string; note?: string }[] = [
-  { label: 'Total return', render: (m) => percent(m.totalReturnPct, { signed: true }) },
-  { label: 'CAGR', render: (m) => percent(m.cagrPct, { signed: true }) },
-  { label: 'Max drawdown', render: (m) => percent(m.maxDrawdownPct) },
-  { label: 'Sharpe', render: (m) => ratio(m.sharpeRatio) },
-  { label: 'Sortino', render: (m) => ratio(m.sortinoRatio) },
-  { label: 'Calmar', render: (m) => ratio(m.calmarRatio) },
-  { label: 'Win rate', render: (m) => percent(m.winRatePct) },
+const ROWS: { term: TermKey; render: (metrics: Metrics) => string }[] = [
+  { term: 'total_return', render: (m) => percent(m.totalReturnPct, { signed: true }) },
+  { term: 'cagr', render: (m) => percent(m.cagrPct, { signed: true }) },
+  { term: 'max_drawdown', render: (m) => percent(m.maxDrawdownPct) },
+  { term: 'sharpe', render: (m) => ratio(m.sharpeRatio) },
+  { term: 'sortino', render: (m) => ratio(m.sortinoRatio) },
+  { term: 'calmar', render: (m) => ratio(m.calmarRatio) },
+  { term: 'win_rate', render: (m) => percent(m.winRatePct) },
   {
-    label: 'Profit factor',
+    term: 'profit_factor',
     render: (m) => (m.profitFactor === null ? 'no losing trades' : ratio(m.profitFactor)),
-    note: 'Gross profit divided by gross loss. Reported as "no losing trades" when there is no loss to divide by — that is a real result, not a missing number.',
   },
-  {
-    label: 'Exposure',
-    render: (m) => percent(m.exposurePct),
-    note: 'Share of bars holding a position. Idle cash earns nothing here while the risk-free hurdle is charged across the whole period, so a low exposure makes Sharpe read worse than the trades did.',
-  },
-  { label: 'Avg holding days', render: (m) => ratio(m.avgHoldingDays, 1) },
-  { label: 'Trades', render: (m) => integer(m.totalTrades) },
-  { label: 'Final equity', render: (m) => money(m.finalEquity) },
+  { term: 'exposure', render: (m) => percent(m.exposurePct) },
+  { term: 'avg_holding_days', render: (m) => ratio(m.avgHoldingDays, 1) },
+  { term: 'trades', render: (m) => integer(m.totalTrades) },
+  { term: 'final_equity', render: (m) => money(m.finalEquity) },
 ]
 
 /**
@@ -119,23 +120,18 @@ export function MetricsTable({
         <Table.Tr>
           <Table.Th />
           <Table.Th>{strategyLabel}</Table.Th>
-          {benchmark && <Table.Th>Buy and hold</Table.Th>}
+          {benchmark && (
+            <Table.Th>
+              <ExplainedLabel term="buy_and_hold" />
+            </Table.Th>
+          )}
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
         {ROWS.map((row) => (
-          <Table.Tr key={row.label}>
+          <Table.Tr key={row.term}>
             <Table.Td>
-              <Group gap={6}>
-                <Text size="sm">{row.label}</Text>
-                {row.note && (
-                  <Tooltip label={row.note} multiline w={320}>
-                    <Text c="dimmed" size="xs" style={{ cursor: 'help' }}>
-                      ⓘ
-                    </Text>
-                  </Tooltip>
-                )}
-              </Group>
+              <ExplainedLabel term={row.term} />
             </Table.Td>
             <Table.Td>
               <Text fw={500} size="sm">

@@ -5,6 +5,7 @@ import { deltaFor, type Delta, type MetricKey, type Movement } from './delta'
 import { summarise } from './summary'
 import type { BuiltRow } from './table'
 import type { RunKind, VersionSummary } from '../../api/types'
+import { ExplainedLabel } from '../../components/Explain'
 
 /**
  * One row per version, oldest at the top, so the strategy reads as a progression.
@@ -37,17 +38,43 @@ export function ComparisonTable({
         <Table highlightOnHover striped withTableBorder>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Version</Table.Th>
-              <Table.Th>Changed</Table.Th>
-              <Table.Th>Runs</Table.Th>
-              <Table.Th ta="right">Return</Table.Th>
-              <Table.Th ta="right">vs buy-and-hold</Table.Th>
-              <Table.Th ta="right">Max drawdown</Table.Th>
-              <Table.Th ta="right">Sharpe</Table.Th>
-              <Table.Th ta="right">Trades</Table.Th>
-              {kind === 'walk_forward' && <Table.Th ta="right">Folds won</Table.Th>}
-              {kind === 'walk_forward' && <Table.Th>Verdict</Table.Th>}
-              <Table.Th>Δ</Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="version" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="changed_fields" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="runs_count" />
+              </Table.Th>
+              <Table.Th ta="right">
+                <ExplainedLabel term="total_return" label="Return" />
+              </Table.Th>
+              <Table.Th ta="right">
+                <ExplainedLabel term="excess" label="vs buy-and-hold" />
+              </Table.Th>
+              <Table.Th ta="right">
+                <ExplainedLabel term="max_drawdown" />
+              </Table.Th>
+              <Table.Th ta="right">
+                <ExplainedLabel term="sharpe" />
+              </Table.Th>
+              <Table.Th ta="right">
+                <ExplainedLabel term="trades" />
+              </Table.Th>
+              {kind === 'walk_forward' && (
+                <Table.Th ta="right">
+                  <ExplainedLabel term="fold_win_rate" label="Folds won" />
+                </Table.Th>
+              )}
+              {kind === 'walk_forward' && (
+                <Table.Th>
+                  <ExplainedLabel term="verdict" />
+                </Table.Th>
+              )}
+              <Table.Th>
+                <ExplainedLabel term="delta" label="Δ" />
+              </Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>

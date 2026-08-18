@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Anchor,
   AppShell as MantineAppShell,
   Badge,
   Group,
@@ -73,6 +74,9 @@ export function AppShell() {
             </Text>
           </Group>
           <Group gap="md">
+            <Anchor component={Link} size="sm" to="/glossary">
+              Glossary
+            </Anchor>
             <LiveIndicator />
             <ColorSchemeToggle />
           </Group>

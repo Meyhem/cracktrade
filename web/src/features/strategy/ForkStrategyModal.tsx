@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Group, Modal, NumberInput, Stack, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useNavigate } from 'react-router'
+import { descriptionOf, explanationOf } from '../../lib/glossary'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { useForkStrategy } from '../strategies/queries'
 import { useStrategyContext } from './context'
@@ -56,14 +57,19 @@ export function ForkStrategyModal({ opened, onClose }: { opened: boolean; onClos
       <Stack gap="md">
         {fork.error && <ProblemAlert error={fork.error} />}
 
+        <Text c="dimmed" size="sm">
+          {explanationOf('fork')}
+        </Text>
+
         <TextInput
+          description={descriptionOf('strategy_name')}
           label="Name"
           onChange={(event) => setName(event.currentTarget.value)}
           value={name}
         />
 
         <NumberInput
-          description={`Any version, not only the head. This strategy has ${strategy.counts.versions}.`}
+          description={`${descriptionOf('version')} Any version, not only the head — this strategy has ${strategy.counts.versions}.`}
           label="Fork from version"
           max={strategy.head.version}
           min={1}

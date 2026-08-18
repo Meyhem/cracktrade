@@ -12,6 +12,7 @@ import { LaunchRunModal } from './LaunchRunModal'
 import { useCancelRun, useRuns } from './queries'
 import { HeadlineCells } from './headline'
 import { HEADLINE_COLUMNS } from './columns'
+import { ExplainedLabel } from '../../components/Explain'
 import { duration, relative } from '../../lib/format'
 import type { Run, RunKind } from '../../api/types'
 
@@ -96,13 +97,23 @@ export function RunsTab({ kind }: { kind: RunKind }) {
         <Table highlightOnHover>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Run</Table.Th>
-              <Table.Th>Version</Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="run" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="version" />
+              </Table.Th>
               {HEADLINE_COLUMNS[kind].map((column) => (
-                <Table.Th key={column}>{column}</Table.Th>
+                <Table.Th key={`${column.term}-${column.label ?? ''}`}>
+                  <ExplainedLabel {...column} />
+                </Table.Th>
               ))}
-              <Table.Th>Status</Table.Th>
-              <Table.Th>Elapsed</Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="status" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="elapsed" />
+              </Table.Th>
               <Table.Th />
             </Table.Tr>
           </Table.Thead>

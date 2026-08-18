@@ -1,5 +1,6 @@
 import { Badge, Tooltip } from '@mantine/core'
 import { IconHistory } from '@tabler/icons-react'
+import { explanationOf } from '../lib/glossary'
 
 /**
  * A run made against a version that is no longer the head.
@@ -10,11 +11,7 @@ import { IconHistory } from '@tabler/icons-react'
  */
 export function StaleBadge({ version }: { version: number }) {
   return (
-    <Tooltip
-      label={`Run against v${version}, which is no longer the current version. It describes a configuration that has since changed.`}
-      multiline
-      w={280}
-    >
+    <Tooltip label={`Run against v${version}. ${explanationOf('stale')}`} multiline w={280}>
       <Badge color="gray" leftSection={<IconHistory size={12} />} size="sm" variant="outline">
         stale
       </Badge>

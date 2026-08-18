@@ -1,6 +1,7 @@
 import { Text, Tooltip } from '@mantine/core'
 import { IconGitBranch, IconArrowBigUpLine } from '@tabler/icons-react'
 import { Link } from 'react-router'
+import { explanationOf } from '../lib/glossary'
 import type { Lineage } from '../api/types'
 
 /**
@@ -16,8 +17,8 @@ export function LineageMarker({ lineage }: { lineage: Lineage }) {
   const promoted = lineage.origin === 'promoted'
   const Icon = promoted ? IconArrowBigUpLine : IconGitBranch
   const label = promoted
-    ? `Promoted from a run of its parent${lineage.parent_version ? ` (v${lineage.parent_version})` : ''}`
-    : `Forked from its parent${lineage.parent_version ? ` at v${lineage.parent_version}` : ''}`
+    ? `${explanationOf('promote')} Promoted from a run of its parent${lineage.parent_version ? ` (v${lineage.parent_version})` : ''}.`
+    : `${explanationOf('fork')} Forked from its parent${lineage.parent_version ? ` at v${lineage.parent_version}` : ''}.`
 
   return (
     <Tooltip label={label}>

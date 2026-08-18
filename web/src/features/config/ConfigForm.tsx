@@ -9,6 +9,7 @@ import { IndicatorsSection } from './IndicatorsSection'
 import { SignalField } from './SignalField'
 import { money } from '../../lib/format'
 import { useMeta } from '../../api/metaContext'
+import { Explain } from '../../components/Explain'
 
 const SIZING_TYPES = ['fixed_pct', 'fixed_cash', 'fixed_shares']
 
@@ -31,11 +32,20 @@ export function ConfigForm(section: SectionProps) {
 function BasicsSection(section: SectionProps) {
   return (
     <Stack gap="sm">
-      <Text fw={600}>Strategy and universe</Text>
+      <Group gap={4} wrap="nowrap">
+        <Text fw={600}>Strategy and universe</Text>
+        <Explain term="universe" />
+      </Group>
       <Group align="flex-start" gap="lg">
-        <TextField label="Name" path={['strategy', 'name']} section={section} />
+        <TextField
+          term="strategy_name"
+          label="Name"
+          path={['strategy', 'name']}
+          section={section}
+        />
         <TextField
           description="Exactly one symbol. This engine does not do portfolios."
+          term="ticker"
           label="Ticker"
           path={['universe', 'ticker']}
           section={section}
@@ -43,6 +53,7 @@ function BasicsSection(section: SectionProps) {
       </Group>
       <Group align="flex-start" gap="lg">
         <TextField
+          term="start_date"
           label="Start date"
           path={['universe', 'start_date']}
           placeholder="2023-01-01"
@@ -50,6 +61,7 @@ function BasicsSection(section: SectionProps) {
         />
         <TextField
           description="Defaults to today when omitted."
+          term="end_date"
           label="End date"
           path={['universe', 'end_date']}
           placeholder="2025-12-31"
@@ -84,10 +96,14 @@ function ExecutionSection(section: SectionProps) {
 
   return (
     <Stack gap="sm">
-      <Text fw={600}>Execution</Text>
+      <Group gap={4} wrap="nowrap">
+        <Text fw={600}>Execution</Text>
+        <Explain term="execution" />
+      </Group>
       <Group align="flex-start" gap="lg">
         <NumberField
           hint="The account this strategy starts with."
+          term="initial_capital"
           label="Initial capital"
           path={['execution', 'initial_capital']}
           section={section}
@@ -95,6 +111,7 @@ function ExecutionSection(section: SectionProps) {
         />
         <NumberField
           hint={onATrade(capital, commission, 'commission')}
+          term="commission"
           label="Commission"
           path={['execution', 'commission_pct']}
           section={section}
@@ -103,6 +120,7 @@ function ExecutionSection(section: SectionProps) {
         />
         <NumberField
           hint={onATrade(capital, slippage, 'slippage')}
+          term="slippage"
           label="Slippage"
           path={['execution', 'slippage_pct']}
           section={section}
@@ -115,6 +133,7 @@ function ExecutionSection(section: SectionProps) {
               ? 'A fraction, not a percent: 0.04 means 4% a year.'
               : `${riskFree * 100}% a year — written as a fraction, unlike the two fields to its left.`
           }
+          term="risk_free_rate"
           label="Risk-free rate"
           path={['execution', 'risk_free_rate']}
           section={section}
@@ -168,8 +187,12 @@ function RulesSection(section: SectionProps) {
 
   return (
     <Stack gap="md">
-      <Text fw={600}>Entry</Text>
+      <Group gap={4} wrap="nowrap">
+        <Text fw={600}>Entry</Text>
+        <Explain term="entry_signal" />
+      </Group>
       <SignalField
+        term="entry_signal"
         label="Signal"
         path={['entry', 'signal']}
         placeholder="(close > sma_long) & (rsi_ind < 35)"
@@ -177,7 +200,10 @@ function RulesSection(section: SectionProps) {
       />
 
       <Group justify="space-between">
-        <Text fw={600}>Exit</Text>
+        <Group gap={4} wrap="nowrap">
+          <Text fw={600}>Exit</Text>
+          <Explain term="exit_signal" />
+        </Group>
         <SectionOptimizeControl
           entryPath={['exit']}
           label="exit"
@@ -199,6 +225,7 @@ function RulesSection(section: SectionProps) {
       ))}
 
       <SignalField
+        term="exit_signal"
         label="Exit signal"
         path={['exit', 'signal']}
         placeholder="close < sma_long"
@@ -246,6 +273,7 @@ function RulesSection(section: SectionProps) {
             />
           }
           hint="Orthogonal to the stops — it always applies."
+          term="take_profit"
           label="take_profit_pct"
           path={['exit', 'take_profit_pct']}
           section={section}
@@ -275,6 +303,7 @@ function RulesSection(section: SectionProps) {
               yaml={section.yaml}
             />
           }
+          term="min_holding_days"
           label="min_holding_days"
           path={['exit', 'min_holding_days']}
           section={section}
@@ -292,6 +321,7 @@ function RulesSection(section: SectionProps) {
               yaml={section.yaml}
             />
           }
+          term="max_holding_days"
           label="max_holding_days"
           path={['exit', 'max_holding_days']}
           section={section}
@@ -314,10 +344,13 @@ function SizingSection(section: SectionProps) {
 
   return (
     <Stack gap="sm">
-      <Text fw={600}>Position sizing</Text>
+      <Group gap={4} wrap="nowrap">
+        <Text fw={600}>Position sizing</Text>
+        <Explain term="position_sizing" />
+      </Group>
       <Card padding="sm" withBorder>
         <Group align="flex-start" gap="lg">
-          <Field label="Type" path="position_sizing.type">
+          <Field term="position_sizing" label="Type" path="position_sizing.type">
             <Select
               aria-label="Position sizing type"
               clearable

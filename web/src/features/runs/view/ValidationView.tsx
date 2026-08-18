@@ -13,6 +13,7 @@ import {
 } from '@mantine/core'
 import { IconCheck, IconX } from '@tabler/icons-react'
 import { LimitsPanel } from '../../../components/LimitsPanel'
+import { Explain, ExplainedLabel } from '../../../components/Explain'
 import { Figure } from './Figures'
 import { validationResult, type Json } from '../../../lib/result'
 import { dateOnly, integer, percent, ratio } from '../../../lib/format'
@@ -87,32 +88,31 @@ export function ValidationView({
 
       <Group gap="xl">
         <Figure
-          hint={`${integer(report.profitableFolds)} of ${integer(report.folds.length)} folds profitable`}
-          label="Fold win rate"
+          term="fold_win_rate"
           value={
             report.foldWinRate === null
               ? 'n/a'
               : `${integer(report.profitableFolds)}/${integer(report.folds.length)}`
           }
         />
+        <Figure term="combined_oos" value={percent(report.combinedReturnPct, { signed: true })} />
         <Figure
-          label="Combined out of sample"
-          value={percent(report.combinedReturnPct, { signed: true })}
-        />
-        <Figure
-          label="Buy and hold"
+          term="buy_and_hold"
           value={percent(report.benchmark?.totalReturnPct ?? null, { signed: true })}
         />
-        <Figure label="Median fold" value={percent(report.medianReturnPct, { signed: true })} />
+        <Figure term="median_fold" value={percent(report.medianReturnPct, { signed: true })} />
+        <Figure term="fold_spread" value={percent(report.returnIqrPct)} />
         <Figure
-          hint="Interquartile spread across folds"
-          label="Fold spread"
-          value={percent(report.returnIqrPct)}
+          label="Out-of-sample trades"
+          term="out_of_sample"
+          value={integer(report.totalTrades)}
         />
-        <Figure label="Out-of-sample trades" value={integer(report.totalTrades)} />
       </Group>
 
-      <Title order={4}>Robustness checks</Title>
+      <Group gap={6}>
+        <Title order={4}>Robustness checks</Title>
+        <Explain term="robustness_checks" />
+      </Group>
       <Grid>
         {checks.map((check) => (
           <Grid.Col key={check.name} span={{ base: 12, md: 6 }}>
@@ -121,7 +121,10 @@ export function ValidationView({
         ))}
       </Grid>
 
-      <Title order={4}>Folds</Title>
+      <Group gap={6}>
+        <Title order={4}>Folds</Title>
+        <Explain term="folds" />
+      </Group>
       <Text c="dimmed" size="sm">
         Each fold re-optimizes independently, so every row below chose its own parameters. A
         strategy profitable in 6 of 6 folds and one carried entirely by fold 3 are different
@@ -130,12 +133,24 @@ export function ValidationView({
       <Table withTableBorder>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Fold</Table.Th>
-            <Table.Th>Test window</Table.Th>
-            <Table.Th>Out of sample</Table.Th>
-            <Table.Th>In sample</Table.Th>
-            <Table.Th>Trades</Table.Th>
-            <Table.Th>Parameters it chose</Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="fold" />
+            </Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="out_of_sample" label="Test window" />
+            </Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="out_of_sample" label="Out of sample" />
+            </Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="in_sample" />
+            </Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="trades" />
+            </Table.Th>
+            <Table.Th>
+              <ExplainedLabel term="parameters_moved" label="Parameters it chose" />
+            </Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -179,7 +194,10 @@ export function ValidationView({
         </Table.Tbody>
       </Table>
 
-      <Title order={4}>Cost sensitivity</Title>
+      <Group gap={6}>
+        <Title order={4}>Cost sensitivity</Title>
+        <Explain term="cost_sensitivity" />
+      </Group>
       <Card padding="md" withBorder>
         <Stack gap="xs">
           <Text c="dimmed" size="sm">
@@ -189,10 +207,18 @@ export function ValidationView({
           <Table>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>Costs</Table.Th>
-                <Table.Th>Slippage</Table.Th>
-                <Table.Th>Commission</Table.Th>
-                <Table.Th>Return</Table.Th>
+                <Table.Th>
+                  <ExplainedLabel term="cost_ladder" label="Costs" />
+                </Table.Th>
+                <Table.Th>
+                  <ExplainedLabel term="slippage" />
+                </Table.Th>
+                <Table.Th>
+                  <ExplainedLabel term="commission" />
+                </Table.Th>
+                <Table.Th>
+                  <ExplainedLabel term="total_return" label="Return" />
+                </Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -217,7 +243,10 @@ export function ValidationView({
         </Stack>
       </Card>
 
-      <Title order={4}>Confidence intervals</Title>
+      <Group gap={6}>
+        <Title order={4}>Confidence intervals</Title>
+        <Explain term="confidence_interval" />
+      </Group>
       <Grid>
         {[
           { label: 'Mean fold return', interval: report.meanReturnInterval },
@@ -247,7 +276,10 @@ export function ValidationView({
       <Divider />
 
       <Stack gap="xs">
-        <Title order={4}>The winning configuration</Title>
+        <Group gap={6}>
+          <Title order={4}>The winning configuration</Title>
+          <Explain term="winning_configuration" />
+        </Group>
         <Card padding="md" withBorder>
           <Code block>{report.optimizedYaml ?? '—'}</Code>
         </Card>

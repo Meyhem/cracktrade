@@ -3,6 +3,7 @@ import { IconLock, IconSearch } from '@tabler/icons-react'
 import { putAt, removeAt, at, type Path } from './document'
 import { ratio } from '../../lib/format'
 import type { SearchableParameter } from '../../api/types'
+import { Explain } from '../../components/Explain'
 
 /**
  * What an optimization is allowed to do to one number.
@@ -64,9 +65,12 @@ export function OptimizeControl({
 
   if (sectionPinned) {
     return (
-      <Badge color="gray" leftSection={<IconLock size={11} />} size="sm" variant="light">
-        section pinned
-      </Badge>
+      <Group gap={4} wrap="nowrap">
+        <Badge color="gray" leftSection={<IconLock size={11} />} size="sm" variant="light">
+          section pinned
+        </Badge>
+        <Explain term="pinned_parameter" />
+      </Group>
     )
   }
 
@@ -79,9 +83,12 @@ export function OptimizeControl({
         size="xs"
       />
       {pinned ? (
-        <Text c="dimmed" size="xs">
-          pinned — the search will not move this
-        </Text>
+        <Group gap={4} wrap="nowrap">
+          <Text c="dimmed" size="xs">
+            pinned — the search will not move this
+          </Text>
+          <Explain term="pinned_parameter" />
+        </Group>
       ) : (
         <Popover position="bottom-end" shadow="md" width={260} withArrow>
           <Popover.Target>

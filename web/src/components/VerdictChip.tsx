@@ -6,6 +6,7 @@ import {
   IconHelpCircle,
 } from '@tabler/icons-react'
 import { VERDICT_COLOR } from '../theme/theme'
+import { termOf, type TermKey } from '../lib/glossary'
 import type { VerdictState } from '../api/types'
 
 /**
@@ -19,31 +20,11 @@ import type { VerdictState } from '../api/types'
  * this yet" — a grey chip reads as "fine", which is the opposite (spec section 14.4).
  */
 
-const PRESENTATION: Record<
-  VerdictState,
-  { label: string; icon: typeof IconCircleCheck; explain: string }
-> = {
-  credible: {
-    label: 'Credible',
-    icon: IconCircleCheck,
-    explain: 'A walk-forward run against the current version passed every robustness check.',
-  },
-  not_credible: {
-    label: 'Not credible',
-    icon: IconAlertTriangle,
-    explain: 'A walk-forward run ran against the current version and failed at least one check.',
-  },
-  unvalidated: {
-    label: 'Unvalidated',
-    icon: IconHelpCircle,
-    explain:
-      'No walk-forward run has been made against the current version. Nobody has checked this yet — earlier runs describe a configuration that has since changed.',
-  },
-  never_run: {
-    label: 'Never run',
-    icon: IconCircleDashed,
-    explain: 'This strategy has never been run.',
-  },
+const PRESENTATION: Record<VerdictState, { icon: typeof IconCircleCheck; term: TermKey }> = {
+  credible: { icon: IconCircleCheck, term: 'credible' },
+  not_credible: { icon: IconAlertTriangle, term: 'not_credible' },
+  unvalidated: { icon: IconHelpCircle, term: 'unvalidated' },
+  never_run: { icon: IconCircleDashed, term: 'never_run' },
 }
 
 export function VerdictChip({
@@ -57,18 +38,19 @@ export function VerdictChip({
   size?: 'sm' | 'md' | 'lg'
 }) {
   const presentation = PRESENTATION[verdict]
+  const { title, plain, catch: caveat } = termOf(presentation.term)
   const Icon = presentation.icon
   const showCount = verdict === 'not_credible' && failureCount !== undefined && failureCount > 0
 
   return (
-    <Tooltip label={presentation.explain} multiline w={300} withArrow>
+    <Tooltip label={caveat ? `${plain} ${caveat}` : plain} multiline w={300} withArrow>
       <Badge
         color={VERDICT_COLOR[verdict]}
         leftSection={<Icon size={13} />}
         size={size}
         variant="light"
       >
-        {presentation.label}
+        {title}
         {showCount && ` · ${failureCount} failed`}
       </Badge>
     </Tooltip>

@@ -17,6 +17,8 @@ import { IconArrowsSort, IconSearch, IconUpload } from '@tabler/icons-react'
 import { Link, useSearchParams } from 'react-router'
 import { useDebouncedValue } from '@mantine/hooks'
 import { ProblemAlert } from '../../components/ProblemAlert'
+import { Explain, ExplainedLabel } from '../../components/Explain'
+import { type TermKey } from '../../lib/glossary'
 import { VerdictChip } from '../../components/VerdictChip'
 import { LineageMarker } from '../../components/LineageMarker'
 import { EmptyState } from '../../components/EmptyState'
@@ -75,25 +77,33 @@ function compare(a: StrategyRow, b: StrategyRow, key: SortKey): number {
 function SortableHeader({
   children,
   column,
+  term,
   sort,
   onSort,
 }: {
   children: React.ReactNode
   column: SortKey
+  term: TermKey
   sort: { key: SortKey; descending: boolean }
   onSort: (key: SortKey) => void
 }) {
   const active = sort.key === column
   return (
     <Table.Th>
-      <UnstyledButton onClick={() => onSort(column)} style={{ width: '100%' }}>
-        <Group gap={4} wrap="nowrap">
-          <Text fw={600} size="sm">
-            {children}
-          </Text>
-          <IconArrowsSort opacity={active ? 1 : 0.3} size={12} />
-        </Group>
-      </UnstyledButton>
+      <Group gap={4} wrap="nowrap">
+        {/* The sort control and the explanation are separate buttons on purpose: nesting the
+            info icon inside the sort button would make asking what a column means also
+            re-sort the table. */}
+        <UnstyledButton onClick={() => onSort(column)}>
+          <Group gap={4} wrap="nowrap">
+            <Text fw={600} size="sm">
+              {children}
+            </Text>
+            <IconArrowsSort opacity={active ? 1 : 0.3} size={12} />
+          </Group>
+        </UnstyledButton>
+        <Explain term={term} />
+      </Group>
     </Table.Th>
   )
 }
@@ -218,21 +228,25 @@ export function StrategyListPage() {
         <Table highlightOnHover striped>
           <Table.Thead>
             <Table.Tr>
-              <SortableHeader column="name" onSort={onSort} sort={sort}>
+              <SortableHeader column="name" onSort={onSort} sort={sort} term="strategy_name">
                 Name
               </SortableHeader>
-              <SortableHeader column="ticker" onSort={onSort} sort={sort}>
+              <SortableHeader column="ticker" onSort={onSort} sort={sort} term="ticker">
                 Ticker
               </SortableHeader>
-              <Table.Th>Date range</Table.Th>
-              <SortableHeader column="last_run_at" onSort={onSort} sort={sort}>
+              <Table.Th>
+                <ExplainedLabel term="date_range" />
+              </Table.Th>
+              <SortableHeader column="last_run_at" onSort={onSort} sort={sort} term="last_run">
                 Last run
               </SortableHeader>
-              <Table.Th>Runs</Table.Th>
-              <SortableHeader column="versions" onSort={onSort} sort={sort}>
+              <Table.Th>
+                <ExplainedLabel term="runs_count" />
+              </Table.Th>
+              <SortableHeader column="versions" onSort={onSort} sort={sort} term="version">
                 Versions
               </SortableHeader>
-              <SortableHeader column="verdict" onSort={onSort} sort={sort}>
+              <SortableHeader column="verdict" onSort={onSort} sort={sort} term="verdict">
                 Verdict
               </SortableHeader>
             </Table.Tr>

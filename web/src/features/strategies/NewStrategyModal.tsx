@@ -3,6 +3,7 @@ import { useForm } from '@mantine/form'
 import { useNavigate } from 'react-router'
 import { notifications } from '@mantine/notifications'
 import dayjs from 'dayjs'
+import { descriptionOf } from '../../lib/glossary'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { useCreateStrategy } from './queries'
 
@@ -70,30 +71,37 @@ export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose
 
           <TextInput
             data-autofocus
+            description={descriptionOf('strategy_name')}
             label="Name"
             placeholder="rsi_pullback"
             {...form.getInputProps('name')}
           />
           <TextInput
-            description="One symbol. This engine does not do portfolios or cross-sectional strategies."
+            description={descriptionOf('ticker')}
             label="Ticker"
             placeholder="NVDA"
             {...form.getInputProps('ticker')}
           />
           <Group grow>
             <TextInput
+              description={descriptionOf('start_date')}
               label="Start date"
               placeholder="2023-01-01"
               {...form.getInputProps('start_date')}
             />
             <TextInput
+              description={descriptionOf('end_date')}
               label="End date"
               placeholder="2025-12-31"
               {...form.getInputProps('end_date')}
             />
           </Group>
 
-          <Radio.Group label="Starting configuration" {...form.getInputProps('seed')}>
+          <Radio.Group
+            description={descriptionOf('configuration')}
+            label="Starting configuration"
+            {...form.getInputProps('seed')}
+          >
             <Stack gap={6} mt={6}>
               <Radio
                 description="A working strategy you can back test straight away, then edit."

@@ -127,15 +127,11 @@ export function HeadlineCells({ run, kind }: { run: Run; kind: RunKind }) {
           />
         </Table.Td>
         <Table.Td>
-          <Tooltip label="Train CAGR minus test CAGR. A large positive gap is the signature of a curve fit.">
-            <div>
-              <Figure
-                render={(v) => points(v)}
-                suppressed={suppressed}
-                value={figure('overfitting_gap_pct')}
-              />
-            </div>
-          </Tooltip>
+          <Figure
+            render={(v) => points(v)}
+            suppressed={suppressed}
+            value={figure('overfitting_gap_pct')}
+          />
         </Table.Td>
         <Table.Td>
           <Count value={raw.trials} />

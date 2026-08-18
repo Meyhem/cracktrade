@@ -7,6 +7,7 @@ import { RunViewPage } from '../features/runs/RunViewPage'
 import { ConfigTab } from '../features/config/ConfigTab'
 import { ChartsTab } from '../features/charts/ChartsTab'
 import { HistoryTab } from '../features/history/HistoryTab'
+import { GlossaryPage } from '../features/glossary/GlossaryPage'
 
 /**
  * Routes.
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate replace to="/strategies" /> },
       { path: 'strategies', Component: StrategyListPage },
+      { path: 'glossary', Component: GlossaryPage },
       {
         path: 'strategies/:strategyId',
         Component: StrategyLayout,

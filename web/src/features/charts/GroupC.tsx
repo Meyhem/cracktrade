@@ -173,6 +173,7 @@ function MonthlyHeatmap({
       question="Was the strategy working consistently, or only in a few months?"
       state={state}
       title="Monthly returns"
+      term="monthly_returns"
       footer={
         <Text c="dimmed" size="xs">
           A month with no position is marked · rather than coloured 0% — flat and absent are
@@ -247,6 +248,7 @@ function YearlyChart({
       question="Was the return spread across years, or did one year carry it?"
       state={state}
       title="Yearly returns against buy-and-hold"
+      term="yearly_returns"
       footer={
         benchmarkYearly === null && (
           <Text c="dimmed" size="xs">
@@ -321,6 +323,7 @@ function RollingChart({
       question="If you had started at the worst possible moment, what would your first year have looked like?"
       state={state}
       title="Rolling twelve-month return"
+      term="rolling_12m"
       footer={
         <Text c="dimmed" size="xs">
           The marked minimum is the worst twelve months this strategy had

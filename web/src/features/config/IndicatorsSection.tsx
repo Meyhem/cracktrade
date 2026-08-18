@@ -10,6 +10,7 @@ import {
   Stack,
   Text,
 } from '@mantine/core'
+import { Explain } from '../../components/Explain'
 import { IconInfoCircle, IconPlus, IconTrash } from '@tabler/icons-react'
 import { listAt, putAt, removeAt, setAt, stringAt } from './document'
 import { issuesUnder } from './issues'
@@ -57,7 +58,10 @@ export function IndicatorsSection(section: SectionProps) {
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Text fw={600}>Indicators</Text>
+        <Group gap={4} wrap="nowrap">
+          <Text fw={600}>Indicators</Text>
+          <Explain term="indicators" />
+        </Group>
         <Button
           leftSection={<IconPlus size={14} />}
           onClick={add}

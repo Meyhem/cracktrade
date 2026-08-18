@@ -4,6 +4,8 @@ import { IconDownload, IconPhoto } from '@tabler/icons-react'
 import type * as echarts from 'echarts'
 import { EChart } from './EChart'
 import { explain, type ChartState } from './state'
+import { Explain } from '../../components/Explain'
+import type { TermKey } from '../../lib/glossary'
 import type { EChartsOption } from 'echarts'
 
 /**
@@ -23,6 +25,7 @@ import type { EChartsOption } from 'echarts'
 export function ChartCard({
   id,
   title,
+  term,
   question,
   badPicture,
   state,
@@ -35,6 +38,8 @@ export function ChartCard({
 }: {
   id: string
   title: string
+  /** The glossary entry naming what this chart plots. */
+  term?: TermKey
   /** What this chart answers. */
   question: string
   /** What a bad picture looks like. */
@@ -57,7 +62,10 @@ export function ChartCard({
       <Stack gap="xs">
         <Group align="flex-start" justify="space-between" wrap="nowrap">
           <Stack gap={2}>
-            <Text fw={600}>{title}</Text>
+            <Group gap={4} wrap="nowrap">
+              <Text fw={600}>{title}</Text>
+              {term && <Explain term={term} />}
+            </Group>
             <Text c="dimmed" size="xs">
               {question}
               {badPicture && ` A bad picture: ${badPicture}`}

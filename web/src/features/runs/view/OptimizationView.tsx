@@ -12,6 +12,7 @@ import {
   Title,
 } from '@mantine/core'
 import { IconAlertTriangle } from '@tabler/icons-react'
+import { Explain, ExplainedLabel } from '../../../components/Explain'
 import { Figure, MetricsTable, TooFewTrades } from './Figures'
 import { RangeTrack } from './RangeTrack'
 import { TradeList } from './TradeList'
@@ -52,12 +53,13 @@ export function OptimizationView({ result }: { result: Json | null }) {
             <Group gap="xl">
               <Figure
                 label="Return"
+                term="oos_return"
                 value={percent(test.metrics.totalReturnPct, { signed: true })}
               />
-              <Figure label="CAGR" value={percent(test.metrics.cagrPct, { signed: true })} />
-              <Figure label="Max drawdown" value={percent(test.metrics.maxDrawdownPct)} />
-              <Figure label="Sharpe" value={ratio(test.metrics.sharpeRatio)} />
-              <Figure label="Trades" value={integer(test.metrics.totalTrades)} />
+              <Figure term="cagr" value={percent(test.metrics.cagrPct, { signed: true })} />
+              <Figure term="max_drawdown" value={percent(test.metrics.maxDrawdownPct)} />
+              <Figure term="sharpe" value={ratio(test.metrics.sharpeRatio)} />
+              <Figure term="trades" value={integer(test.metrics.totalTrades)} />
             </Group>
           ) : (
             <TooFewTrades trades={test.trades} />
@@ -65,7 +67,10 @@ export function OptimizationView({ result }: { result: Json | null }) {
         </Stack>
       </Card>
 
-      <Title order={4}>Three comparisons</Title>
+      <Group gap={6}>
+        <Title order={4}>Three comparisons</Title>
+        <Explain term="three_comparisons" />
+      </Group>
 
       <Card padding="md" withBorder>
         <Stack gap="xs">
@@ -74,21 +79,20 @@ export function OptimizationView({ result }: { result: Json | null }) {
           </Text>
           <Group gap="xl">
             <Figure
-              hint="Optimized against unoptimized, both measured on the same out-of-sample window"
-              label="Improvement"
               size="md"
+              term="improvement"
               value={percent(optimization.improvementPct, { signed: true })}
             />
             {test.shown && baseline.shown && (
               <>
                 <Figure
-                  label="Optimized"
                   size="md"
+                  term="optimized"
                   value={percent(test.metrics.totalReturnPct, { signed: true })}
                 />
                 <Figure
-                  label="Unoptimized baseline"
                   size="md"
+                  term="unoptimized_baseline"
                   value={percent(baseline.metrics.totalReturnPct, { signed: true })}
                 />
               </>
@@ -164,7 +168,10 @@ export function OptimizationView({ result }: { result: Json | null }) {
       </Card>
 
       <Stack gap="xs">
-        <Title order={4}>Parameters the search moved</Title>
+        <Group gap={6}>
+          <Title order={4}>Parameters the search moved</Title>
+          <Explain term="parameters_moved" />
+        </Group>
         {optimization.parametersAtBound.length > 0 && (
           <Alert color="orange" icon={<IconAlertTriangle size={18} />} variant="light">
             {optimization.parametersAtBound.length} parameter
@@ -177,10 +184,18 @@ export function OptimizationView({ result }: { result: Json | null }) {
         <Table withTableBorder>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Parameter</Table.Th>
-              <Table.Th>Was</Table.Th>
-              <Table.Th>Now</Table.Th>
-              <Table.Th>Searched within</Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="parameter" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="value_before" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="value_after" />
+              </Table.Th>
+              <Table.Th>
+                <ExplainedLabel term="search_range" label="Searched within" />
+              </Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -219,16 +234,18 @@ export function OptimizationView({ result }: { result: Json | null }) {
 
       <Accordion variant="contained">
         <Accordion.Item value="diagnostics">
-          <Accordion.Control>Search diagnostics</Accordion.Control>
+          <Accordion.Control>
+            <ExplainedLabel label="Search diagnostics" term="search_effort" />
+          </Accordion.Control>
           <Accordion.Panel>
             <Stack gap="sm">
               <Group gap="xl">
-                <Figure label="Evaluations" size="md" value={integer(optimization.evaluations)} />
-                <Figure label="Failures" size="md" value={integer(optimization.failures)} />
-                <Figure label="Infeasible" size="md" value={integer(optimization.infeasible)} />
-                <Figure label="Trials" size="md" value={integer(optimization.trials)} />
-                <Figure label="Budget" size="md" value={integer(optimization.budget)} />
-                <Figure label="Seed" size="md" value={integer(optimization.seed)} />
+                <Figure size="md" term="evaluations" value={integer(optimization.evaluations)} />
+                <Figure size="md" term="failures" value={integer(optimization.failures)} />
+                <Figure size="md" term="infeasible" value={integer(optimization.infeasible)} />
+                <Figure size="md" term="trials" value={integer(optimization.trials)} />
+                <Figure size="md" term="budget" value={integer(optimization.budget)} />
+                <Figure size="md" term="seed" value={integer(optimization.seed)} />
               </Group>
               {optimization.countsExact === false && (
                 <Text c="dimmed" size="sm">
@@ -247,7 +264,10 @@ export function OptimizationView({ result }: { result: Json | null }) {
 
       {test.shown && (
         <Stack gap="xs">
-          <Title order={4}>Out-of-sample metrics</Title>
+          <Group gap={6}>
+            <Title order={4}>Out-of-sample metrics</Title>
+            <Explain term="metrics" />
+          </Group>
           <MetricsTable metrics={test.metrics} strategyLabel="Out of sample" />
         </Stack>
       )}
@@ -255,7 +275,10 @@ export function OptimizationView({ result }: { result: Json | null }) {
       <Divider />
 
       <Stack gap="xs">
-        <Title order={4}>Out-of-sample trades</Title>
+        <Group gap={6}>
+          <Title order={4}>Out-of-sample trades</Title>
+          <Explain term="out_of_sample" />
+        </Group>
         <TradeList trades={optimization.trades} />
       </Stack>
     </Stack>

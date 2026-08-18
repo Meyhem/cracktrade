@@ -18,6 +18,8 @@ from rich.table import Table
 if TYPE_CHECKING:
     from cracktrade.domain import (
         BacktestResult,
+        CostSensitivity,
+        EvolutionResult,
         Metrics,
         OptimizationResult,
         ValidationReport,
@@ -296,7 +298,7 @@ def render_validation(report: ValidationReport, console: Console) -> None:
     console.print()
     _render_robustness(report, console)
     console.print()
-    _render_costs(report, console)
+    _render_costs(report.costs, console)
     _render_validation_footer(report, console)
 
 
@@ -396,21 +398,20 @@ def _render_robustness(report: ValidationReport, console: Console) -> None:
         console.print(f"  [yellow]fragile: {', '.join(stability.fragile_parameters)}[/yellow]")
 
 
-def _render_costs(report: ValidationReport, console: Console) -> None:
+def _render_costs(costs: CostSensitivity, console: Console) -> None:
     table = Table(title="Cost sensitivity", title_justify="left", header_style="bold")
     table.add_column("Slippage")
     table.add_column("Return", justify="right")
-    for scenario in report.costs.scenarios:
+    for scenario in costs.scenarios:
         colour = "green" if scenario.metrics.total_return_pct > 0 else "red"
         table.add_row(
             f"{scenario.multiple:g}x ({scenario.slippage_pct:.3g}%)",
             f"[{colour}]{scenario.metrics.total_return_pct:+.2f}%[/{colour}]",
         )
     console.print(table)
-    if report.costs.break_even_multiple is not None:
+    if costs.break_even_multiple is not None:
         console.print(
-            f"  [yellow]! the edge disappears at "
-            f"{report.costs.break_even_multiple:g}x slippage[/yellow]"
+            f"  [yellow]! the edge disappears at {costs.break_even_multiple:g}x slippage[/yellow]"
         )
 
 
@@ -419,4 +420,126 @@ def _render_validation_footer(report: ValidationReport, console: Console) -> Non
     console.print(
         f"[dim]{report.total_trades} out-of-sample trades, {report.trials} configurations "
         f"scored, seed {report.seed}, {report.elapsed_seconds:.1f}s[/dim]"
+    )
+
+
+def render_evolution(result: EvolutionResult, console: Console) -> None:
+    """Print an evolved strategy and the evidence for and against it.
+
+    Same ordering as the walk-forward report and for the same reason: the verdict first, the
+    evidence next, the return last. It matters more here. A walk-forward report describes a
+    strategy its reader wrote and already believes in; this one describes a strategy a machine
+    produced, whose only claim on anyone's attention is the evidence printed underneath it.
+    """
+    _render_evolution_verdict(result, console)
+    console.print()
+    _render_composition(result, console)
+    console.print()
+    _render_segments(result, console)
+    console.print()
+    _render_evolution_robustness(result, console)
+    console.print()
+    _render_costs(result.costs, console)
+    _render_evolution_footer(result, console)
+
+
+def _render_evolution_verdict(result: EvolutionResult, console: Console) -> None:
+    credible = result.is_credible
+    colour = "green" if credible else "red"
+    verdict = "CREDIBLE" if credible else "NOT CREDIBLE"
+
+    console.print(
+        f"[bold]{result.strategy_name}[/bold] on [bold]{result.ticker}[/bold] — evolved from "
+        f"{result.distinct_configurations} distinct strategies, objective {result.objective}"
+    )
+    console.print(f"  [bold {colour}]{verdict}[/bold {colour}]")
+    console.print(
+        f"  holdout {result.holdout_metrics.total_return_pct:+.1f}% vs "
+        f"{result.benchmark.benchmark.total_return_pct:+.1f}% buy-and-hold over "
+        f"{result.holdout_bars} bars"
+    )
+    for failure in result.failures:
+        console.print(f"  [red]x[/red] {failure}")
+    if result.failed_candidates:
+        console.print(
+            f"  [yellow]! {result.failed_candidates} candidate(s) could not be built "
+            f"(most often {result.most_common_failure}) — that is a defect in the block "
+            f"library, and part of the space went unexplored[/yellow]"
+        )
+
+
+def _render_composition(result: EvolutionResult, console: Console) -> None:
+    console.print(f"[bold]Composed of[/bold] {result.composition}")
+
+
+def _render_segments(result: EvolutionResult, console: Console) -> None:
+    table = Table(
+        title="Per-segment, in sample — the windows selection happened on",
+        title_justify="left",
+        header_style="bold",
+    )
+    table.add_column("Segment")
+    table.add_column("Period")
+    table.add_column("Return", justify="right")
+    table.add_column("Max DD", justify="right")
+    table.add_column("Trades", justify="right")
+
+    for segment in result.segments:
+        colour = "green" if segment.was_profitable else "red"
+        table.add_row(
+            str(segment.index + 1),
+            f"{segment.first_bar} to {segment.last_bar}",
+            f"[{colour}]{segment.metrics.total_return_pct:+.2f}%[/{colour}]",
+            f"{segment.metrics.max_drawdown_pct:.2f}%",
+            str(segment.metrics.total_trades),
+        )
+    console.print(table)
+    console.print(
+        f"  [dim]none of these are evidence: the search chose this strategy because of them. "
+        f"Profitable in {result.profitable_segments}/{len(result.segments)}, median "
+        f"{result.median_segment_return_pct:+.2f}%, and the in-sample CAGR exceeds the holdout's "
+        f"by {result.overfitting_gap_pct:+.1f} pp[/dim]"
+    )
+
+
+def _render_evolution_robustness(result: EvolutionResult, console: Console) -> None:
+    table = Table(title="Robustness", title_justify="left", header_style="bold")
+    table.add_column("Check")
+    table.add_column("Result", justify="right")
+    table.add_column("Verdict", justify="right")
+
+    for check in result.checks:
+        mark = "[green]pass[/green]" if check.passed else "[red]fail[/red]"
+        table.add_row(check.label, check.stat, mark)
+    console.print(table)
+
+    deflated = result.deflated
+    console.print(
+        f"  [dim]Sharpe {deflated.observed:.3f} against a luck threshold of "
+        f"{deflated.threshold:.3f} for {deflated.trials} distinct strategies[/dim]"
+    )
+    if deflated.variance_estimated:
+        console.print(
+            "  [dim]Trial Sharpes were unavailable, so the deflation used the estimator "
+            "variance — a weaker, more permissive correction.[/dim]"
+        )
+    if result.stability.fragile_parameters:
+        console.print(
+            f"  [yellow]fragile: {', '.join(result.stability.fragile_parameters)}[/yellow]"
+        )
+
+
+def _render_evolution_footer(result: EvolutionResult, console: Console) -> None:
+    console.print()
+    console.print(
+        f"[dim]{result.genomes_evaluated} genomes evaluated over {result.generations} "
+        f"generations of {result.population}, {result.distinct_configurations} distinct, "
+        f"{result.holdout_metrics.total_trades} holdout trades, seed {result.seed}, "
+        f"{result.elapsed_seconds:.1f}s[/dim]"
+    )
+    console.print(
+        "[dim]The holdout is one contiguous draw. It is the honest option once evolution has "
+        "consumed the folds, but whether it contained a bull run or 2022 still moves every "
+        "number above. Re-running evolution on this ticker and reading the holdout again "
+        "spends it: at that point the strategy has been fitted to it through you.[/dim]"
     )

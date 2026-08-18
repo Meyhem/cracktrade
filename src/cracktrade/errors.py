@@ -132,6 +132,15 @@ class NoOptimizableParametersError(OptimizationError):
     """The strategy exposes no numeric parameters to search over."""
 
 
+class EvolutionError(OptimizationError):
+    """A strategy could not be evolved.
+
+    A subclass of :class:`OptimizationError` because it is the same kind of failure to the
+    caller -- a search that could not be completed -- and so maps onto the same exit code
+    without the CLI having to learn a new branch.
+    """
+
+
 # --------------------------------------------------------------------------- cancellation
 
 

@@ -43,6 +43,15 @@ _EXPOSED_PROPERTIES: dict[str, tuple[str, ...]] = {
         "parameters_at_bound",
     ),
     "FoldResult": ("was_profitable",),
+    "SegmentResult": ("was_profitable",),
+    "EvolutionResult": (
+        "checks",
+        "profitable_segments",
+        "median_segment_return_pct",
+        "overfitting_gap_pct",
+        "failures",
+        "is_credible",
+    ),
     "DeflatedSharpe": ("is_significant", "beats_the_lucky_threshold"),
     "OverfittingProbability": ("is_acceptable",),
     "StabilityReport": (

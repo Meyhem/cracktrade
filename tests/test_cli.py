@@ -196,7 +196,7 @@ def test_every_command_is_registered() -> None:
     assert main(["--help"]) == 0
 
 
-@pytest.mark.parametrize("command", ["backtest", "optimize", "walkforward"])
+@pytest.mark.parametrize("command", ["backtest", "optimize", "walkforward", "evolve"])
 def test_result_commands_offer_every_output_format(
     command: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -234,7 +234,7 @@ def test_every_command_appears_in_the_help(capsys: pytest.CaptureFixture[str]) -
     main(["--help"])
 
     printed = capsys.readouterr().out
-    for command in ("validate", "backtest", "optimize", "walkforward", "indicators"):
+    for command in ("validate", "backtest", "optimize", "walkforward", "evolve", "indicators"):
         assert command in printed
 
 

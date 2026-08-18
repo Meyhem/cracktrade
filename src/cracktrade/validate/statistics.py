@@ -82,7 +82,8 @@ def deflated_sharpe(
             deflation.
         trial_sharpes: the Sharpe of every candidate, when available. Their variance is the
             right measure of how widely the search ranged. A parallel search cannot report
-            them, and the estimator variance is used instead.
+            them, and the estimator variance is used instead. Non-finite entries are dropped --
+            see :func:`_finite`.
     """
     observations = int(returns.size)
     observed = per_period_sharpe(returns)
@@ -90,11 +91,10 @@ def deflated_sharpe(
     if observations < 3:
         return DeflatedSharpe(observed, 0.0, 0.0, trials, observations, variance_estimated=True)
 
-    estimated = trial_sharpes is None or trial_sharpes.size < 2
+    usable = _finite(trial_sharpes)
+    estimated = usable.size < 2
     variance = (
-        _estimator_variance(observed, observations)
-        if trial_sharpes is None or estimated
-        else float(np.var(trial_sharpes, ddof=1))
+        _estimator_variance(observed, observations) if estimated else float(np.var(usable, ddof=1))
     )
     threshold = expected_maximum_sharpe(trials, variance)
 
@@ -118,6 +118,22 @@ def deflated_sharpe(
         observations=observations,
         variance_estimated=estimated,
     )
+
+
+def _finite(values: npt.NDArray[np.float64] | None) -> npt.NDArray[np.float64]:
+    """The finite entries of ``values``, empty when there are none.
+
+    A candidate whose Sharpe is infinite -- a handful of trades whose returns happened to have
+    no variance -- says nothing about how widely the search ranged, and it does far worse than
+    contribute nothing: ``np.var`` over an array containing an infinity is ``nan``, the luck
+    threshold becomes ``nan``, and the whole statistic is reported as ``P=nan``. That reads as a
+    failed check rather than as a broken computation, which is the wrong kind of wrong for a
+    number this report treats as a verdict. Dropping them falls back to the estimator variance
+    when too few survive, which the result already flags.
+    """
+    if values is None:
+        return np.empty(0, dtype=np.float64)
+    return np.asarray(values[np.isfinite(values)], dtype=np.float64)
 
 
 def _estimator_variance(sharpe: float, observations: int) -> float:

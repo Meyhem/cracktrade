@@ -25,6 +25,7 @@ __all__ = [
     "CostSensitivity",
     "DataVintage",
     "DeflatedSharpe",
+    "EvolutionResult",
     "FoldResult",
     "Interval",
     "Metrics",
@@ -33,6 +34,7 @@ __all__ = [
     "OverfittingProbability",
     "ParameterChange",
     "RunSeries",
+    "SegmentResult",
     "Series",
     "StabilityPoint",
     "StabilityReport",
@@ -827,3 +829,241 @@ class CostSensitivity:
         return next(
             (scenario for scenario in self.scenarios if scenario.multiple == multiple), None
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentResult:
+    """The winning strategy measured on one segment of the evolution region.
+
+    In-sample by construction: these are the windows the search selected on. They are reported
+    because the spread across them is what the fitness function was actually optimising, and a
+    winner whose median segment carried it while two others lost money is a different object
+    from one that was steady -- but no number here is evidence about the future, and the report
+    labels them accordingly.
+    """
+
+    index: int
+    first_bar: date
+    last_bar: date
+    bars: int
+    metrics: Metrics
+
+    @property
+    def was_profitable(self) -> bool:
+        """Whether the winner made money on this segment."""
+        return self.metrics.total_return_pct > 0
+
+
+@dataclass(frozen=True, slots=True)
+class EvolutionResult:
+    """A strategy composed by evolution, and the evidence for and against it.
+
+    The headline is :attr:`holdout_metrics`, computed once on a stretch of history no genome was
+    ever scored on. Everything else in this object exists to stop that headline being read on
+    its own: a search that composed structure as well as parameters considered far more distinct
+    strategies than a parameter search does, and the maximum of a large enough number of draws
+    looks impressive whether or not anything is there.
+    """
+
+    strategy_name: str
+    ticker: str
+    objective: str
+    #: The blocks the winner was assembled from, in words. The YAML says what the strategy is;
+    #: this says what it was composed of, which is not recoverable from the YAML afterwards.
+    composition: str
+    blocks: tuple[str, ...]
+    strategy_yaml: str
+    holdout_metrics: Metrics
+    benchmark: BenchmarkComparison
+    segments: tuple[SegmentResult, ...]
+    trades: tuple[Trade, ...]
+    deflated: DeflatedSharpe
+    overfitting: OverfittingProbability
+    stability: StabilityReport
+    costs: CostSensitivity
+    mean_return_interval: Interval
+    total_return_interval: Interval
+    population: int
+    generations: int
+    #: Genomes handed to the fitness function, repeats included.
+    genomes_evaluated: int
+    #: Distinct rendered configurations among them. This is the trial count the deflated Sharpe
+    #: uses; the two differ because elites survive generations and crossover rediscovers
+    #: configurations, and counting those repeats as separate looks would understate the
+    #: deflation.
+    distinct_configurations: int
+    #: Genomes that could not be rendered or simulated. Any value above zero is a defect in the
+    #: block library rather than a fact about the market -- see
+    #: :meth:`cracktrade.evolution.protocol.Fitness._record_failure`.
+    failed_candidates: int
+    most_common_failure: str | None
+    min_trades_required: int
+    evolution_bars: int
+    holdout_bars: int
+    seed: int
+    elapsed_seconds: float
+
+    #: Best fitness after each generation, generation zero first. A trace that flattens early
+    #: says the population converged; one still falling at the end says the budget, not the
+    #: library, was the binding constraint.
+    best_score_by_generation: tuple[float, ...] = ()
+
+    #: Holdout chart series, present only when the caller asked for them.
+    series: RunSeries | None = None
+
+    @property
+    def profitable_segments(self) -> int:
+        """How many evolution segments the winner made money on. In-sample."""
+        return sum(1 for segment in self.segments if segment.was_profitable)
+
+    @property
+    def median_segment_return_pct(self) -> float:
+        """Median in-sample segment return, which is close to what fitness selected on."""
+        return _median(tuple(segment.metrics.total_return_pct for segment in self.segments))
+
+    @property
+    def overfitting_gap_pct(self) -> float:
+        """How much better the winner looked where it was selected than where it was judged.
+
+        The in-sample side is the *median* segment rather than the best one, so the gap is not
+        inflated by the segment that happened to carry the genome through selection.
+        """
+        median = _median(tuple(segment.metrics.cagr_pct for segment in self.segments))
+        return median - self.holdout_metrics.cagr_pct
+
+    @property
+    def checks(self) -> tuple[Check, ...]:
+        """Every robustness check, passed or failed, in the reporting order of section 12.8.
+
+        Deliberately the same shape as :attr:`ValidationReport.checks`, and deliberately judged
+        only on the holdout: a check computed on the evolution segments would be asking the data
+        that chose the winner whether the winner was well chosen. The in-sample segments are
+        reported next to these, never mixed into them.
+        """
+        return (
+            Check(
+                name="benchmark",
+                label="Benchmark",
+                passed=self.benchmark.beats_buy_and_hold,
+                plain=(
+                    "Holdout return against simply owning the ticker over the same window. A "
+                    "strategy that does not clear this was not worth composing."
+                ),
+                stat=(
+                    f"{self.holdout_metrics.total_return_pct:+.1f}% against "
+                    f"{self.benchmark.benchmark.total_return_pct:+.1f}%"
+                ),
+                detail=(
+                    f"returned {self.holdout_metrics.total_return_pct:+.1f}% on the holdout "
+                    f"against {self.benchmark.benchmark.total_return_pct:+.1f}% for buy-and-hold"
+                ),
+            ),
+            Check(
+                name="deflated_sharpe",
+                label="Deflated Sharpe",
+                passed=self.deflated.is_significant,
+                plain=(
+                    f"Evolution scored {self.distinct_configurations} distinct strategies. That "
+                    "many attempts produce a good-looking Sharpe from no edge at all; this asks "
+                    "whether the observed one beats that luck."
+                ),
+                stat=f"P={self.deflated.probability:.2f}, bar is {SIGNIFICANCE:.2f}",
+                detail=(
+                    f"deflated Sharpe P={self.deflated.probability:.2f}, below the "
+                    f"{SIGNIFICANCE:.2f} bar for {self.deflated.trials} distinct strategies"
+                ),
+            ),
+            Check(
+                name="overfitting",
+                label="Probability of backtest overfitting",
+                passed=self.overfitting.is_acceptable,
+                plain=(
+                    "Above 0.5, picking the best of the final population is worse than picking "
+                    "one of them at random."
+                ),
+                stat=f"PBO {self.overfitting.probability:.2f}",
+                detail=(
+                    f"probability of backtest overfitting {self.overfitting.probability:.2f}, "
+                    f"so selecting the winner was no better than choosing at random"
+                ),
+            ),
+            Check(
+                name="stability",
+                label="Parameter stability",
+                passed=self.stability.is_stable,
+                plain=(
+                    "The winner's indicator parameters nudged by 10% and 20%. A real edge sits "
+                    "on a plateau; a curve fit sits on a needle."
+                ),
+                stat=(
+                    f"worst 10% nudge costs "
+                    f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
+                ),
+                detail=(
+                    f"a 10% parameter nudge destroys "
+                    f"{100 * self.stability.worst_small_degradation:.0f}% of the objective"
+                ),
+            ),
+            Check(
+                name="costs",
+                label="Cost sensitivity",
+                passed=self.costs.survives_double_costs,
+                plain=(
+                    "The holdout recomputed at twice and three times the configured commission "
+                    "and slippage. An edge that dies when costs double belongs to the broker."
+                ),
+                stat=self._cost_stat(),
+                detail="unprofitable at twice the configured slippage",
+            ),
+            Check(
+                name="intervals",
+                label="Confidence intervals",
+                passed=self.mean_return_interval.excludes_zero,
+                plain=(
+                    "Bootstrap interval for the holdout's mean daily return. One that straddles "
+                    "zero is not distinguishable from luck."
+                ),
+                stat=(
+                    f"mean interval {100 * self.mean_return_interval.low:+.3f}% … "
+                    f"{100 * self.mean_return_interval.high:+.3f}%"
+                ),
+                detail=(
+                    f"the 95% interval on mean daily holdout return, "
+                    f"{100 * self.mean_return_interval.low:+.3f}% to "
+                    f"{100 * self.mean_return_interval.high:+.3f}%, straddles zero"
+                ),
+            ),
+            Check(
+                name="trade_count",
+                label="Holdout trades",
+                passed=self.holdout_metrics.total_trades >= MIN_TRADES_TO_JUDGE,
+                plain=(
+                    f"Below {MIN_TRADES_TO_JUDGE} closed trades no figure on this screen means "
+                    "anything."
+                ),
+                stat=f"{self.holdout_metrics.total_trades} of {MIN_TRADES_TO_JUDGE} needed",
+                detail=f"only {self.holdout_metrics.total_trades} trades on the holdout",
+            ),
+        )
+
+    def _cost_stat(self) -> str:
+        multiple = self.costs.break_even_multiple
+        if multiple is None:
+            return "still profitable at every tested multiple"
+        return f"break-even at {multiple:.1f}x costs"
+
+    @property
+    def failures(self) -> tuple[str, ...]:
+        """Every robustness check the evolved strategy did not pass, in plain words."""
+        return tuple(check.detail for check in self.checks if not check.passed)
+
+    @property
+    def is_credible(self) -> bool:
+        """Whether every robustness check passed.
+
+        The same strict conjunction :attr:`ValidationReport.is_credible` applies, and it matters
+        more here. A parameter search starts from a strategy someone believed in; evolution
+        starts from nothing and returns the best of a large number of guesses, so "most of the
+        checks passed" is the expected output of a search with no edge at all.
+        """
+        return all(check.passed for check in self.checks)

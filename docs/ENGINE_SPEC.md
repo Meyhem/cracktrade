@@ -2308,3 +2308,202 @@ failed honestly on lease expiry (§14.5) — which is what a killed worker shoul
 Layering, enforced by review and a repo test: `routes → services → repos → db`, no skips and no
 cycles. Engine calls happen in `services/` and the worker only; repositories never import the
 engine, routes never import repositories.
+
+---
+
+## 16. Evolutionary strategy generation
+
+**[NEW] — decided 2026-08-18.** §9 optimizes a strategy the user wrote. This section specifies
+building one from nothing: the user names a ticker and a genetic algorithm composes conditions
+from a curated library, choosing structure and numbers together.
+
+The feature's difficulty is not the search. It is that structure search is a machine for
+manufacturing exactly the output the project exists to prevent — a number that looks
+authoritative and is not. A parameter search of a few thousand vectors already needs §12.3's
+deflation to be readable; a search that also chooses *which conditions the strategy is made of*
+reaches a far larger space, and the maximum of enough draws is impressive on a random walk. So
+the specification below is mostly about evidence, and the search itself is the short part.
+
+Implemented in `src/cracktrade/evolution/`, exposed as `cracktrade evolve TICKER`.
+
+### 16.1 What is evolved, and what is not
+
+Evolved: the `indicators` list, the `entry` signal, and the `exit` rule.
+
+Not evolved: `universe`, `execution`, `position_sizing` — the same three sections §9.1 never
+optimizes, for the same reason. They are the user's statement of what they are trading and with
+what, not a hypothesis about the market. They arrive as a **chassis**
+(`evolution/genome.py:Chassis`) and are passed through unchanged.
+
+**The ticker is never searched.** Letting evolution choose among tickers would add cross-asset
+selection bias on top of the structure search §16.6 is already deflating for, and the two are
+not separable after the fact. One run composes for one symbol.
+
+### 16.2 The block library
+
+A **block** (`evolution/blocks.py`) is one tradeable condition: the indicators it needs, bounded
+ranges for their parameters and its own thresholds, and a signal expression tying them together.
+Twenty-nine blocks, in a fixed order.
+
+**Every expression in the library is written by hand.** Evolution picks blocks and moves numbers
+inside them; it never composes an expression. This is the safety argument for the whole feature:
+each expression is checked against §2.1's grammar by a repo test, so a genome cannot compose its
+way to something the four look-ahead layers would have to catch.
+
+**The order of `BLOCKS` is part of the reproducibility contract.** A genome stores block
+*indices*, so reordering the tuple silently reinterprets every stored genome and every recorded
+seed. Add to the end.
+
+Three consequences of the library being curated, all deliberate:
+
+- **The space is bounded and countable.** "How many distinct strategies were considered" has an
+  exact answer, which is what §16.6's deflation consumes. Open-ended expression evolution would
+  not have one.
+- **There are no breakout blocks.** `rolling_max` includes the current bar, so
+  `close > rolling_max(close, n)` is false on every bar of every history, and the shifted form
+  the comparison actually wants is unexpressible by design (§2.1). Channel *position* stands in:
+  Bollinger percent-B and Donchian's fractional position both express "near the top of the
+  range" without reading a bar the decision could not have seen.
+- **Blocks come in opposed pairs and carry no role.** Neither member of a pair is labelled entry
+  or exit. A trend strategy enters above its average and leaves below it; a mean-reversion
+  strategy does the reverse, and a library that pre-assigned roles would have excluded one of
+  those families by construction.
+
+Where two genes are only meaningful relative to each other — the fast and slow windows of a
+crossover — their ranges are **disjoint** rather than constrained. Overlapping ranges would let
+the search produce a genome whose "fast" average is the slower of the two: a valid strategy that
+means the opposite of what its block name says, and that no reader would catch.
+
+### 16.3 The genome
+
+Fixed-shape slots (`evolution/genome.py`): entry condition A, an optional entry condition B, the
+combinator joining them (`&` or `|`), an optional exit condition, an optional stop (one kind out
+of fixed/trailing/ATR, so §3.7's priority chain can never shadow a gene the search paid for), an
+optional take-profit, and optional holding bounds.
+
+A slot holds a block choice **together with** its gene values, and the slot is the unit of
+crossover. Exchanging a block index without its genes would hand the child an arity that does
+not match its block and numbers that mean something else.
+
+**Rendering is total.** Every genome the operators can produce renders to a strategy that passes
+structural and semantic validation, and `tests/test_evolution.py` asserts it over the reachable
+space. This is not cosmetic: an unrenderable genome would score `INFEASIBLE` and steer the
+search away from a region of the library rather than reporting the bug in it.
+
+Totality is maintained by `repair`, which fixes the two schema rules that are not expressible as
+independent gene bounds — an exit with no mechanism at all gets a holding cap, and a holding
+floor at or above the cap yields to it. Both repairs are deterministic; one that consulted the
+random number generator would make reproducibility depend on how often it was needed.
+
+**Thresholds inside expressions are searchable here, and are not searchable afterwards.** §9.1's
+known limitation — numeric literals in a `signal:` string are unreachable to the optimizer —
+does not bind evolution, which controls the rendering. The consequence is asymmetric and worth
+stating: an evolved strategy's thresholds are frozen the moment it becomes YAML, so a subsequent
+`cracktrade optimize` on the output tunes the indicator windows and leaves every threshold where
+evolution put it.
+
+### 16.4 The search
+
+An elitist generational GA (`evolution/search.py`): tournament selection, per-slot uniform
+crossover, per-slot mutation, and the best few genomes carried forward untouched and unscored.
+Defaults: population 40, 25 generations, 2 elites, tournament 3, crossover 0.9, mutation 0.2 per
+slot. A mutating condition slot either swaps its block outright (30%) or nudges the numbers
+inside the block it has; optional slots toggle between present and absent, which is how the
+search reaches simpler strategies rather than only more elaborate ones.
+
+**Hand-written rather than taken from a framework.** DEAP is untyped, which is a poor fit for a
+strict-mypy codebase, and the working agreement to verify library behaviour rather than assume
+it is a bad trade for two hundred lines of operators whose behaviour is this easy to assert
+directly.
+
+**Seeded and single-process.** Everything stochastic comes from one `random.Random(seed)`, and a
+test asserts that the same seed produces the same winner end to end — defect D12 is not less of
+a defect for being evolutionary. The search is deliberately *not* parallelised: §9.2's
+`workers=-1` is safe only because DE with `updating='deferred'` is provably worker-count
+independent, and nothing here has been shown to have that property.
+
+### 16.5 What evolution may see
+
+`evolution/protocol.py`. Three separations, in order of importance.
+
+**The holdout is untouchable.** The last `holdout_fraction` of history (default 0.2) is split
+off before the first genome is drawn and is evaluated exactly once, on the winner, after every
+choice is final. It is a `TestWindow`; the fitness function accepts a tuple of `EvolutionWindow`
+and nothing else, so handing evolution the holdout fails mypy — §2.5's discipline applied to a
+second search. The holdout is always the *most recent* stretch: one taken from the middle would
+be surrounded by data the search had seen, and autocorrelation alone would leak the regime.
+
+**Fitness is a typical segment, not a total.** The evolution region is cut into `segments`
+contiguous windows (default 4) and a genome scores the **median** of its per-segment objective.
+A mean would let one spectacular segment carry a genome that lost money in the other three,
+which is precisely the genome a structure search is most likely to find and least likely to be
+right about. Four rather than three because §12.4's CSCV needs at least four slices to produce
+any combinations at all.
+
+**The trade floor is one constraint over the whole region.** Segments are short, so §9.3's floor
+applied per segment would reject nearly everything for a reason that has nothing to do with the
+market. It is applied once to the summed trade count and sized from the whole evolution region;
+the per-segment objective is bound with `min_trades=0`. Above the floor there is still no
+gradient rewarding more trades, for the reason §9.3 gives.
+
+Every scored window carries a warm-up prefix sized from `library_warmup()` — the widest window
+any block can ask for, currently 200 bars — not from the winning genome. §9.2 sizes the
+optimizer's test window from the widest candidate for the same reason: a genome whose warm-up
+exceeded the prefix would have its signals suppressed *inside* the scored region and quietly
+lose bars it should have been able to trade.
+
+A run where every candidate is infeasible raises rather than returning. There is no result, and
+a result nobody may believe is worse than none.
+
+### 16.6 What is reported
+
+`EvolutionResult`. The headline is `holdout_metrics`, computed once. Beside it:
+
+- the **benchmark**, buying and holding the same ticker across the same holdout bars;
+- the **deflated Sharpe**, whose trial count is the number of **distinct rendered
+  configurations**, identified by digest. Elites survive generations untouched and crossover
+  rediscovers configurations, and counting those repeats as separate looks would *understate*
+  the deflation — it would treat one candidate examined ten times as ten independent looks;
+- the **probability of backtest overfitting**, over a segments-by-finalists matrix built from
+  the distinct feasible genomes of the final population. Nothing is re-simulated: their
+  per-segment Sharpes were kept during the search. Infeasible finalists are excluded, since a
+  candidate that could never have been selected is not an alternative the selection passed over;
+- **parameter stability**, **cost sensitivity**, and **bootstrap intervals**, all as in §12;
+- the **per-segment metrics** of the winner, labelled in-sample, and never mixed into the
+  checks. The search chose this strategy *because* of those numbers.
+
+`checks`, `failures` and `is_credible` have the same shape and the same strict conjunction as
+`ValidationReport`'s (§12.8), and every check is computed on the holdout. The conjunction matters
+more here than there: a parameter search starts from a strategy someone believed in, while this
+returns the best of a large number of guesses, so "most of the checks passed" is the *expected*
+output of a search with no edge at all. Expect most runs to be NOT CREDIBLE.
+
+Two honest caveats travel with the report rather than living only in this document:
+
+- **The holdout is one contiguous draw**, with the single-draw weakness §9.4 rejected for
+  optimization. Evolution consumes the folds, so a terminal holdout is the honest option
+  available — and re-running evolution on the same ticker and reading the holdout again spends
+  it, at which point the strategy has been fitted to it through the user.
+- **The stability surface is not the fitness function.** It scores the objective on the
+  evolution region as a single window, because no single-window objective reproduces a median
+  across segments. The question it answers — does a 10% nudge destroy the result — is unchanged,
+  but its numbers are objective values, not fitness values. It also perturbs only the parameters
+  §9.1's discovery can reach, so it understates how many numbers the winner depends on.
+
+`failed_candidates` counts genomes that could not be rendered or simulated. Unlike §9.2's
+failure tally, **any** non-zero value is a defect in the block library or in `repair` rather
+than a fact about the market, and both the log and the report say so.
+
+### 16.7 Amendment to §12.3 — non-finite trial Sharpes
+
+**[FIX] — found 2026-08-18.** `deflated_sharpe` computed the cross-trial variance over the trial
+Sharpes as given. A candidate with a handful of trades whose returns happened to have no
+variance produces an *infinite* Sharpe; `np.var` over an array containing an infinity is `nan`,
+the luck threshold becomes `nan`, and the statistic is reported as `P=nan`. That renders as a
+failed check rather than as a broken computation, which is the wrong kind of wrong for a number
+the report treats as a verdict.
+
+Non-finite trial Sharpes are now dropped before the variance is computed, falling back to the
+estimator variance when fewer than two survive — which the result already flags as
+`variance_estimated`. The defect was reachable from walk-forward too; evolution merely hits it
+more often, because a segment is short enough to produce a degenerate candidate regularly.

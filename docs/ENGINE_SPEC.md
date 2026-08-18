@@ -2029,6 +2029,19 @@ A run whose worker dies is failed honestly on lease expiry (`engine_failure`, wo
 mid-run) and never silently re-queued: a re-run fetches data again and is therefore a different
 measurement (§14.1).
 
+`queued_at`, `started_at`, `heartbeat_at`, and `finished_at` are all written with
+`clock_timestamp()`, never `now()`. `now()` is the enclosing transaction's start time, frozen
+for the transaction's whole duration; a lease held across a worker's setup and execution is not
+a single-statement transaction, so `now()` would report when the transaction began rather than
+when the write actually happened. This was found, not assumed: a read on the worker's own
+connection (the lease sweep, checking for abandoned runs) once ran outside any unit of work,
+leaving the connection idle-in-transaction indefinitely; every later write on that connection
+became a savepoint inside it rather than a transaction of its own, so `now()` returned an
+ever-more-stale instant. It surfaced as a live evolution run recording nine milliseconds
+elapsed for a search that ran for seven seconds. The read is now wrapped like every other repo
+call; `clock_timestamp()` on the wall-clock columns is the second, independent line of defence
+against the same class of bug recurring elsewhere.
+
 Failures record the engine's own error text verbatim, plus a category mapping 1:1 onto the exit
 codes of §13.3:
 

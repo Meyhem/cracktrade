@@ -394,6 +394,25 @@ def test_a_live_run_is_not_swept(db: psycopg.Connection[TupleRow]) -> None:
     assert sweep_expired(db, lease_seconds=3600) == []
 
 
+def test_sweeping_with_nothing_to_report_still_closes_its_transaction(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """``expired_leases`` is a bare read; it must not leave the connection mid-transaction.
+
+    It used to: run outside any unit of work, a ``SELECT`` still opens a transaction under
+    ``autocommit=False``, and nothing committed it, even when it found nothing to sweep. The
+    worker then went on claiming and finishing runs on that same connection, each ``now()``
+    now pinned to whenever the leaked transaction had started rather than to when the write
+    actually happened -- observed live as a run whose row recorded 9 milliseconds elapsed for
+    a search that ran for seven seconds. Recording wall-clock columns with
+    ``clock_timestamp()`` instead of ``now()`` (see ``RunRepo.claim``) is the second line of
+    defence; this asserts the leak itself is closed.
+    """
+    assert db.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    assert sweep_expired(db, lease_seconds=3600) == []
+    assert db.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+
 # --------------------------------------------------------------------------- the claim loop
 
 

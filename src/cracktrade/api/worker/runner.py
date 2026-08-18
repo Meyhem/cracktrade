@@ -118,8 +118,9 @@ def sweep_expired(connection: psycopg.Connection[TupleRow], lease_seconds: float
     because a retry fetches data again and measures something else.
     """
     failed: list[RunRow] = []
-    repo = RunRepo(connection)
-    for run in repo.expired_leases(lease_seconds):
+    with unit_of_work_on(connection) as work:
+        expired = RunRepo(work.connection).expired_leases(lease_seconds)
+    for run in expired:
         logger.warning("run %s lost its worker (%s); failing it", run.id, run.claimed_by)
         with unit_of_work_on(connection) as work:
             failed.append(

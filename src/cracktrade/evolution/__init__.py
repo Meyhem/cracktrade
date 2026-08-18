@@ -15,15 +15,13 @@ conjunction of section 12 checks the walk-forward report uses.
 
 from __future__ import annotations
 
-from cracktrade.evolution.blocks import BLOCKS, ConditionBlock, Gene, library_warmup
+from cracktrade.evolution.blocks import BLOCKS, library_warmup
 from cracktrade.evolution.genome import Chassis, Genome, Slot, Stop, describe, render, repair
 from cracktrade.evolution.protocol import (
     DEFAULT_HOLDOUT_FRACTION,
     DEFAULT_MIN_SEGMENT_BARS,
     DEFAULT_SEGMENTS,
-    EvolutionWindow,
     Fitness,
-    Regions,
     configuration_digest,
     split_for_evolution,
 )
@@ -46,13 +44,9 @@ __all__ = [
     "DEFAULT_POPULATION",
     "DEFAULT_SEGMENTS",
     "Chassis",
-    "ConditionBlock",
-    "EvolutionWindow",
     "Fitness",
     "GaSettings",
-    "Gene",
     "Genome",
-    "Regions",
     "Slot",
     "Stop",
     "configuration_digest",

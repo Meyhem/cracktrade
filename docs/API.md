@@ -78,8 +78,11 @@ Static facts the UI needs before rendering anything; cacheable for the session.
   "fold_schemes": ["anchored", "rolling"],
   "defaults": {
     "optimize":     { "objective": "calmar", "epochs": 10, "cache": true },
-    "walk_forward": { "objective": "calmar", "epochs": 10, "folds": 6, "scheme": "anchored" }
+    "walk_forward": { "objective": "calmar", "epochs": 10, "folds": 6, "scheme": "anchored" },
+    "evolve":       { "objective": "calmar", "population": 40, "generations": 25,
+                       "segments": 4, "holdout_fraction": 0.2, "cache": true }
   },
+  "evolution_warmup_bars": 200,          // bars a block library needs before anything scores
   "indicators": [                       // from the engine registry (spec §5.2)
     { "type": "sma", "parameters": [{ "name": "window" }], "outputs": ["<name>"], "requires": ["close"] },
     { "type": "macd", "parameters": [{ "name": "fast" }, { "name": "slow" }, { "name": "signal" }],
@@ -165,7 +168,7 @@ Rows come from the `strategy_overview` view:
     "lineage": { "parent_strategy_id": "…", "parent_name": "momentum_breakout",
                  "parent_version": 4, "origin_run_id": null },
     "origin_not_credible": false,
-    "counts": { "optimize": 4, "backtest": 2, "walk_forward": 2, "versions": 7 },
+    "counts": { "optimize": 4, "backtest": 2, "walk_forward": 2, "evolve": 0, "versions": 7 },
     "last_run": { "id": "…", "kind": "walk_forward", "status": "succeeded", "at": "…" },
     "verdict": "not_credible",          // credible | not_credible | unvalidated | never_run
     "verdict_run_id": "…",
@@ -242,7 +245,7 @@ Detail header + Config tab in one call:
     "config": { "...": "canonical parsed config" },
     "yaml": "strategy:\n  name: momentum_v2\n…"
   },
-  "counts": { "optimize": 4, "backtest": 2, "walk_forward": 2, "versions": 7 },
+  "counts": { "optimize": 4, "backtest": 2, "walk_forward": 2, "evolve": 0, "versions": 7 },
   "verdict": {
     "state": "not_credible",
     "run_id": "…", "run_number": 22, "version": 7, "finished_at": "…",
@@ -352,6 +355,9 @@ version parameter (a failed run's "Re-run against v7" is just a fresh launch).
 { "kind": "optimize",     "params": { "objective": "calmar", "epochs": 10, "cache": true } }
 { "kind": "walk_forward", "params": { "objective": "calmar", "epochs": 10,
                                       "folds": 6, "scheme": "anchored" } }
+{ "kind": "evolve",       "params": { "objective": "calmar", "population": 40,
+                                      "generations": 25, "segments": 4,
+                                      "holdout_fraction": 0.2 } }
 ```
 
 `202` with the run resource (status `queued`, its per-strategy `number` assigned). The UI
@@ -385,10 +391,14 @@ print, extracted server-side from `result` so every list and the run page agree:
       //                 test_cagr_pct, trials, suppressed }
       // walk_forward: { folds, scheme, combined_oos_pct, benchmark_pct,
       //                 profitable_folds, oos_trades, is_credible, failed_checks }
+      // evolve:       { composition, trials, trades, is_credible, failed_checks,
+      //                 suppressed, trade_floor, and — unless suppressed —
+      //                 holdout_return_pct, benchmark_return_pct, max_drawdown_pct,
+      //                 profitable_segments }
       "folds": 4, "scheme": "anchored", "combined_oos_pct": 6.6, "benchmark_pct": 149.0,
       "profitable_folds": 2, "oos_trades": 16, "is_credible": false, "failed_checks": 3
     },
-    "promotable": false        // succeeded optimize/walk_forward runs
+    "promotable": false        // succeeded optimize/walk_forward/evolve runs
 }], "total": 8 }
 ```
 
@@ -412,9 +422,13 @@ the list row, plus:
   //  walk_forward  → ValidationReport    (folds, benchmark, deflated, overfitting, stability,
   //                                       costs, intervals, failures, is_credible,
   //                                       optimized_yaml)
+  //  evolve        → EvolutionResult     (composition, blocks, segments, holdout_metrics,
+  //                                       benchmark, distinct_configurations, deflated,
+  //                                       overfitting, stability, costs, intervals, failures,
+  //                                       is_credible, strategy_yaml)
   "error": null,               // failed runs: { "category": "market_data", "exit_code": 3,
                                //   "message": "MarketDataError: NVDA … returned 0 bars\n…" }
-  "checks": [                  // walk_forward only — the "Every check" table, structured.
+  "checks": [                  // walk_forward and evolve only — the "Every check" table, structured.
     { "name": "fold_results",  "passed": false, "stat": "profitable in 2 of 4 folds" },
     { "name": "benchmark",     "passed": false, "stat": "+6.6% against +149.0%" },
     { "name": "deflated_sharpe", "passed": false, "stat": "P=0.00, bar is 0.95" },
@@ -447,18 +461,21 @@ The Promote dialog: the run's winning config becomes a new strategy.
 { "name": "momentum_v2_opt22" }    // server default offered by GET /runs/{id}
 ```
 
-`409` unless the run is a succeeded `optimize` or `walk_forward`. Otherwise, in one
+`409` unless the run is a succeeded `optimize`, `walk_forward`, or `evolve`. Otherwise, in one
 transaction: create strategy (`origin: promoted`, parent = the run's strategy,
 `origin_run_id` = this run, `origin_not_credible` snapshotted from the run/parent verdict at
-this moment), create v1 from `optimized_yaml`, and queue a backtest — "so the promoted strategy
-is never sitting there with no numbers at all".
+this moment), create v1 from `optimized_yaml` (`strategy_yaml` for an evolve source), and queue
+a backtest — "so the promoted strategy is never sitting there with no numbers at all".
 
 `201` → `{ "strategy_id", "version": {…}, "backtest_run_id", "carried_warning" }`.
 
 `carried_warning` is `true` unless the source run is a walk-forward that itself returned
-credible — promoting an optimize always carries it, whatever the parent's verdict says (spec
-§14.7). `name` is optional; omitted, the server uses the `default_promote_name` that
-`GET /runs/{id}` offers, and a taken name is a `409` rather than a name nobody chose.
+credible — promoting an optimize or an evolution result always carries it, whatever the
+parent's verdict (or, for evolve, the run's own verdict) says: an evolution run's holdout is
+one contiguous draw evaluated once, which answers a narrower question than a walk-forward's
+re-fit-and-re-test across the whole history (spec §14.7, §17.2). `name` is optional; omitted,
+the server uses the `default_promote_name` that `GET /runs/{id}` offers, and a taken name is a
+`409` rather than a name nobody chose.
 
 ### `POST /runs/{id}/cancel` — open question §10
 
@@ -543,6 +560,8 @@ code path for rendering a run. Fallback when SSE is unavailable: poll
 | Optimization run view (OOS band, search-bought table, gap, params, diagnostics, resulting config) | `GET /runs/{id}` |
 | Backtest view (vs buy-and-hold, simulation grid, trades, vintage, suppressed variant) | `GET /runs/{id}` + `GET /runs/{id}/series/*` |
 | Validation run view (verdict, checks, folds, DSR/PBO, stability, costs, intervals) | `GET /runs/{id}` + series |
+| Evolution run view (composition, holdout figures, DSR/PBO, segments, search trace, composed YAML) | `GET /runs/{id}` + series |
+| Compose-a-strategy dialog / Evolve button | `POST /strategies` → `POST /strategies/{id}/runs` |
 | Failed run view (category, engine error text, re-run) | `GET /runs/{id}` → `POST /strategies/{id}/runs` |
 | Charts tab (run picker, fold picker, groups A–D, CSV) | `GET /runs?strategy_id`, `GET /runs/{id}/series[...]`, `.csv` |
 | Promote dialog + auto-backtest | `GET /runs/{id}` (diff, default name) → `POST /runs/{id}/promote` |

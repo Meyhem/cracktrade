@@ -172,14 +172,21 @@ class RunRepo(Repository):
         ``FOR UPDATE SKIP LOCKED`` is what makes the database a queue: a second worker running
         this at the same moment steps over the locked row and takes the next one, so two
         workers never execute the same run and neither waits on the other.
+
+        Every wall-clock column here uses ``clock_timestamp()``, not ``now()``. ``now()`` is
+        the *transaction's* start time, frozen for its whole duration -- fine for a short,
+        single-statement transaction, but a run's lease is held across a worker's setup and
+        execution, so a connection left idle-in-transaction beforehand (a bug, but one that
+        happened) would report an elapsed time measured from whenever that stale transaction
+        began, not from now. ``clock_timestamp()`` reads the actual clock every time.
         """
         row = self._fetch_one(
             f"""
             UPDATE run SET
               status = 'running',
-              started_at = now(),
+              started_at = clock_timestamp(),
               claimed_by = %s,
-              heartbeat_at = now()
+              heartbeat_at = clock_timestamp()
             WHERE id = (
               SELECT id FROM run
               WHERE status = 'queued'
@@ -201,7 +208,7 @@ class RunRepo(Repository):
         """
         affected = self._execute(
             """
-            UPDATE run SET heartbeat_at = now(), progress = coalesce(%s, progress)
+            UPDATE run SET heartbeat_at = clock_timestamp(), progress = coalesce(%s, progress)
             WHERE id = %s AND status = 'running'
             """,
             (Jsonb(progress) if progress is not None else None, run_id),
@@ -220,7 +227,7 @@ class RunRepo(Repository):
         row = self._fetch_one(
             f"""
             UPDATE run SET
-              status = 'succeeded', finished_at = now(), progress = NULL,
+              status = 'succeeded', finished_at = clock_timestamp(), progress = NULL,
               result = %s, is_credible = %s, suppressed = %s
             WHERE id = %s AND status = 'running'
             RETURNING {_COLUMNS}
@@ -238,7 +245,7 @@ class RunRepo(Repository):
         row = self._fetch_one(
             f"""
             UPDATE run SET
-              status = 'failed', finished_at = now(), progress = NULL,
+              status = 'failed', finished_at = clock_timestamp(), progress = NULL,
               error = %s, failure_category = %s
             WHERE id = %s AND status IN ('queued', 'running')
             RETURNING {_COLUMNS}
@@ -257,7 +264,7 @@ class RunRepo(Repository):
         """End a run as cancelled: no result, no error -- nothing was measured."""
         row = self._fetch_one(
             f"""
-            UPDATE run SET status = 'cancelled', finished_at = now(), progress = NULL
+            UPDATE run SET status = 'cancelled', finished_at = clock_timestamp(), progress = NULL
             WHERE id = %s AND status IN ('queued', 'running')
             RETURNING {_COLUMNS}
             """,
@@ -290,7 +297,7 @@ class RunRepo(Repository):
         rows = self._fetch_all(
             f"""
             SELECT {_COLUMNS} FROM run
-            WHERE status = 'running' AND heartbeat_at < now() - %s::interval
+            WHERE status = 'running' AND heartbeat_at < clock_timestamp() - %s::interval
             """,
             (timedelta(seconds=lease_seconds),),
         )

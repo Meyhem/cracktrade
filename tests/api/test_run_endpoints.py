@@ -42,13 +42,41 @@ def _strategy(client: TestClient, name: str = "momentum_v2") -> str:
     return identifier
 
 
-def _launch(client: TestClient, strategy_id: str, kind: str, **params: Any) -> dict[str, Any]:
-    response = client.post(
-        f"{BASE}/strategies/{strategy_id}/runs", json={"kind": kind, "params": params}
-    )
+def _launch(
+    client: TestClient, strategy_id: str, kind: str, seed: int | None = None, **params: Any
+) -> dict[str, Any]:
+    body_json: dict[str, Any] = {"kind": kind, "params": params}
+    if seed is not None:
+        body_json["seed"] = seed
+    response = client.post(f"{BASE}/strategies/{strategy_id}/runs", json=body_json)
     assert response.status_code == 202, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+#: A search small enough to run in a test, with no trade floor and a fixed seed. Both matter:
+#: the floor would make these tests depend on whether four genomes happened to find something
+#: that trades enough, and an unseeded search would make that vary between runs.
+_TINY_EVOLUTION: dict[str, Any] = {
+    "population": 4,
+    "generations": 2,
+    "min_trades": 0,
+    "min_trades_per_year": 0.0,
+}
+
+
+def _land_as_credible(db_url: str, run_id: str) -> None:
+    """Succeed a queued run with a credible verdict, without running the engine.
+
+    Through the repository's own transition rather than by writing the row: a terminal run is
+    immutable and the database enforces it, so there is no shortcut here that a real worker
+    does not also take.
+    """
+    with psycopg.connect(db_url) as connection, unit_of_work_on(connection) as work:
+        repo = RunRepo(work.connection)
+        claimed = repo.claim("test-worker")
+        assert claimed is not None and str(claimed.id) == run_id
+        repo.succeed(claimed.id, result={"checks": [], "failures": []}, is_credible=True)
 
 
 def _work_the_queue(db_url: str) -> None:
@@ -111,6 +139,59 @@ def test_a_backtest_takes_no_parameters(client: TestClient) -> None:
     response = client.post(
         f"{BASE}/strategies/{_strategy(client)}/runs",
         json={"kind": "backtest", "params": {"epochs": 5}},
+    )
+    assert response.status_code == 422
+
+
+def test_evolution_parameters_are_defaulted_and_echoed(client: TestClient) -> None:
+    """No epochs: the genome carries structure and parameters together (spec section 16.4)."""
+    run = _launch(client, _strategy(client), "evolve")
+    assert run["params"] == {
+        "objective": "calmar",
+        "min_trades": 20,
+        "min_trades_per_year": 4.0,
+        "population": 40,
+        "generations": 25,
+        "segments": 4,
+        "holdout_fraction": 0.2,
+        "cache": True,
+    }
+
+
+def test_too_few_segments_are_refused_because_the_overfitting_check_needs_four(
+    client: TestClient,
+) -> None:
+    """The engine accepts three; the API does not, and the reason is not arbitrary.
+
+    CSCV partitions the segments into halves every possible way, and below four there is no
+    partition to make. The check comes back uncomputed, which is reported as a failure -- so
+    the run could not have passed its own verdict however well it did. Refusing at launch says
+    that in the one place the user can still act on it.
+    """
+    response = client.post(
+        f"{BASE}/strategies/{_strategy(client)}/runs",
+        json={"kind": "evolve", "params": {"segments": 3}},
+    )
+    assert response.status_code == 422
+    assert "overfitting check needs at least 4" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"population": 1},
+        {"population": 100_000},
+        {"generations": 0},
+        {"generations": 100_000},
+        {"segments": 99},
+        {"holdout_fraction": 0.9},
+        {"holdout_fraction": 0.0},
+    ],
+)
+def test_an_unusable_search_budget_is_refused(client: TestClient, params: dict[str, Any]) -> None:
+    response = client.post(
+        f"{BASE}/strategies/{_strategy(client)}/runs",
+        json={"kind": "evolve", "params": params},
     )
     assert response.status_code == 422
 
@@ -323,6 +404,54 @@ def test_a_suppressed_run_is_not_sent_the_figures_it_withholds(
     assert "excess_pp" not in headline
 
 
+def test_a_thin_holdout_withholds_the_evolution_headline_too(
+    client: TestClient, db: psycopg.Connection[TupleRow]
+) -> None:
+    """The trade floor governs a composed strategy exactly as it governs a written one.
+
+    The temptation with evolution is to show the holdout return anyway -- it is the whole
+    point of the run, and it took minutes to produce. But a return over nine trades says as
+    little here as it does anywhere else, and having searched hard for it makes it worse
+    evidence rather than better.
+    """
+    run = _launch(client, _strategy(client), "evolve", **_TINY_EVOLUTION)
+    with unit_of_work_on(db) as work:
+        repo = RunRepo(work.connection)
+        repo.claim("test-worker")
+        repo.succeed(
+            run["id"],
+            result={
+                "composition": "enter when rsi_14 < 30, exit when rsi_14 > 70",
+                "distinct_configurations": 96,
+                "holdout_metrics": {
+                    "total_trades": 9,
+                    "total_return_pct": 41.7,
+                    "max_drawdown_pct": -12.0,
+                    "has_enough_trades_to_judge": False,
+                },
+                "benchmark": {"benchmark": {"total_return_pct": 6.1}},
+                "checks": [{"passed": False}, {"passed": True}],
+                "is_credible": False,
+            },
+            is_credible=False,
+            suppressed=True,
+        )
+
+    summary = client.get(f"{BASE}/runs", params={"strategy_id": run["strategy"]["id"]}).json()
+    headline = summary["runs"][0]["headline"]
+
+    assert headline["suppressed"] is True
+    assert headline["trades"] == 9
+    assert headline["trials"] == 96
+    assert headline["failed_checks"] == 1
+    # What it was cannot be rendered, because it was not sent.
+    assert "holdout_return_pct" not in headline
+    assert "benchmark_return_pct" not in headline
+    assert "max_drawdown_pct" not in headline
+    # The composition is not a measurement, so it survives suppression.
+    assert headline["composition"].startswith("enter when")
+
+
 def test_only_searches_are_promotable(client: TestClient, db_url: str) -> None:
     """A backtest has no winning config to promote: it ran the one that was already there."""
     strategy_id = _strategy(client)
@@ -333,6 +462,69 @@ def test_only_searches_are_promotable(client: TestClient, db_url: str) -> None:
     runs = client.get(f"{BASE}/runs", params={"strategy_id": strategy_id}).json()["runs"]
     promotable = {run["kind"]: run["promotable"] for run in runs}
     assert promotable == {"backtest": False, "optimize": True}
+
+
+def test_a_credible_evolution_run_does_not_validate_the_chassis_it_ran_against(
+    client: TestClient, db_url: str
+) -> None:
+    """The single most dangerous confusion this feature could introduce.
+
+    An evolution run's verdict is about a configuration the chassis does not contain: the
+    chassis holds a ticker and a set of costs, and the composition lives in the run's result
+    until somebody promotes it into a strategy of its own. If that verdict reached the chassis,
+    a strategy would read CREDIBLE on the strength of signals it does not have -- and every
+    screen in this application would repeat it without being wrong to.
+
+    The credible verdict is landed directly rather than searched for. What is under test is
+    where a verdict may travel, which has to hold whatever a particular search concludes; a
+    real run would make this depend on the engine finding something, which is a different
+    question and a much slower way to ask this one. A walk-forward landed the same way is
+    checked alongside, so the test would fail if the view had simply stopped reading verdicts.
+    """
+    strategy_id = _strategy(client)
+    evolve_run = _launch(client, strategy_id, "evolve", **_TINY_EVOLUTION)
+    _land_as_credible(db_url, evolve_run["id"])
+
+    detail = client.get(f"{BASE}/strategies/{strategy_id}").json()
+    assert detail["verdict"]["state"] == "unvalidated"
+    assert detail["verdict"]["run_id"] is None
+
+    # The same treatment of a walk-forward does reach the strategy, which is what makes the
+    # assertion above a statement about evolution rather than about a broken view.
+    validation_run = _launch(client, strategy_id, "walk_forward", epochs=2, folds=4)
+    _land_as_credible(db_url, validation_run["id"])
+
+    revalidated = client.get(f"{BASE}/strategies/{strategy_id}").json()
+    assert revalidated["verdict"]["state"] == "credible"
+    assert revalidated["verdict"]["run_id"] == validation_run["id"]
+
+
+@pytest.mark.slow
+def test_an_evolution_run_is_promotable_and_the_promoted_strategy_says_it_was_composed(
+    client: TestClient, db_url: str
+) -> None:
+    """Promotion is the only way the composition becomes something you can validate."""
+    strategy_id = _strategy(client)
+    run = _launch(client, strategy_id, "evolve", seed=7, **_TINY_EVOLUTION)
+    _work_the_queue(db_url)
+
+    detail = client.get(f"{BASE}/runs/{run['id']}").json()
+    assert detail["run"]["promotable"] is True
+    assert detail["default_promote_name"].endswith("_evo1")
+    # A chassis is not a starting point, so there is nothing to render as a diff against one.
+    assert detail["config_diff"] == []
+
+    promoted = client.post(f"{BASE}/runs/{run['id']}/promote", json={})
+    assert promoted.status_code == 201, promoted.text
+    assert promoted.json()["carried_warning"] is True
+
+    child = client.get(f"{BASE}/strategies/{promoted.json()['strategy_id']}").json()
+    warning = child["promoted_warning"]["text"]
+    assert "Composed by" in warning
+    assert "were not written by anyone" in warning
+    # The composition really did land as the new strategy's config, signals and all.
+    assert "entry:" in child["head"]["yaml"]
+    assert child["head"]["config"]["indicators"]
 
 
 def test_a_strategy_with_runs_but_no_validation_is_unvalidated(

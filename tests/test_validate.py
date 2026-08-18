@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import math
+from dataclasses import replace
 from itertools import pairwise
 from typing import Any
 
@@ -18,7 +19,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from cracktrade.domain import ValidationReport
+from cracktrade.domain import OverfittingProbability, ValidationReport
 from cracktrade.errors import OptimizationError
 from cracktrade.optimize import discover_parameters
 from cracktrade.serialize import to_dict
@@ -161,6 +162,44 @@ def test_a_matrix_too_small_for_cscv_reports_nothing_rather_than_guessing() -> N
 
     assert result.combinations == 0
     assert result.probability == 0.0
+
+
+def test_an_uncomputed_overfitting_probability_does_not_read_as_a_pass() -> None:
+    """The placeholder is zero, which is the *best* possible PBO.
+
+    Below four slices there is no way to split them into halves, so nothing is measured and
+    ``probability`` stays at its initial zero -- comfortably under the 0.5 bar. Reported as
+    acceptable, a three-fold walk-forward would print a green tick for a statistic that never
+    ran. Failing closed is the only honest direction, and the report has to be able to say
+    which of the two happened.
+    """
+    uncomputed = probability_of_backtest_overfitting(np.zeros((3, 5)))
+
+    assert uncomputed.combinations == 0
+    assert not uncomputed.is_computed
+    assert not uncomputed.is_acceptable
+
+    computed = probability_of_backtest_overfitting(np.random.default_rng(6).normal(size=(8, 40)))
+    assert computed.is_computed
+    assert computed.is_acceptable == (computed.probability < 0.5)
+
+
+def test_an_uncomputed_overfitting_check_says_so_rather_than_printing_a_number(
+    report: ValidationReport,
+) -> None:
+    """``PBO 0.00`` beside a failed check would read as a very good result that failed."""
+    uncomputed = replace(
+        report,
+        overfitting=OverfittingProbability(probability=0.0, combinations=0, median_logit=0.0),
+    )
+
+    check = next(check for check in uncomputed.checks if check.name == "overfitting")
+
+    assert not check.passed
+    assert "0.00" not in check.stat
+    assert "not computed" in check.stat
+    assert "at least four folds" in check.detail
+    assert not uncomputed.is_credible
 
 
 def test_an_overfitting_probability_above_a_half_is_unacceptable() -> None:

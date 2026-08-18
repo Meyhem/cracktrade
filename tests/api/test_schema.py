@@ -333,16 +333,38 @@ def test_a_failed_run_needs_a_category(db: psycopg.Connection[TupleRow]) -> None
     assert "run_category_iff_failed" in message
 
 
-def test_only_a_walk_forward_carries_a_verdict(db: psycopg.Connection[TupleRow]) -> None:
-    """Credibility comes from validation alone (spec section 12); a backtest has no verdict."""
+@pytest.mark.parametrize("kind", ["backtest", "optimize"])
+def test_a_run_that_measured_nothing_out_of_sample_carries_no_verdict(
+    db: psycopg.Connection[TupleRow], kind: str
+) -> None:
+    """Credibility comes from a window the search never saw (spec sections 12 and 16.6).
+
+    A backtest has no such window at all, and an optimize run's test window was chosen by the
+    same search that chose the parameters. Neither may set the column.
+    """
     _strategy(db)
     _version(db)
     db.commit()
     message = _rejects(
         db,
-        lambda: _run(db, "00000000-0000-0000-0000-0000000000b1", is_credible=True),
+        lambda: _run(db, "00000000-0000-0000-0000-0000000000b1", kind=kind, is_credible=True),
     )
-    assert "run_credible_only_wf" in message
+    assert "run_credible_only_validated" in message
+
+
+@pytest.mark.parametrize("kind", ["walk_forward", "evolve"])
+def test_a_validated_run_may_carry_a_verdict(db: psycopg.Connection[TupleRow], kind: str) -> None:
+    """Both kinds compute the same conjunction over checks, on history held back from them."""
+    _strategy(db)
+    _version(db)
+    _run(db, "00000000-0000-0000-0000-0000000000b1", kind=kind, is_credible=True)
+    db.commit()
+
+    row = db.execute(
+        "SELECT is_credible FROM run WHERE id = '00000000-0000-0000-0000-0000000000b1'"
+    ).fetchone()
+    assert row is not None
+    assert row[0] is True
 
 
 # --------------------------------------------------------------------------- referential shape

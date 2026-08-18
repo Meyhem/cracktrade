@@ -34,7 +34,7 @@ from cracktrade.api.repos.rows import (
 )
 from cracktrade.api.services.runs import headline, launch
 from cracktrade.api.settings import ApiSettings
-from cracktrade.api.worker.execute import categorise, execute
+from cracktrade.api.worker.execute import categorise, chassis_for, execute, load_market_data
 from cracktrade.api.worker.runner import claim_one, sweep_expired
 from cracktrade.config import Strategy
 from cracktrade.control import RunControl
@@ -45,10 +45,13 @@ from cracktrade.errors import (
     CausalityViolationError,
     ConfigError,
     DataUnavailableError,
+    InsufficientHistoryError,
     OptimizationError,
     RunCancelled,
 )
 from cracktrade.indicators.catalogue import install
+from cracktrade.settings import load_settings
+from cracktrade.strategy import build_strategy
 from tests.test_metrics import trending_market
 
 pytestmark = pytest.mark.db
@@ -100,7 +103,21 @@ def _queue(db: psycopg.Connection[TupleRow], strategy_id: UUID, kind: RunKind) -
             params = {"epochs": 2}
         elif kind is RunKind.WALK_FORWARD:
             params = {"epochs": 2, "folds": 2}
-        return launch(work, strategy_id=strategy_id, kind=kind, params=params)
+        elif kind is RunKind.EVOLVE:
+            # No trade floor, so that a four-genome search over two generations is asked only
+            # whether the pipeline works. With the floor left at its default these tests pass
+            # or fail on whether a tiny search happened to find something that trades enough,
+            # which is a fact about luck and the market generator, not about the worker.
+            params = {
+                "population": 4,
+                "generations": 2,
+                "min_trades": 0,
+                "min_trades_per_year": 0.0,
+            }
+        # An explicit seed for the same reason `launch` records one when the caller omits it:
+        # a search whose starting point varies per run is not reproducible (defect D12), and a
+        # test that depends on it fails for reasons nobody can act on.
+        return launch(work, strategy_id=strategy_id, kind=kind, params=params, seed=7)
 
 
 def _provider() -> StaticProvider:
@@ -540,6 +557,100 @@ def test_a_real_optimization_records_its_diagnostics(
     # Contractual derived properties survive the round trip (spec section 15.1).
     assert "improvement_pct" in finished.result
     assert "overfitting_gap_pct" in finished.result
+
+
+@pytest.mark.slow
+def test_a_real_evolution_composes_a_strategy_and_judges_it_on_the_holdout(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The whole seam for the new kind: it composes, lands, and carries its own verdict."""
+    run = _queue(db, _seed(db), RunKind.EVOLVE)
+    with unit_of_work_on(db) as work:
+        claimed = RunRepo(work.connection).claim("test-worker")
+    assert claimed is not None
+
+    finished = execute(db, claimed, provider=_provider())
+    assert finished.status is RunStatus.SUCCEEDED, finished.error
+    assert finished.result is not None
+
+    # The composition is the thing the chassis did not have, so it is the thing worth checking.
+    assert finished.result["composition"]
+    assert finished.result["strategy_yaml"].strip()
+    assert finished.result["distinct_configurations"] > 0
+    assert finished.result["seed"] == run.seed
+    # A verdict, unlike an optimize run, and it is the engine's own conjunction.
+    assert finished.is_credible is not None
+    assert finished.is_credible == finished.result["is_credible"]
+
+    # Fold 0 for an evolution run is the holdout, not the whole history.
+    equity = SeriesRepo(db).require(run.id, "equity")
+    assert len(equity.points["dates"]) == len(equity.points["values"]) > 0
+    assert len(equity.points["dates"]) < 700
+
+
+@pytest.mark.slow
+def test_an_evolved_composition_is_not_inherited_from_the_chassis(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The chassis supplies a market and its frictions, never a signal.
+
+    ``_config`` writes an ``sma_fast`` crossover. If any of that reached the composed strategy
+    the search would be starting from someone's opinion, and the trial count the deflation
+    divides by would be describing a different search than the one that ran.
+    """
+    _queue(db, _seed(db), RunKind.EVOLVE)
+    with unit_of_work_on(db) as work:
+        claimed = RunRepo(work.connection).claim("test-worker")
+    assert claimed is not None
+
+    finished = execute(db, claimed, provider=_provider())
+    assert finished.result is not None
+    composed = finished.result["strategy_yaml"]
+
+    assert "sma_fast" not in composed
+    # ...but the chassis's own frictions did travel, because those are not the search's to pick.
+    assert "commission_pct: 0.05" in composed
+    assert f"ticker: {TICKER}" in composed
+
+
+def test_the_chassis_carries_the_market_and_the_costs_and_nothing_else() -> None:
+    """Unit-level companion to the two above, without the search."""
+    strategy = build_strategy(_config())
+
+    chassis = chassis_for(strategy)
+
+    assert chassis.ticker == TICKER
+    assert chassis.start_date == strategy.universe.start_date
+    assert chassis.end_date == strategy.universe.end_date
+    assert chassis.commission_pct == 0.05
+    assert chassis.slippage_pct == 0.1
+    assert chassis.initial_capital == 10000.0
+    # `Chassis` has no field that could carry an indicator or a signal, which is the point:
+    # the type makes the omission structural rather than a discipline this function has to keep.
+    assert not hasattr(chassis, "indicators")
+
+
+def test_evolution_history_is_sized_by_the_library_not_by_the_chassis() -> None:
+    """A chassis declares almost no warm-up; the search can reach for a 200-bar block.
+
+    Sizing from the chassis would accept a history too short to evolve in, and the run would
+    then fail inside the search -- recorded as an engine fault for what is really a window
+    that should never have been accepted.
+    """
+    bare = _config()
+    bare["indicators"] = []
+    bare["entry"] = {"signal": "close > 0"}
+    bare["exit"] = {"signal": "close < 0"}
+    strategy = build_strategy(bare)
+    settings = load_settings()
+    provider = StaticProvider({TICKER: trending_market(bars=210).frame})
+
+    # Ample for a backtest of this config...
+    assert load_market_data(strategy, provider, settings, kind=RunKind.BACKTEST) is not None
+
+    # ...and refused for an evolution run, which needs the library's 200 bars plus the margin.
+    with pytest.raises(InsufficientHistoryError):
+        load_market_data(strategy, provider, settings, kind=RunKind.EVOLVE)
 
 
 def test_started_and_finished_timestamps_bracket_the_run(

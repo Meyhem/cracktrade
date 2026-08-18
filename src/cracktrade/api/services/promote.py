@@ -32,24 +32,46 @@ def carries_warning(run: RunRow) -> bool:
     walk-forward passed -- the optimization moved the parameters, so the run that passed
     measured different values than the ones being promoted. A verdict is about a configuration,
     not about a lineage.
+
+    An evolution run always warns too, and its own credible verdict does not clear it. That
+    verdict came from a holdout, which is one contiguous draw evaluated once (spec section
+    16.6); a walk-forward asks the harder question of whether the strategy survives being
+    re-fitted and re-tested across the whole history. Treating the two as interchangeable would
+    let the weaker evidence retire the stronger requirement.
     """
     return not (run.kind is RunKind.WALK_FORWARD and run.is_credible is True)
 
 
-def winning_yaml(run: RunRow) -> str:
-    """The configuration the search settled on, as the engine serialised it.
+#: Where each promotable kind keeps its winning configuration. An evolution result calls it
+#: ``strategy_yaml`` rather than ``optimized_yaml`` because nothing was optimized *from*: the
+#: config did not exist before the run. The distinction is worth keeping in the engine's own
+#: vocabulary, so it is resolved here rather than by renaming a field this module happens to
+#: find inconvenient.
+_WINNING_YAML_KEYS: tuple[str, ...] = ("optimized_yaml", "strategy_yaml")
 
-    An optimize and a walk-forward both carry ``optimized_yaml``; a backtest has nothing to
-    promote, which :func:`require_promotable` has already refused by the time this is called.
+
+def winning_yaml(run: RunRow) -> str:
+    """The configuration the run settled on, as the engine serialised it.
+
+    A backtest has nothing to promote, which :func:`require_promotable` has already refused by
+    the time this is called.
     """
     result = run.result or {}
-    yaml_text = result.get("optimized_yaml")
+    yaml_text = next(
+        (
+            candidate
+            for key in _WINNING_YAML_KEYS
+            if isinstance(candidate := result.get(key), str) and candidate.strip()
+        ),
+        None,
+    )
     if not isinstance(yaml_text, str) or not yaml_text.strip():
-        # A succeeded optimize or walk-forward without a winning config is not a bad request:
-        # it is a result the engine should never have produced, so it is reported as the
-        # server's problem rather than the client's.
+        # A succeeded search without a winning config is not a bad request: it is a result the
+        # engine should never have produced, so it is reported as the server's problem rather
+        # than the client's.
         raise InvariantViolationError(
-            f"run {run.id} is a succeeded {run.kind.value} but carries no optimized_yaml"
+            f"run {run.id} is a succeeded {run.kind.value} but carries none of "
+            f"{', '.join(_WINNING_YAML_KEYS)}"
         )
     return yaml_text
 

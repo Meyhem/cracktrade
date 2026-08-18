@@ -36,6 +36,7 @@ from cracktrade.errors import (
     OptimizationError,
     RunCancelled,
 )
+from cracktrade.evolution import Chassis, GaSettings, evolve, library_warmup
 from cracktrade.log import get_logger
 from cracktrade.optimize import DEFAULT_TRADE_FLOOR, TradeFloor, optimize
 from cracktrade.serialize import to_dict
@@ -123,6 +124,30 @@ class CracktradeEngine:
             suppressed = not optimized.test_metrics.has_enough_trades_to_judge
             return to_dict(optimized), series, None, suppressed
 
+        if run.kind is RunKind.EVOLVE:
+            evolved = evolve(
+                chassis_for(strategy),
+                data,
+                settings=GaSettings(
+                    population=int(params.get("population", 40)),
+                    generations=int(params.get("generations", 25)),
+                ),
+                seed=run.seed,
+                objective_name=str(params.get("objective", "calmar")),
+                trade_floor=_trade_floor(params),
+                segments=int(params.get("segments", 4)),
+                holdout_fraction=float(params.get("holdout_fraction", 0.2)),
+                control=control,
+                capture_series=True,
+            )
+            series = (evolved.series,) if evolved.series else ()
+            return (
+                to_dict(evolved),
+                series,
+                evolved.is_credible,
+                not evolved.holdout_metrics.has_enough_trades_to_judge,
+            )
+
         report = walk_forward(
             strategy,
             data,
@@ -139,6 +164,30 @@ class CracktradeEngine:
         return to_dict(report), report.fold_series, report.is_credible, None
 
 
+def chassis_for(strategy: Strategy) -> Chassis:
+    """The parts of a strategy an evolution run is allowed to inherit.
+
+    Exactly the ticker, the dates, the costs and the sizing rule -- never the indicators, the
+    entry or the exit, which are what the search composes. That asymmetry is the reason an
+    evolution run is launched *against* a strategy rather than derived from one: the chassis
+    says what market and what frictions to compose for, and nothing about what to compose.
+
+    The name is the chassis's own, so a promoted strategy suggests something recognisable
+    rather than inheriting a name that describes signals it does not contain.
+    """
+    return Chassis(
+        name=f"{strategy.strategy.name}_evolved",
+        ticker=strategy.universe.ticker,
+        start_date=strategy.universe.start_date,
+        end_date=strategy.universe.end_date,
+        initial_capital=strategy.execution.initial_capital,
+        slippage_pct=strategy.execution.slippage_pct,
+        commission_pct=strategy.execution.commission_pct,
+        risk_free_rate=strategy.execution.risk_free_rate,
+        position_sizing=strategy.position_sizing,
+    )
+
+
 def _trade_floor(params: dict[str, Any]) -> TradeFloor:
     """The trade floor a launch asked for.
 
@@ -152,17 +201,25 @@ def _trade_floor(params: dict[str, Any]) -> TradeFloor:
 
 
 def load_market_data(
-    strategy: Strategy, provider: MarketDataProvider, settings: Settings
+    strategy: Strategy, provider: MarketDataProvider, settings: Settings, *, kind: RunKind
 ) -> MarketData:
-    """Fetch the history the strategy needs, refusing one that cannot support it.
+    """Fetch the history the run needs, refusing one that cannot support it.
 
     ``min_bars`` carries the warm-up plus a margin so a 200-day average over a 60-day range is
     refused at the data layer rather than producing a backtest that is entirely warm-up.
+
+    For an evolution run the warm-up is the *library's*, not the strategy's. A chassis declares
+    a ticker and some costs; its own indicators are irrelevant, because the search can reach
+    for any block in the library and the longest of those looks back 200 bars. Sizing this from
+    ``required_warmup`` would accept a chassis with no indicators at all against a six-month
+    window, and the run would then fail somewhere inside the search -- recorded as an engine
+    fault, for what is really a history too short to have been accepted.
     """
+    warmup = library_warmup() if kind is RunKind.EVOLVE else required_warmup(strategy)
     return load_history(
         strategy,
         provider,
-        min_bars=required_warmup(strategy) + WARMUP_MARGIN,
+        min_bars=warmup + WARMUP_MARGIN,
         max_filled_fraction=settings.max_filled_fraction,
     )
 
@@ -172,8 +229,13 @@ def _store_series(
 ) -> None:
     """Write the captured series.
 
-    Fold 0 means the whole run. A walk-forward has no fold 0 -- each fold re-optimizes, so
-    there is no single curve -- and its folds are numbered from one.
+    Fold 0 means "the run's one curve". A walk-forward has no fold 0 -- each fold re-optimizes,
+    so there is no single curve -- and its folds are numbered from one.
+
+    For an evolution run that curve covers the **holdout only**, not the whole history: the
+    evolution region produced no reportable equity curve, because the strategy drawn on it is
+    the one the region selected. Anything rendering these points has to say so, or it shows a
+    partial history in a frame that means "the whole backtest" everywhere else.
     """
     repo = SeriesRepo(connection)
     walk_forward_run = run.kind is RunKind.WALK_FORWARD
@@ -215,7 +277,7 @@ def execute(
     try:
         version = VersionRepo(connection).require(run.strategy_id, run.version)
         strategy = build_strategy(version.config)
-        data = load_market_data(strategy, provider or YFinanceProvider(), resolved)
+        data = load_market_data(strategy, provider or YFinanceProvider(), resolved, kind=run.kind)
         payload, series, credible, suppressed = engine.run(
             strategy, data, run, control or RunControl()
         )

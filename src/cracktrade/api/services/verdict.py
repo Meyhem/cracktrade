@@ -18,7 +18,7 @@ from uuid import UUID
 
 from cracktrade.api.db.uow import UnitOfWork
 from cracktrade.api.repos import RunRepo, StrategyRepo
-from cracktrade.api.repos.rows import RunRow, StrategyOverviewRow, Verdict
+from cracktrade.api.repos.rows import RunKind, RunRow, StrategyOverviewRow, Verdict
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,10 +172,32 @@ def promoted_warning(work: UnitOfWork, overview: StrategyOverviewRow) -> Promote
         origin_run_id=origin_run_id,
         origin_run_number=origin.number,
         parent_name=parent.name if parent else None,
-        text=(
+        text=_warning_text(source, origin),
+    )
+
+
+def _warning_text(source: str, origin: RunRow) -> str:
+    """What the banner says, which depends on how much of the strategy a search chose.
+
+    An optimization moved numbers inside a strategy someone wrote. An evolution run chose the
+    conditions as well, from a library of blocks, across as many distinct configurations as its
+    budget allowed -- so the sentence names that count. The reader's decision is the same in
+    both cases and the remedy is the same; what differs is how much of what they are looking at
+    came out of a search, and rounding that off to "these parameters" would understate it.
+    """
+    if origin.kind is not RunKind.EVOLVE:
+        return (
             f"Promoted from {source}, which had not been shown to be credible. These parameters "
             f"came out of a search, and a search that has not been validated out of sample has "
             f"not been shown to have found anything. Run a walk-forward against this strategy "
             f"before treating its numbers as evidence."
-        ),
+        )
+
+    trials = (origin.result or {}).get("distinct_configurations")
+    scale = f"{trials} distinct configurations" if isinstance(trials, int) else "a large search"
+    return (
+        f"Composed by {source}, which had not been shown to be credible. Its entry and exit "
+        f"conditions were not written by anyone -- they were selected from {scale} because they "
+        f"scored well on past data, and the holdout that judged the winner has now been spent. "
+        f"Run a walk-forward against this strategy before treating its numbers as evidence."
     )

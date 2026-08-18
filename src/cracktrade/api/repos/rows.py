@@ -43,6 +43,7 @@ class RunKind(StrEnum):
     BACKTEST = "backtest"
     OPTIMIZE = "optimize"
     WALK_FORWARD = "walk_forward"
+    EVOLVE = "evolve"
 
 
 class RunStatus(StrEnum):
@@ -166,6 +167,7 @@ class StrategyOverviewRow:
     optimize_runs: int
     backtest_runs: int
     walk_forward_runs: int
+    evolve_runs: int
     versions: int
     last_run_id: UUID | None
     last_run_kind: RunKind | None

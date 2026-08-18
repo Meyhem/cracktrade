@@ -1750,6 +1750,12 @@ which the configuration ranked best in-sample lands below the median out-of-samp
 probability. A PBO above 0.5 means the selection procedure is worse than choosing at random and the
 result must not be presented as a recommendation.
 
+**An uncomputed PBO fails.** CSCV splits the slices into halves every possible way, so fewer than
+four slices yields no partitions at all and the probability stays at its initialised zero — which
+is the *best* possible value and compares below the 0.5 bar. `is_computed` distinguishes the two,
+`is_acceptable` requires it, and the check reports "not computed — too few slices" rather than
+`PBO 0.00`. Reachable from a three-fold walk-forward as well as from evolution; see §16.8.
+
 ### 12.5 Parameter stability
 
 Differential evolution returns a point. A financially usable optimum is a **plateau**; a sharp spike
@@ -2507,3 +2513,78 @@ Non-finite trial Sharpes are now dropped before the variance is computed, fallin
 estimator variance when fewer than two survive — which the result already flags as
 `variance_estimated`. The defect was reachable from walk-forward too; evolution merely hits it
 more often, because a segment is short enough to produce a degenerate candidate regularly.
+
+### 16.8 Amendment to §12.4 — an uncomputed overfitting probability
+
+**[FIX] — found 2026-08-18.** `OverfittingProbability.is_acceptable` compared the probability
+against the 0.5 bar without asking whether it had been computed. Below four slices CSCV produces
+no partitions, the probability stays at its initialised `0.0`, and the check reported a green
+tick with `PBO 0.00` beside it — a statistic that never ran, rendered as the best possible
+result. Pre-existing and reachable from a three-fold walk-forward; evolution surfaced it by
+making the slice count a launch parameter.
+
+`is_computed` is now part of the type, `is_acceptable` requires it, and both check renderings say
+"not computed — too few slices". An unknown reads as a failure, never as a pass.
+
+The API refuses fewer than four segments at launch rather than accepting a run that cannot pass
+its own verdict. The engine still permits one segment: the CLI is for someone deliberately
+probing the machinery, and the check tells them what it did.
+
+## 17. Evolution as a run kind
+
+The library-level feature is §16. This section is what the API and the web UI add on top, and it
+is normative for the boundaries between them.
+
+### 17.1 The chassis is a strategy
+
+An evolution run is launched against an ordinary strategy and pinned to an exact version, like
+every other run. It reads exactly four things from that version — the ticker, the date range, the
+execution costs, and the position sizing rule — and composes everything else. `chassis_for` is the
+only place that mapping exists.
+
+Two consequences, both deliberate:
+
+- **The base config's signals are ignored.** A chassis with an RSI crossover contributes nothing
+  to the search but its market and its frictions. Starting from someone's opinion would make the
+  trial count the deflation divides by describe a different search than the one that ran.
+- **Staleness over-reports.** A run is stale when the strategy's head moves past the version it
+  ran against, and that rule is not narrowed to the four fields evolution actually read. Editing
+  an entry signal marks an evolution run stale although nothing about it changed. Over-flagging is
+  the safe direction; the run view states which parts of the base config were inputs.
+
+### 17.2 A verdict does not travel to the chassis
+
+An evolution run computes `is_credible` and the schema permits it to (`run_credible_only_validated`
+admits `walk_forward` and `evolve`). The `strategy_overview` verdict lateral deliberately does
+**not**: it still reads walk-forward runs alone.
+
+That asymmetry is the point. The composed strategy exists in the run's result, not in the chassis.
+A chassis reading CREDIBLE would be claiming a verdict for signals it does not contain, and every
+screen in the application would repeat it without being wrong to trust it. The composition becomes
+validatable by being **promoted** into a strategy of its own — where §14.7 applies unchanged, and
+its own walk-forward is the only thing that clears the warning.
+
+An evolution run's own credible verdict does not clear that warning either. A holdout is one
+contiguous draw evaluated once (§16.6); a walk-forward asks whether the strategy survives being
+re-fitted and re-tested across the whole history. The weaker evidence does not retire the stronger
+requirement.
+
+### 17.3 History is sized by the library
+
+`load_market_data` sizes `min_bars` from `library_warmup()` for an evolution run, not from
+`required_warmup(strategy)`. A chassis declares almost no warm-up of its own while the search can
+reach for any block in the library, the longest of which looks back 200 bars. Sizing from the
+chassis would accept a window too short to evolve in and fail somewhere inside the search —
+recorded as an engine fault, for what is really a history that should never have been accepted.
+
+### 17.4 What the reporting layer must not do
+
+- **The headline obeys the trade floor.** Below it the holdout figures are omitted from the
+  payload, exactly as for a backtest (§15.2). The composition is not a measurement and survives
+  suppression.
+- **There is no config diff.** A chassis is not a starting point; every indicator and both signals
+  are new. Rendering that as a diff reads as "look how much was changed" when the truth is "none
+  of this was there". The run view shows the composed configuration whole.
+- **Fold 0 is the holdout, not the run.** An evolution run captures one series bundle and it covers
+  the holdout only. Anything rendering those points must say so, or it shows a partial history in
+  a frame that means "the whole backtest" everywhere else.

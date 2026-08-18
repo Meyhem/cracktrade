@@ -53,7 +53,7 @@ _EXPOSED_PROPERTIES: dict[str, tuple[str, ...]] = {
         "is_credible",
     ),
     "DeflatedSharpe": ("is_significant", "beats_the_lucky_threshold"),
-    "OverfittingProbability": ("is_acceptable",),
+    "OverfittingProbability": ("is_acceptable", "is_computed"),
     "StabilityReport": (
         "worst_degradation",
         "worst_small_degradation",

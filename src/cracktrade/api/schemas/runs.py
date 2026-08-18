@@ -23,7 +23,7 @@ class LaunchRunRequest(Body):
     numbers.
     """
 
-    kind: str = Field(pattern="^(backtest|optimize|walk_forward)$")
+    kind: str = Field(pattern="^(backtest|optimize|walk_forward|evolve)$")
     params: dict[str, Any] = Field(default_factory=dict)
     seed: int | None = Field(default=None, ge=0)
 

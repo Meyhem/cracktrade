@@ -159,6 +159,7 @@ class StrategySummary(BaseModel):
     optimize_runs: int
     backtest_runs: int
     walk_forward_runs: int
+    evolve_runs: int
     versions: int
     last_run_id: UUID | None
     last_run_kind: str | None
@@ -188,6 +189,7 @@ class StrategySummary(BaseModel):
             optimize_runs=row.optimize_runs,
             backtest_runs=row.backtest_runs,
             walk_forward_runs=row.walk_forward_runs,
+            evolve_runs=row.evolve_runs,
             versions=row.versions,
             last_run_id=row.last_run_id,
             last_run_kind=row.last_run_kind.value if row.last_run_kind else None,
@@ -424,6 +426,7 @@ class MetaResponse(BaseModel):
     objectives: list[str]
     fold_schemes: list[str]
     defaults: dict[str, Any]
+    evolution_warmup_bars: int
     indicators: list[dict[str, Any]]
     exit_fields: list[dict[str, Any]]
     limits: list[str]
@@ -448,6 +451,7 @@ def strategy_detail(details: StrategyDetails) -> StrategyDetail:
             "optimize": overview.optimize_runs,
             "backtest": overview.backtest_runs,
             "walk_forward": overview.walk_forward_runs,
+            "evolve": overview.evolve_runs,
             "versions": overview.versions,
         },
         verdict=VerdictBlockOut.of(details.verdict),
@@ -471,7 +475,9 @@ def meta_payload(meta: Any) -> MetaResponse:
             "backtest": to_dict(meta.backtest_defaults),
             "optimize": to_dict(meta.optimize_defaults),
             "walk_forward": to_dict(meta.walk_forward_defaults),
+            "evolve": to_dict(meta.evolve_defaults),
         },
+        evolution_warmup_bars=meta.evolution_warmup_bars,
         indicators=[to_dict(indicator) for indicator in meta.indicators],
         exit_fields=[to_dict(field) for field in meta.exit_fields],
         limits=list(meta.limits),

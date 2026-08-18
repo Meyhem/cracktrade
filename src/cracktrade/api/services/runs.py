@@ -27,6 +27,7 @@ from cracktrade.api.services.diff import summarise
 from cracktrade.api.services.verdict import Check, checks_of
 from cracktrade.config import dump_strategy
 from cracktrade.domain import MIN_TRADES_TO_JUDGE
+from cracktrade.evolution import DEFAULT_HOLDOUT_FRACTION, DEFAULT_SEGMENTS, GaSettings
 from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
 
@@ -34,6 +35,27 @@ from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
 #: happily run longer -- but against a typo turning one queued run into a machine busy for days.
 MAX_EPOCHS = 200
 MAX_FOLDS = 20
+
+#: Ceilings on the evolutionary search. ``population * generations`` is the trial count the
+#: deflated Sharpe divides by (spec section 16.6), so an oversized search does not merely take
+#: longer -- it raises the bar its own result has to clear. These bound the typo, not the
+#: method: 200 x 200 is forty thousand configurations, which is already a very high bar.
+MAX_POPULATION = 200
+MAX_GENERATIONS = 200
+MAX_SEGMENTS = 12
+
+#: Fewer than four segments leaves the overfitting check with nothing to partition, so this is
+#: a bound on the *method* rather than on a typo. See :func:`_evolution_params`.
+MIN_SEGMENTS = 4
+
+#: The holdout has to be big enough to support a conclusion and small enough to leave a search
+#: something to work with. The engine refuses a holdout below its own bar count; these are the
+#: proportions either side of that.
+MIN_HOLDOUT_FRACTION = 0.1
+MAX_HOLDOUT_FRACTION = 0.5
+
+#: The engine's own defaults, read rather than restated (spec section 15.3).
+DEFAULT_GA = GaSettings()
 
 #: Ceilings on the trade floor. Not engine limits either -- the engine accepts any non-negative
 #: floor -- but a floor no candidate can clear turns a search into an expensive way to learn
@@ -61,10 +83,6 @@ def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
             f"unknown objective {objective!r}; choose one of {', '.join(OBJECTIVES)}"
         )
 
-    epochs = int(params.get("epochs", 10))
-    if not 1 <= epochs <= MAX_EPOCHS:
-        raise ValidationFailedError(f"epochs must be between 1 and {MAX_EPOCHS}")
-
     min_trades = int(params.get("min_trades", DEFAULT_TRADE_FLOOR.minimum))
     if not 0 <= min_trades <= MAX_MIN_TRADES:
         raise ValidationFailedError(f"min_trades must be between 0 and {MAX_MIN_TRADES}")
@@ -76,6 +94,13 @@ def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
         )
 
     floor = {"min_trades": min_trades, "min_trades_per_year": per_year}
+
+    if kind is RunKind.EVOLVE:
+        return {"objective": objective, **floor, **_evolution_params(params)}
+
+    epochs = int(params.get("epochs", 10))
+    if not 1 <= epochs <= MAX_EPOCHS:
+        raise ValidationFailedError(f"epochs must be between 1 and {MAX_EPOCHS}")
 
     if kind is RunKind.OPTIMIZE:
         return {
@@ -93,6 +118,50 @@ def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
         raise ValidationFailedError(f"unknown fold scheme {scheme!r}")
 
     return {"objective": objective, "epochs": epochs, **floor, "folds": folds, "scheme": scheme}
+
+
+def _evolution_params(params: dict[str, Any]) -> dict[str, Any]:
+    """The search settings an evolution launch asked for.
+
+    ``GaSettings`` validates most of this itself and would raise in the worker, where the
+    failure would be recorded as an engine fault rather than as the bad request it is. The
+    bounds here are the API's, and one of them is stricter than the engine's on purpose --
+    see ``segments``.
+    """
+    population = int(params.get("population", DEFAULT_GA.population))
+    if not 2 <= population <= MAX_POPULATION:
+        raise ValidationFailedError(f"population must be between 2 and {MAX_POPULATION}")
+
+    generations = int(params.get("generations", DEFAULT_GA.generations))
+    if not 1 <= generations <= MAX_GENERATIONS:
+        raise ValidationFailedError(f"generations must be between 1 and {MAX_GENERATIONS}")
+
+    # The engine accepts a single segment; this refuses fewer than four. CSCV splits the
+    # segments into halves every possible way, and below four there is no way to split them at
+    # all -- the probability of backtest overfitting comes back uncomputed, and an uncomputed
+    # check is reported as failed. A run that cannot pass its own overfitting check is not a
+    # cheaper run, it is a wasted one, so it is refused at launch rather than at the verdict.
+    segments = int(params.get("segments", DEFAULT_SEGMENTS))
+    if not MIN_SEGMENTS <= segments <= MAX_SEGMENTS:
+        raise ValidationFailedError(
+            f"segments must be between {MIN_SEGMENTS} and {MAX_SEGMENTS}: the overfitting "
+            f"check needs at least {MIN_SEGMENTS} to have anything to partition"
+        )
+
+    holdout = float(params.get("holdout_fraction", DEFAULT_HOLDOUT_FRACTION))
+    if not MIN_HOLDOUT_FRACTION <= holdout <= MAX_HOLDOUT_FRACTION:
+        raise ValidationFailedError(
+            f"holdout_fraction must be between {MIN_HOLDOUT_FRACTION:g} and "
+            f"{MAX_HOLDOUT_FRACTION:g}"
+        )
+
+    return {
+        "population": population,
+        "generations": generations,
+        "segments": segments,
+        "holdout_fraction": holdout,
+        "cache": bool(params.get("cache", True)),
+    }
 
 
 def launch(
@@ -241,6 +310,33 @@ def headline(run: RunRow) -> dict[str, Any] | None:
         return None
     result = run.result
 
+    if run.kind is RunKind.EVOLVE:
+        checks = result.get("checks") or []
+        holdout = result.get("holdout_metrics") or {}
+        # An evolution run's headline is its holdout, and the trade floor governs it exactly as
+        # it governs a backtest's: below the floor the figures are omitted from the payload
+        # rather than sent with a flag asking politely that they not be rendered.
+        withheld = holdout.get("has_enough_trades_to_judge") is False
+        summary: dict[str, Any] = {
+            "composition": result.get("composition"),
+            "trials": result.get("distinct_configurations"),
+            "trades": holdout.get("total_trades"),
+            "is_credible": result.get("is_credible"),
+            "failed_checks": sum(1 for check in checks if not check.get("passed")),
+            "suppressed": withheld,
+            "trade_floor": MIN_TRADES_TO_JUDGE,
+        }
+        if not withheld:
+            summary |= {
+                "holdout_return_pct": holdout.get("total_return_pct"),
+                "benchmark_return_pct": (
+                    (result.get("benchmark") or {}).get("benchmark") or {}
+                ).get("total_return_pct"),
+                "max_drawdown_pct": holdout.get("max_drawdown_pct"),
+                "profitable_segments": result.get("profitable_segments"),
+            }
+        return summary
+
     if run.kind is RunKind.WALK_FORWARD:
         checks = result.get("checks") or []
         return {
@@ -259,7 +355,7 @@ def headline(run: RunRow) -> dict[str, Any] | None:
 
     if run.kind is RunKind.BACKTEST:
         benchmark = result.get("benchmark") or {}
-        summary: dict[str, Any] = {
+        summary = {
             "trades": metrics.get("total_trades"),
             "entry_defined_pct": result.get("entry_defined_pct"),
             "suppressed": suppressed,
@@ -315,6 +411,12 @@ def config_diff(run: RunRow, base: dict[str, Any]) -> tuple[ParameterMove, ...]:
     An optimize result already carries this as structured ``changes``, bounds included, so it
     is read rather than recomputed. A walk-forward does not, so its winning config is diffed
     against the base -- the same comparison the version diff makes, minus the bounds.
+
+    An evolution run has neither, and gets an empty list on purpose. Its chassis contributed a
+    ticker and some costs; every indicator and both signals are new. A diff would render that
+    as a wall of additions against a base the run never treated as a starting point, which
+    reads as "look how much was changed" when the truth is "none of this was there". The run
+    view shows the composed configuration whole instead.
     """
     result = run.result
     if run.status is not RunStatus.SUCCEEDED or result is None:
@@ -365,15 +467,26 @@ def _flattened(config: dict[str, Any] | str) -> dict[str, Any]:
 
 
 def is_promotable(run: RunRow) -> bool:
-    """Whether this run has a winning configuration to promote."""
+    """Whether this run has a winning configuration to promote.
+
+    An evolution run always does, and its configuration is the *only* place that composition
+    exists: the chassis it ran against holds a ticker and a set of costs, not the strategy the
+    search built. Promoting is how an evolved strategy becomes a thing that can be edited,
+    backtested and validated on its own terms.
+    """
     return run.status is RunStatus.SUCCEEDED and run.kind in {
         RunKind.OPTIMIZE,
         RunKind.WALK_FORWARD,
+        RunKind.EVOLVE,
     }
 
 
 #: What each promotable kind is called in a default strategy name.
-_ABBREVIATION: dict[RunKind, str] = {RunKind.OPTIMIZE: "opt", RunKind.WALK_FORWARD: "wf"}
+_ABBREVIATION: dict[RunKind, str] = {
+    RunKind.OPTIMIZE: "opt",
+    RunKind.WALK_FORWARD: "wf",
+    RunKind.EVOLVE: "evo",
+}
 
 
 def promote_name(row: RunOverviewRow) -> str:

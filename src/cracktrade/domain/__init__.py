@@ -562,10 +562,16 @@ class ValidationReport:
                     "Above 0.5 the way this result was selected is worse than choosing a "
                     "configuration at random."
                 ),
-                stat=f"PBO {self.overfitting.probability:.2f}",
+                stat=_overfitting_stat(self.overfitting),
                 detail=(
                     f"probability of backtest overfitting {self.overfitting.probability:.2f}, "
                     f"so selection is no better than choosing at random"
+                    if self.overfitting.is_computed
+                    else (
+                        "the probability of backtest overfitting could not be computed: CSCV "
+                        "needs at least four folds to split them into halves, and this run has "
+                        "fewer. Re-run with more folds rather than reading this as a pass"
+                    )
                 ),
             ),
             Check(
@@ -650,6 +656,18 @@ class ValidationReport:
         return all(check.passed for check in self.checks)
 
 
+def _overfitting_stat(overfitting: OverfittingProbability) -> str:
+    """The PBO line, or a statement that it could not be computed.
+
+    Never ``PBO 0.00`` for a statistic that was never calculated: zero is the best possible
+    value, and printing it beside a green tick is precisely the authoritative-looking wrong
+    number this engine exists to avoid.
+    """
+    if not overfitting.is_computed:
+        return "not computed - too few slices"
+    return f"PBO {overfitting.probability:.2f}"
+
+
 def _median(values: tuple[float, ...]) -> float:
     if not values:
         return 0.0
@@ -711,9 +729,27 @@ class OverfittingProbability:
     median_logit: float
 
     @property
+    def is_computed(self) -> bool:
+        """Whether CSCV had enough slices and configurations to produce anything at all.
+
+        Below four slices there is no way to split them into two halves, so the procedure
+        yields no partitions and :attr:`probability` is a placeholder zero rather than a
+        measurement.
+        """
+        return self.combinations > 0
+
+    @property
     def is_acceptable(self) -> bool:
-        """Whether the selection procedure beats picking at random."""
-        return self.probability < 0.5
+        """Whether the selection procedure beats picking at random.
+
+        An *uncomputed* PBO is not acceptable. The placeholder is zero, which compares below
+        the 0.5 bar and would otherwise report a check that never ran as one that passed --
+        a three-fold walk-forward or a two-segment evolution would print a green tick for a
+        statistic derived from no partitions at all. Failing closed is the only honest
+        direction: the report says the check could not be computed, and the verdict does not
+        pretend otherwise.
+        """
+        return self.is_computed and self.probability < 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -981,10 +1017,16 @@ class EvolutionResult:
                     "Above 0.5, picking the best of the final population is worse than picking "
                     "one of them at random."
                 ),
-                stat=f"PBO {self.overfitting.probability:.2f}",
+                stat=_overfitting_stat(self.overfitting),
                 detail=(
                     f"probability of backtest overfitting {self.overfitting.probability:.2f}, "
                     f"so selecting the winner was no better than choosing at random"
+                    if self.overfitting.is_computed
+                    else (
+                        "the probability of backtest overfitting could not be computed: CSCV "
+                        "needs at least four segments to split them into halves, and this run "
+                        "has fewer. Re-run with more segments rather than reading this as a pass"
+                    )
                 ),
             ),
             Check(

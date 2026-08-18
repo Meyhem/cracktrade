@@ -191,6 +191,55 @@ def test_declared_outputs_match_the_library(data: MarketData) -> None:
             assert name in namespace, f"{spec.type} did not produce {name}"
 
 
+def test_declared_parameters_reach_the_library() -> None:
+    """Every declared parameter must be a keyword its pandas_ta function accepts.
+
+    pandas_ta functions all end in ``**kwargs``, so a keyword the library does not know is
+    accepted and dropped rather than rejected: the parameter silently has no effect and the
+    indicator is computed at the library default. The registration guard checks this; this test
+    asserts the guard is actually in force over the whole catalogue.
+    """
+    import inspect
+
+    import pandas_ta
+
+    from cracktrade.indicators.catalogue import _library_keywords
+
+    for spec in registry.all_specs():
+        function = getattr(pandas_ta, spec.type, None)
+        if function is None:
+            continue
+        accepted = frozenset(inspect.signature(function).parameters)
+        for name in spec.params.model_fields:
+            for keyword in _library_keywords(spec.type, name):
+                assert keyword in accepted, (
+                    f"{spec.type}.{name} is passed as {keyword!r}, which "
+                    f"pandas_ta.{spec.type} does not accept"
+                )
+
+
+def test_bbands_std_actually_widens_the_bands(data: MarketData) -> None:
+    """Defect D17: ``std`` reached pandas_ta as an ignored keyword and did nothing.
+
+    pandas_ta 0.4.71b0 spells the envelope width ``lower_std``/``upper_std`` and has no ``std``
+    argument, so every Bollinger strategy computed 2.0-sigma bands whatever its YAML asked for.
+    A wider band must produce a strictly lower lower-band and a strictly higher upper-band.
+    """
+    narrow = compute_indicators(
+        strategy_with([{"name": "bb", "type": "bbands", "window": 20, "std": 1.0}]), data
+    )
+    wide = compute_indicators(
+        strategy_with([{"name": "bb", "type": "bbands", "window": 20, "std": 3.0}]), data
+    )
+    usable = slice(20, None)
+    assert (wide["bb_bbl"][usable] < narrow["bb_bbl"][usable]).all()
+    assert (wide["bb_bbu"][usable] > narrow["bb_bbu"][usable]).all()
+    # The midline is the same moving average either way.
+    pd.testing.assert_series_equal(
+        narrow["bb_bbm"][usable], wide["bb_bbm"][usable], check_names=False
+    )
+
+
 def test_every_registered_indicator_computes(data: MarketData) -> None:
     for spec in registry.all_specs():
         namespace = compute_indicators(strategy_with([{"name": "probe", "type": spec.type}]), data)

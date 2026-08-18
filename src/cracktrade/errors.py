@@ -80,6 +80,16 @@ class IndicatorOutputMismatchError(IndicatorError):
     """
 
 
+class IndicatorParameterMismatchError(IndicatorError):
+    """A declared parameter would not reach the library function that implements it.
+
+    Every pandas_ta function takes ``**kwargs``, so an unrecognised keyword is *accepted and
+    ignored* rather than rejected. A parameter the user set in YAML then has no effect and the
+    result is computed at the library's default -- silently. This is an engine bug or a library
+    upgrade, never a user error (spec section 5.5).
+    """
+
+
 # --------------------------------------------------------------------------- signals
 
 

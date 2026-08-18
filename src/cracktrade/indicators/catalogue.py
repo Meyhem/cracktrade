@@ -14,7 +14,8 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel
 
-from cracktrade.errors import IndicatorError
+from cracktrade.errors import IndicatorError, IndicatorParameterMismatchError
+from cracktrade.indicators import registry as registry_module
 from cracktrade.indicators.params import (
     BBandsParams,
     DonchianParams,
@@ -33,8 +34,26 @@ from cracktrade.indicators.params import (
 from cracktrade.indicators.registry import register
 from cracktrade.indicators.spec import IndicatorSpec, SeriesMap
 
-#: User-facing parameter names that pandas_ta spells differently.
+#: User-facing parameter names that pandas_ta spells differently, for every indicator.
 _PARAM_TO_TA: Mapping[str, str] = {"window": "length"}
+
+#: Per-indicator overrides of :data:`_PARAM_TO_TA`, where one user-facing parameter maps to a
+#: *set* of library keywords. ``bbands`` is the reason this exists: pandas_ta 0.4.71b0 splits the
+#: envelope width into ``lower_std``/``upper_std`` and has no ``std`` argument at all, so the
+#: obvious spelling was accepted by ``**kwargs`` and silently ignored -- every Bollinger strategy
+#: computed 2.0-sigma bands whatever its YAML said. See spec section 5.5 and defect D17.
+_PARAM_TO_TA_BY_TYPE: Mapping[str, Mapping[str, tuple[str, ...]]] = {
+    "bbands": {"std": ("lower_std", "upper_std")},
+}
+
+
+def _library_keywords(func_name: str, name: str) -> tuple[str, ...]:
+    """The pandas_ta keyword(s) one declared parameter is passed as."""
+    override = _PARAM_TO_TA_BY_TYPE.get(func_name, {}).get(name)
+    if override is not None:
+        return override
+    return (_PARAM_TO_TA.get(name, name),)
+
 
 #: Price-series arguments pandas_ta spells differently -- ``open`` is a Python builtin, so the
 #: library takes ``open_``.
@@ -92,7 +111,8 @@ def _ta_compute(
                 kwargs[_INPUT_TO_TA.get(raw, raw)] = series[raw]
         for name, value in params.model_dump().items():
             if value is not None:
-                kwargs[_PARAM_TO_TA.get(name, name)] = value
+                for keyword in _library_keywords(func_name, name):
+                    kwargs[keyword] = value
 
         result: pd.Series | pd.DataFrame | None = function(**kwargs)
         if result is None:
@@ -478,16 +498,57 @@ def _register_multi_output() -> None:
     )
 
 
+def _assert_params_reach_the_library() -> None:
+    """Check every declared parameter is a keyword its pandas_ta function actually accepts.
+
+    The mirror of the output assertion in :mod:`cracktrade.indicators.compute` (spec section
+    5.4), and it exists for the same reason: what the registry declares must be checked against
+    what the library does, not assumed to match.
+
+    Outputs fail loudly on their own -- a renamed column breaks the namespace key a signal
+    references. Parameters do not. Every pandas_ta function ends in ``**kwargs``, so a keyword
+    it does not know is accepted and dropped, and the indicator is computed at the library's
+    default with no error anywhere. The result looks exactly like a correct one. That is the
+    failure mode this project exists to not have, so it is checked at registration.
+    """
+    import inspect
+
+    import pandas_ta
+
+    for spec in registry_module.all_specs():
+        function = getattr(pandas_ta, spec.type, None)
+        if function is None:
+            continue  # an engine builtin; it has no library signature to check against.
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError):  # pragma: no cover - a C function without a signature
+            continue
+        accepted = frozenset(signature.parameters)
+        for name in spec.params.model_fields:
+            unreachable = [
+                keyword for keyword in _library_keywords(spec.type, name) if keyword not in accepted
+            ]
+            if unreachable:
+                offered = ", ".join(sorted(accepted - {"kwargs"}))
+                msg = (
+                    f"indicator {spec.type!r} declares parameter {name!r}, which would be "
+                    f"passed to pandas_ta.{spec.type} as {', '.join(unreachable)} -- "
+                    f"argument(s) it does not accept, so the value would be silently ignored "
+                    f"and the indicator computed at the library default. "
+                    f"pandas_ta.{spec.type} accepts: {offered}"
+                )
+                raise IndicatorParameterMismatchError(msg)
+
+
 def install() -> None:
     """Register the whole catalogue. Idempotent."""
-    from cracktrade.indicators import registry
-
-    if registry.count():
+    if registry_module.count():
         return
     _register_builtins()
     _register_window_only()
     _register_no_params()
     _register_multi_output()
+    _assert_params_reach_the_library()
 
 
 __all__ = ["ParamsBase", "install"]

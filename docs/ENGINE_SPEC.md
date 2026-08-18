@@ -721,6 +721,30 @@ naming the indicator and both column sets, not a user-facing signal error.
 strategy's warm-up is the maximum across all indicators actually referenced. No signal may be true
 before `max(warmup)` — enforced in the signal layer (§6.3), not by filling.
 
+### 5.6 Parameter passing — declared names are asserted against the library
+
+**[NEW — decided 2026-08-18, see §10 D17.]** A user-facing parameter name is translated to the
+library's spelling by `_PARAM_TO_TA` (global; currently `window` → `length`) and by
+`_PARAM_TO_TA_BY_TYPE`, a per-indicator override in which one declared parameter may fan out to
+*several* library keywords. `bbands.std` → (`lower_std`, `upper_std`) is the case that motivated it.
+
+**Every pandas_ta function ends in `**kwargs`**, which makes an unknown keyword *silently inert*
+rather than an error. A mis-spelled parameter therefore does not fail — it is dropped, and the
+indicator is computed at the library default while the strategy file says otherwise. This is the
+quietest possible defect and produces exactly the authoritative-but-wrong number the engine exists
+to prevent.
+
+So the mapping is **asserted at registration**, not trusted: `install()` walks every registered
+spec, and for each declared parameter checks that every keyword it would be passed as appears in
+the `inspect.signature` of the corresponding pandas_ta function. A mismatch raises
+`IndicatorParameterMismatchError` at startup, naming the indicator, the parameter, the keyword that
+would have been dropped, and the argument list the library does accept.
+
+This is the parameter-side counterpart of §5.4's output assertion, and it exists because the two
+have different natural failure modes: a renamed *output* column breaks a namespace lookup and is
+loud, whereas a renamed *parameter* is absorbed by `**kwargs` and is silent. A pandas_ta upgrade
+that renames an argument now fails at startup instead of quietly changing every result.
+
 ---
 
 ## 6. Signal layer
@@ -1468,6 +1492,24 @@ for a genuine bad print but made the whole backtest intermittently fail on good 
 a real bad bar (wrong by orders of magnitude more than adjustment noise) must still be rejected
 there.
 
+**D17 — `bbands.std` never reached the library.** **[NEW — found on 2026-08-18 while measuring how
+to widen a strategy's entry condition.]** The registry declares Bollinger Bands as taking `std`, and
+`_ta_compute` passed it to `pandas_ta.bbands` under that name. pandas_ta 0.4.71b0 spells the
+envelope width `lower_std` / `upper_std` and has **no `std` argument at all** — but, like every
+pandas_ta function, it ends in `**kwargs`, so the unrecognised keyword was accepted and discarded.
+Failure: every Bollinger strategy ever run by this engine computed **2.0-sigma bands regardless of
+what its YAML said**, and the returned column labels (`BBL_20_2.0_2.0`) confirmed the default had
+been used. Nothing raised, nothing warned, and the resulting backtest is a plausible, authoritative
+and wrong number — the exact output this project's design constraint forbids. Worse for the
+optimizer: a search over `std` explored a dimension that did nothing, so every candidate along it
+scored identically and the reported "optimal" width was whichever the tie-break happened to return.
+**Target:** a per-indicator parameter alias map (§5.5) fans `std` out to both library keywords, and
+a registration-time assertion (also §5.5) rejects any declared parameter that its pandas_ta function
+does not accept. The general lesson is the one §5.4 already applies to outputs: what the registry
+declares must be *checked* against the library, never assumed to match. Outputs failed loudly on
+their own because a renamed column breaks a namespace lookup; parameters had no such backstop, and
+now they do.
+
 ---
 
 ## 11. Public API surface
@@ -1601,6 +1643,9 @@ Derived from the three legacy test files plus one regression test per defect.
 27. D12 — same seed → identical result at `workers=1` and `workers=-1`.
 28. D13 — integer parameters take only integer values across the search.
 29. D14 — non-daily index rejected; dict-shaped `indicators` rejected; dtype is `float64`.
+30. D17 — every declared indicator parameter is a keyword its pandas_ta function accepts (§5.6),
+    and `bbands` at 3.0 sigma produces a strictly wider envelope than at 1.0 sigma with an
+    unchanged midline.
 
 ---
 

@@ -72,6 +72,8 @@ export function LaunchRunModal({
   const [folds, setFolds] = useState(defaults.folds ?? 6)
   const [scheme, setScheme] = useState(defaults.scheme ?? 'anchored')
   const [cache, setCache] = useState(defaults.cache ?? true)
+  const [minTrades, setMinTrades] = useState(defaults.min_trades ?? 20)
+  const [minTradesPerYear, setMinTradesPerYear] = useState(defaults.min_trades_per_year ?? 4)
 
   useEffect(() => {
     if (!opened) return
@@ -80,6 +82,8 @@ export function LaunchRunModal({
     setFolds(defaults.folds ?? 6)
     setScheme(defaults.scheme ?? 'anchored')
     setCache(defaults.cache ?? true)
+    setMinTrades(defaults.min_trades ?? 20)
+    setMinTradesPerYear(defaults.min_trades_per_year ?? 4)
     launch.reset()
     // `launch` is a stable mutation object; re-running this on its identity would reset the
     // form mid-edit.
@@ -95,8 +99,21 @@ export function LaunchRunModal({
       kind === 'backtest'
         ? {}
         : kind === 'optimize'
-          ? { objective, epochs, cache }
-          : { objective, epochs, folds, scheme }
+          ? {
+              objective,
+              epochs,
+              cache,
+              min_trades: minTrades,
+              min_trades_per_year: minTradesPerYear,
+            }
+          : {
+              objective,
+              epochs,
+              folds,
+              scheme,
+              min_trades: minTrades,
+              min_trades_per_year: minTradesPerYear,
+            }
 
     launch.mutate(
       { strategyId: strategy.id, kind, params },
@@ -156,6 +173,29 @@ export function LaunchRunModal({
               onChange={(value) => setEpochs(Number(value) || 1)}
               value={epochs}
             />
+            <NumberInput
+              description={descriptionOf('min_trades')}
+              label="Minimum trades"
+              max={1000}
+              min={0}
+              onChange={(value) => setMinTrades(Number(value) || 0)}
+              value={minTrades}
+            />
+            <NumberInput
+              decimalScale={1}
+              description={descriptionOf('min_trades_per_year')}
+              label="Minimum trades per year"
+              max={500}
+              min={0}
+              onChange={(value) => setMinTradesPerYear(Number(value) || 0)}
+              step={1}
+              value={minTradesPerYear}
+            />
+            <Text c="dimmed" size="xs">
+              The search rejects any combination below the higher of these two, measured on the
+              training window. Above the floor it has no preference for trading more, so this is the
+              setting that rules out a result built on a handful of trades.
+            </Text>
           </>
         )}
 

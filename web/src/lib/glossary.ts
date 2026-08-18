@@ -498,8 +498,41 @@ export const GLOSSARY = {
   infeasible: {
     title: 'Infeasible',
     plain:
-      'Combinations that ran but broke one of your own rules, such as holding for fewer days ' +
-      'than the minimum you set.',
+      'Combinations that ran but produced too few trades to be scored, so the search rejected ' +
+      'them outright.',
+    catch:
+      'A large count here is usually the trade floor working, not a broken search. If almost ' +
+      'everything was rejected, the floor is above what this strategy can produce.',
+    group: 'search',
+  },
+  trade_floor_required: {
+    title: 'Trade floor',
+    plain:
+      'The fewest trades a combination had to produce on the training window to be scored at ' +
+      'all. Anything below it was rejected rather than marked down.',
+    catch:
+      'It is a floor, not a target. Above it the search has no preference for trading more, ' +
+      'so raising it is the only way to rule out settings that barely trade.',
+    group: 'search',
+  },
+  min_trades: {
+    title: 'Minimum trades',
+    plain:
+      'The fewest trades you will accept from a combination, whatever the length of the ' +
+      'training window.',
+    catch:
+      'Set it too high and every combination is rejected, leaving the search nothing to ' +
+      'choose between.',
+    group: 'search',
+  },
+  min_trades_per_year: {
+    title: 'Minimum trades per year',
+    plain:
+      'An extra floor for each year of training window, so a long history demands more trades ' +
+      'than a short one.',
+    catch:
+      'A flat minimum quietly stops constraining anything as the history grows. Twenty trades ' +
+      'is a real bar over two years and no bar at all over twenty.',
     group: 'search',
   },
   seed: {

@@ -10,10 +10,15 @@ from cracktrade.optimize.discovery import (
     inject,
 )
 from cracktrade.optimize.objective import (
+    DEFAULT_MIN_TRADES,
+    DEFAULT_MIN_TRADES_PER_YEAR,
     DEFAULT_OBJECTIVE,
+    DEFAULT_TRADE_FLOOR,
     INFEASIBLE,
     OBJECTIVES,
     Objective,
+    ScoreFunction,
+    TradeFloor,
     get_objective,
 )
 from cracktrade.optimize.runner import optimize
@@ -27,7 +32,10 @@ from cracktrade.optimize.search import (
 from cracktrade.optimize.windows import Split, TestWindow, TrainWindow, split
 
 __all__ = [
+    "DEFAULT_MIN_TRADES",
+    "DEFAULT_MIN_TRADES_PER_YEAR",
     "DEFAULT_OBJECTIVE",
+    "DEFAULT_TRADE_FLOOR",
     "INFEASIBLE",
     "LIST_SECTIONS",
     "OBJECTIVES",
@@ -35,10 +43,12 @@ __all__ = [
     "SINGLE_SECTIONS",
     "Objective",
     "Parameter",
+    "ScoreFunction",
     "SearchDiagnostics",
     "SearchOutcome",
     "Split",
     "TestWindow",
+    "TradeFloor",
     "TrainWindow",
     "discover_parameters",
     "evaluation_budget",

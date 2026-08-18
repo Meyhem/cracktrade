@@ -12,7 +12,7 @@ from cracktrade.cli.output import OutputFormat, emit
 from cracktrade.cli.progress import search_progress
 from cracktrade.cli.render import render_optimization
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
-from cracktrade.optimize import DEFAULT_OBJECTIVE, OBJECTIVES
+from cracktrade.optimize import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES, TradeFloor
 from cracktrade.optimize import optimize as run_optimize
 from cracktrade.settings import load_settings
 from cracktrade.strategy import load_strategy, required_warmup
@@ -35,6 +35,28 @@ def optimize(
         str,
         typer.Option("--objective", help=f"One of: {', '.join(sorted(OBJECTIVES))}."),
     ] = DEFAULT_OBJECTIVE,
+    min_trades: Annotated[
+        int,
+        typer.Option(
+            "--min-trades",
+            min=0,
+            help=(
+                "Closed trades a candidate must produce on the train window to be scored at "
+                "all. Below it the candidate is rejected, not discounted."
+            ),
+        ),
+    ] = DEFAULT_TRADE_FLOOR.minimum,
+    min_trades_per_year: Annotated[
+        float,
+        typer.Option(
+            "--min-trades-per-year",
+            min=0.0,
+            help=(
+                "Additional trade floor per year of train window, so the constraint does not "
+                "weaken as the history grows. 0 disables it."
+            ),
+        ),
+    ] = DEFAULT_TRADE_FLOOR.per_year,
     fmt: Annotated[
         OutputFormat, typer.Option("--format", help="How to present the result.")
     ] = OutputFormat.TABLE,
@@ -80,6 +102,7 @@ def optimize(
             workers=settings.workers,
             train_fraction=settings.train_fraction,
             objective_name=objective,
+            trade_floor=TradeFloor(minimum=min_trades, per_year=min_trades_per_year),
             min_test_bars=settings.min_bars_beyond_warmup,
             on_generation=on_generation,
         )

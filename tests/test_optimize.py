@@ -9,6 +9,7 @@ approximately meaningless as forecasts. The protocol tests below are what stop t
 from __future__ import annotations
 
 import io
+import math
 from typing import Any
 
 import numpy as np
@@ -19,9 +20,11 @@ from cracktrade.data import MarketData
 from cracktrade.domain import Metrics, OptimizationResult
 from cracktrade.errors import NoOptimizableParametersError, OptimizationError
 from cracktrade.optimize import (
+    DEFAULT_MIN_TRADES,
     INFEASIBLE,
     OBJECTIVES,
     TestWindow,
+    TradeFloor,
     TrainWindow,
     discover_parameters,
     get_objective,
@@ -30,6 +33,7 @@ from cracktrade.optimize import (
     split,
 )
 from cracktrade.optimize.objective import calmar, legacy_pnl
+from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from tests.test_metrics import trending_market
 
 TICKER = "TEST"
@@ -447,6 +451,96 @@ def test_a_thin_result_beats_a_good_one_under_the_legacy_objective() -> None:
 
     assert legacy_pnl(thin_but_huge) < legacy_pnl(solid)
     assert calmar(thin_but_huge) == INFEASIBLE
+
+
+# ------------------------------------------------------------------ 9.3: the trade floor
+
+
+def test_the_floor_is_the_larger_of_the_absolute_count_and_the_rate() -> None:
+    floor = TradeFloor(minimum=20, per_year=4.0)
+
+    # One year: the rate asks for 4, the absolute floor for 20.
+    assert floor.required(TRADING_DAYS_PER_YEAR) == 20
+    # Ten years: the rate asks for 40 and now binds. This is the whole point of having one --
+    # a flat 20 over ten years is a candidate trading twice a year.
+    assert floor.required(10 * TRADING_DAYS_PER_YEAR) == 40
+
+
+def test_the_rate_rounds_up() -> None:
+    """A fractional trade is not a trade. 4/year over 15 months asks for 5, not 4."""
+    floor = TradeFloor(minimum=0, per_year=4.0)
+
+    assert floor.required(int(1.25 * TRADING_DAYS_PER_YEAR)) == 5
+
+
+def test_the_rate_can_be_switched_off() -> None:
+    """`per_year=0` restores the flat floor, which is what reproducing an old result needs."""
+    floor = TradeFloor(minimum=20, per_year=0.0)
+
+    assert floor.required(50 * TRADING_DAYS_PER_YEAR) == 20
+
+
+def test_a_zero_floor_admits_everything() -> None:
+    floor = TradeFloor(minimum=0, per_year=0.0)
+
+    assert floor.required(10_000) == 0
+    assert get_objective("calmar", min_trades=0)(metrics_with(total_trades=0)) < INFEASIBLE
+
+
+@pytest.mark.parametrize(
+    ("minimum", "per_year"),
+    [(-1, 4.0), (20, -1.0), (20, float("inf")), (20, float("nan"))],
+)
+def test_a_nonsensical_floor_is_refused(minimum: int, per_year: float) -> None:
+    """Rejected at construction, not silently normalised: a negative floor is a typo."""
+    with pytest.raises(ValueError, match="min_trades"):
+        TradeFloor(minimum=minimum, per_year=per_year)
+
+
+@pytest.mark.parametrize("name", sorted(OBJECTIVES))
+def test_binding_a_floor_moves_the_cliff_for_every_objective(name: str) -> None:
+    strict = get_objective(name, min_trades=100)
+    lenient = get_objective(name, min_trades=10)
+    fifty = metrics_with(total_trades=50)
+
+    # Under the strict floor a fifty-trade candidate is worse than it is under the lenient one.
+    # For the three real objectives that means infeasible; for legacy it means the 10x discount.
+    assert strict(fifty) > lenient(fifty)
+
+
+def test_the_default_floor_is_what_an_unbound_objective_applies() -> None:
+    """`get_objective(name)` and the bare function must not disagree about the default."""
+    thin = metrics_with(total_trades=DEFAULT_MIN_TRADES - 1)
+
+    assert get_objective("calmar")(thin) == calmar(thin) == INFEASIBLE
+
+
+def test_the_floor_in_force_is_recorded_in_the_result() -> None:
+    """`infeasible` is uninterpretable without the number that decided it."""
+    result = optimized(trade_floor=TradeFloor(minimum=7, per_year=0.0))
+
+    assert result.min_trades_required == 7
+
+
+def test_the_recorded_floor_reflects_the_rate_and_the_train_window() -> None:
+    """The rate is resolved against this run's train bars, not against the whole history."""
+    data = trending_market(760)
+    result = optimized(data=data, trade_floor=TradeFloor(minimum=0, per_year=12.0))
+
+    expected = math.ceil(12.0 * result.train_bars / TRADING_DAYS_PER_YEAR)
+    assert result.min_trades_required == expected
+
+
+def test_a_floor_no_candidate_can_clear_leaves_the_search_with_nothing() -> None:
+    """The honest failure mode: every candidate infeasible, and the report says so.
+
+    Worth pinning because the alternative -- quietly relaxing an unsatisfiable constraint --
+    would hand back a winner chosen by nothing at all.
+    """
+    result = optimized(trade_floor=TradeFloor(minimum=100_000, per_year=0.0))
+
+    assert result.min_trades_required == 100_000
+    assert result.infeasible == result.evaluations
 
 
 # ------------------------------------------------------------------ 9.3: objectives

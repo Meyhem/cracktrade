@@ -1253,12 +1253,65 @@ if trades < min_trades:   return +inf          # infeasible, not discounted
 return -calmar(train)                          # annualised return / |max drawdown|
 ```
 
-`min_trades` defaults to 20. The floor is a **feasibility constraint**, not a multiplier: a
-three-trade result carries no information regardless of how large its PnL is, and the legacy `×0.1`
-discount is defeated by any fluke bigger than 10×.
+The floor is a **feasibility constraint**, not a multiplier: a three-trade result carries no
+information regardless of how large its PnL is, and the legacy `×0.1` discount is defeated by any
+fluke bigger than 10×.
+
+**[NEW] — decided 2026-08-18. The floor has two parts, and both are configurable per run.**
+
+```
+min_trades = max(minimum, ceil(per_year * train_bars / 252))
+```
+
+with `minimum` defaulting to **20** and `per_year` to **4** (one trade a quarter). Rounded up: a
+fractional trade is not a trade.
+
+Two changes, for two separate reasons.
+
+*The rate exists because a flat count stops constraining anything as the history grows.* Twenty
+trades is a real bar over a two-year train window and no bar at all over a twenty-year one, where a
+candidate clears it by trading twice a year and letting a handful of events decide the whole Calmar.
+Calmar pushes in exactly that direction — the cheapest way to shrink `|max drawdown|` is to be in
+the market less — so the floor is the only thing holding the search back from a strategy that barely
+trades, and it must scale with the span it is a constraint about. The rate is deliberately mild. It
+is a floor on how much of the window the result is evidence *about*, not an opinion about how often
+a strategy ought to trade.
+
+*Both parts are configurable because the engine does not know the strategy's intended frequency.*
+A constant that suits a swing strategy is wrong for a position strategy in both directions, and
+before this the floor was a module-level default reachable from no interface at all. It is now a
+`TradeFloor` on `optimize`, `optimize_split` and `walk_forward`; `--min-trades` and
+`--min-trades-per-year` on `cracktrade optimize` and `cracktrade walkforward`; and `min_trades` /
+`min_trades_per_year` in a launch request's params, bounded there at 1000 and 500 respectively so a
+typo cannot queue a search in which every candidate is infeasible.
+
+**Resolved per split, not per run.** The floor is computed from the length of *that split's* train
+window, so a walk-forward's folds carry different floors — which is the point of having a rate. The
+bound objective travels on `SplitOutcome` and is what the stability surface (§12.5) re-scores
+against; re-deriving it from the objective's name there would silently drop the floor and measure
+degradation against a different function than the search used.
+
+**Deliberately still not a gradient.** Above the floor there is no preference for trading more. A
+graded reward on trade count is a thumb on the scale that no metric here justifies, and it drags the
+search toward overtrading, which slippage then eats. The honest form of "more trades is more
+evidence" is deflation by sample size (§12.3), which is already applied and is not the objective's
+job.
+
+**What is *not* changed:** `MIN_TRADES_TO_JUDGE` (§8), the separate constant below which the report
+suppresses its headline verdict, stays at a flat 20 and is measured on the *test* window. The two
+answer different questions — one is what the search may select, the other is what the report may
+claim — and collapsing them would let a loosened search floor quietly loosen the verdict.
 
 The objective used is recorded in `OptimizationResult`, because a number is not comparable across
-objectives and the report must say which one produced it.
+objectives and the report must say which one produced it. So is the floor in force, as
+`min_trades_required`: `infeasible` is uninterpretable without it, since the number that decided
+those rejections is resolved per run and is not a constant a reader could look up.
+
+**The legacy objective takes the run's floor, not its own hardcoded 5.** One run has one definition
+of "too few trades to believe"; what differs between objectives is the *response* to it, and that
+difference — a cliff here, a survivable 10× discount there — is the whole point of keeping legacy
+selectable. Reproducing an old result exactly therefore means asking for the old floor too:
+`--min-trades 5 --min-trades-per-year 0`.
 
 **Trial counting.** The optimizer records the total number of *configurations scored*, which since
 the §7.1 change is simply `evaluations`: one evaluation scores one configuration. While variants

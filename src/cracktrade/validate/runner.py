@@ -26,7 +26,7 @@ from cracktrade.control import NO_CONTROL, RunControl
 from cracktrade.domain import FoldResult, Metrics, ValidationReport
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import discover_parameters
-from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, get_objective
+from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, TradeFloor
 from cracktrade.optimize.runner import SplitOutcome, optimize_split, worst_case_warmup
 from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from cracktrade.validate.costs import cost_sensitivity
@@ -58,6 +58,7 @@ def walk_forward(
     seed: int = 0,
     workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
+    trade_floor: TradeFloor = DEFAULT_TRADE_FLOOR,
     train_fraction: float = 0.5,
     min_test_bars: int = 30,
     control: RunControl = NO_CONTROL,
@@ -98,6 +99,7 @@ def walk_forward(
                 seed=seed,
                 workers=workers,
                 objective_name=objective_name,
+                trade_floor=trade_floor,
                 # Each fold's search reports within its own share of the whole run, so the
                 # percentage advances monotonically rather than restarting per fold.
                 control=_fold_control(control, index, len(splits)),
@@ -160,7 +162,10 @@ def walk_forward(
             last_outcome.parameters,
             last_outcome.values,
             last_split.train,
-            get_objective(objective_name),
+            # The last fold's own bound objective, floor included. Re-deriving it here from the
+            # objective's name would silently drop the floor and score the surface against a
+            # different function than the search used.
+            last_outcome.objective,
         ),
         costs=cost_sensitivity(last_outcome.optimized, last_split.test),
         mean_return_interval=block_bootstrap_interval(out_of_sample, statistic="mean", seed=seed),

@@ -42,8 +42,10 @@ from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import Parameter, discover_parameters, inject
 from cracktrade.optimize.objective import (
     DEFAULT_OBJECTIVE,
+    DEFAULT_TRADE_FLOOR,
     INFEASIBLE,
     Objective,
+    TradeFloor,
     get_objective,
 )
 from cracktrade.optimize.search import (
@@ -75,6 +77,7 @@ def optimize(
     workers: int = 1,
     train_fraction: float = 0.8,
     objective_name: str = DEFAULT_OBJECTIVE,
+    trade_floor: TradeFloor = DEFAULT_TRADE_FLOOR,
     min_test_bars: int = 30,
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
@@ -99,6 +102,7 @@ def optimize(
         seed=seed,
         workers=workers,
         objective_name=objective_name,
+        trade_floor=trade_floor,
         on_generation=on_generation,
         control=control,
         capture_series=capture_series,
@@ -114,6 +118,11 @@ class SplitOutcome:
         optimized: the strategy with the winning parameter vector substituted in.
         parameters: the tunable parameters that were searched.
         values: the winning parameter vector.
+        objective: the scorer the search actually used, with this split's trade floor already
+            bound. Carried rather than re-derived so that anything re-scoring on this train
+            window -- the stability surface, above all -- scores what the search scored. A
+            surface computed against a different floor would report degradation the search
+            never saw, or miss degradation it did.
         trial_sharpes: Sharpe of every candidate scored, empty for a parallel search.
         test_returns: per-bar out-of-sample returns, warm-up prefix excluded.
     """
@@ -122,6 +131,7 @@ class SplitOutcome:
     optimized: Strategy
     parameters: tuple[Parameter, ...]
     values: tuple[float, ...]
+    objective: Objective
     trial_sharpes: tuple[float, ...]
     test_returns: npt.NDArray[np.float64]
 
@@ -135,6 +145,7 @@ def optimize_split(
     seed: int = 0,
     workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
+    trade_floor: TradeFloor = DEFAULT_TRADE_FLOOR,
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
     capture_series: bool = False,
@@ -145,7 +156,11 @@ def optimize_split(
     without re-deriving the split each time.
     """
     parameters = discover_parameters(strategy)
-    objective = get_objective(objective_name)
+    # Resolved once, here, from the length of *this* split's train window. A walk-forward's
+    # folds have different train lengths and therefore different floors, which is the point of
+    # a rate: the constraint has to track the span it is a constraint about.
+    min_trades = trade_floor.required(len(division.train.data))
+    objective = get_objective(objective_name, min_trades=min_trades)
 
     diagnostics = SearchDiagnostics(
         seed=seed,
@@ -154,10 +169,12 @@ def optimize_split(
     )
 
     logger.info(
-        "optimizing %d parameter(s) over %d train bars, reporting on %d test bars",
+        "optimizing %d parameter(s) over %d train bars, reporting on %d test bars, "
+        "requiring at least %d closed trades",
         len(parameters),
         len(division.train.data),
         division.test.scored_bars,
+        min_trades,
     )
 
     fitness = _Fitness(
@@ -211,6 +228,7 @@ def optimize_split(
         failures=diagnostics.failures,
         infeasible=diagnostics.infeasible,
         counts_exact=diagnostics.counts_exact,
+        min_trades_required=min_trades,
         trials=diagnostics.evaluations,
         budget=evaluation_budget(parameters, epochs),
         seed=seed,
@@ -226,6 +244,7 @@ def optimize_split(
         optimized=optimized,
         parameters=parameters,
         values=outcome.values,
+        objective=objective,
         trial_sharpes=tuple(fitness.trial_sharpes) if diagnostics.counts_exact else (),
         test_returns=np.asarray(test_returns.to_numpy(), dtype=np.float64),
     )

@@ -27,13 +27,19 @@ from cracktrade.api.services.diff import summarise
 from cracktrade.api.services.verdict import Check, checks_of
 from cracktrade.config import dump_strategy
 from cracktrade.domain import MIN_TRADES_TO_JUDGE
-from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, OBJECTIVES
+from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
 
 #: Largest search a single request may ask for. Not a safety rail against the engine -- it will
 #: happily run longer -- but against a typo turning one queued run into a machine busy for days.
 MAX_EPOCHS = 200
 MAX_FOLDS = 20
+
+#: Ceilings on the trade floor. Not engine limits either -- the engine accepts any non-negative
+#: floor -- but a floor no candidate can clear turns a search into an expensive way to learn
+#: that every candidate was infeasible, and these bound the typo that causes it.
+MAX_MIN_TRADES = 1000
+MAX_MIN_TRADES_PER_YEAR = 500.0
 
 
 def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
@@ -59,8 +65,25 @@ def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
     if not 1 <= epochs <= MAX_EPOCHS:
         raise ValidationFailedError(f"epochs must be between 1 and {MAX_EPOCHS}")
 
+    min_trades = int(params.get("min_trades", DEFAULT_TRADE_FLOOR.minimum))
+    if not 0 <= min_trades <= MAX_MIN_TRADES:
+        raise ValidationFailedError(f"min_trades must be between 0 and {MAX_MIN_TRADES}")
+
+    per_year = float(params.get("min_trades_per_year", DEFAULT_TRADE_FLOOR.per_year))
+    if not 0.0 <= per_year <= MAX_MIN_TRADES_PER_YEAR:
+        raise ValidationFailedError(
+            f"min_trades_per_year must be between 0 and {MAX_MIN_TRADES_PER_YEAR:g}"
+        )
+
+    floor = {"min_trades": min_trades, "min_trades_per_year": per_year}
+
     if kind is RunKind.OPTIMIZE:
-        return {"objective": objective, "epochs": epochs, "cache": bool(params.get("cache", True))}
+        return {
+            "objective": objective,
+            "epochs": epochs,
+            **floor,
+            "cache": bool(params.get("cache", True)),
+        }
 
     folds = int(params.get("folds", DEFAULT_FOLDS))
     if not 2 <= folds <= MAX_FOLDS:
@@ -69,7 +92,7 @@ def _normalised_params(kind: RunKind, params: dict[str, Any]) -> dict[str, Any]:
     if scheme not in {member.value for member in FoldScheme}:
         raise ValidationFailedError(f"unknown fold scheme {scheme!r}")
 
-    return {"objective": objective, "epochs": epochs, "folds": folds, "scheme": scheme}
+    return {"objective": objective, "epochs": epochs, **floor, "folds": folds, "scheme": scheme}
 
 
 def launch(

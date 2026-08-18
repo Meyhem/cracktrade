@@ -258,8 +258,16 @@ def _render_changes(result: OptimizationResult, console: Console) -> None:
 
 def _render_diagnostics(result: OptimizationResult, console: Console) -> None:
     console.print()
+    # The floor is named beside the count it explains. "412 infeasible" reads as a broken
+    # search; "412 infeasible (fewer than 48 trades)" reads as the constraint doing its job,
+    # and tells the user the one number they would change to loosen it.
+    floor = (
+        f" (fewer than {result.min_trades_required} trades)"
+        if result.min_trades_required is not None
+        else ""
+    )
     counts = (
-        f"{result.failures} failed, {result.infeasible} infeasible"
+        f"{result.failures} failed, {result.infeasible} infeasible{floor}"
         if result.counts_exact
         else "failure counts unavailable (parallel run)"
     )

@@ -98,6 +98,7 @@ OPTIMIZE_KEYS = frozenset(
         "most_common_failure",
         "infeasible",
         "counts_exact",
+        "min_trades_required",
         "trials",
         "budget",
         "seed",

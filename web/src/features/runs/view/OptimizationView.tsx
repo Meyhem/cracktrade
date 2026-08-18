@@ -243,6 +243,11 @@ export function OptimizationView({ result }: { result: Json | null }) {
                 <Figure size="md" term="evaluations" value={integer(optimization.evaluations)} />
                 <Figure size="md" term="failures" value={integer(optimization.failures)} />
                 <Figure size="md" term="infeasible" value={integer(optimization.infeasible)} />
+                <Figure
+                  size="md"
+                  term="trade_floor_required"
+                  value={integer(optimization.minTradesRequired)}
+                />
                 <Figure size="md" term="trials" value={integer(optimization.trials)} />
                 <Figure size="md" term="budget" value={integer(optimization.budget)} />
                 <Figure size="md" term="seed" value={integer(optimization.seed)} />

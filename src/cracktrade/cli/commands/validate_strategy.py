@@ -12,7 +12,7 @@ from cracktrade.cli.exit_codes import ExitCode
 from cracktrade.cli.output import OutputFormat, emit
 from cracktrade.cli.render import render_validation
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
-from cracktrade.optimize import DEFAULT_OBJECTIVE, OBJECTIVES
+from cracktrade.optimize import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES, TradeFloor
 from cracktrade.settings import load_settings
 from cracktrade.strategy import load_strategy, required_warmup
 from cracktrade.validate import DEFAULT_FOLDS, FoldScheme, walk_forward
@@ -40,6 +40,28 @@ def walkforward(
     objective: Annotated[
         str, typer.Option("--objective", help=f"One of: {', '.join(sorted(OBJECTIVES))}.")
     ] = DEFAULT_OBJECTIVE,
+    min_trades: Annotated[
+        int,
+        typer.Option(
+            "--min-trades",
+            min=0,
+            help=(
+                "Closed trades a candidate must produce on a fold's train window to be scored "
+                "at all. Below it the candidate is rejected, not discounted."
+            ),
+        ),
+    ] = DEFAULT_TRADE_FLOOR.minimum,
+    min_trades_per_year: Annotated[
+        float,
+        typer.Option(
+            "--min-trades-per-year",
+            min=0.0,
+            help=(
+                "Additional trade floor per year of train window, so the constraint does not "
+                "weaken as folds grow. 0 disables it."
+            ),
+        ),
+    ] = DEFAULT_TRADE_FLOOR.per_year,
     fmt: Annotated[
         OutputFormat, typer.Option("--format", help="How to present the result.")
     ] = OutputFormat.TABLE,
@@ -90,6 +112,7 @@ def walkforward(
         seed=settings.seed,
         workers=settings.workers,
         objective_name=objective,
+        trade_floor=TradeFloor(minimum=min_trades, per_year=min_trades_per_year),
         min_test_bars=settings.min_bars_beyond_warmup,
     )
 

@@ -507,6 +507,13 @@ export type OptimizationResult = {
   evaluations: number | null
   failures: number | null
   infeasible: number | null
+  /**
+   * The trade floor this run enforced, or null for a run recorded before the floor was
+   * configurable. Kept beside `infeasible` because that count means nothing on its own — the
+   * floor is resolved per run from the training window's length, so it is not a constant the
+   * screen could state for itself.
+   */
+  minTradesRequired: number | null
   countsExact: boolean | null
   trials: number | null
   budget: number | null
@@ -541,6 +548,7 @@ export function optimizationResult(source: Json | null): OptimizationResult {
     evaluations: number(source, 'evaluations'),
     failures: number(source, 'failures'),
     infeasible: number(source, 'infeasible'),
+    minTradesRequired: number(source, 'min_trades_required'),
     countsExact: flag(source, 'counts_exact'),
     trials: number(source, 'trials'),
     budget: number(source, 'budget'),

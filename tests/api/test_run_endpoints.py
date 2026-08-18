@@ -79,6 +79,8 @@ def test_launch_parameters_are_defaulted_and_echoed(client: TestClient) -> None:
     assert run["params"] == {
         "objective": "calmar",
         "epochs": 10,
+        "min_trades": 20,
+        "min_trades_per_year": 4.0,
         "folds": 6,
         "scheme": "anchored",
     }

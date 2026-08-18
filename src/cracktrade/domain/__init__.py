@@ -319,6 +319,17 @@ class OptimizationResult:
     #: executed today always has one.
     benchmark: BenchmarkComparison | None = None
 
+    #: Closed trades a candidate had to produce on the *train* window to be scored at all
+    #: (spec section 9.3). Recorded because ``infeasible`` is uninterpretable without it: a run
+    #: that rejected most of its candidates was either constrained or badly configured, and the
+    #: number that decided which is not derivable from anything else in this result. Resolved
+    #: per run from the configured floor and the length of the train window, so it is not a
+    #: constant a reader could look up.
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    min_trades_required: int | None = None
+
     #: Test-window chart series, present only when the caller asked for them.
     series: RunSeries | None = None
 

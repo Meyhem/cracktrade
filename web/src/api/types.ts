@@ -144,6 +144,8 @@ export type Headline = BacktestHeadline | OptimizeHeadline | WalkForwardHeadline
 export type RunDefaults = {
   objective: string
   epochs: number
+  min_trades?: number | null
+  min_trades_per_year?: number | null
   folds: number | null
   scheme: string | null
   cache: boolean | null

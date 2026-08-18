@@ -37,7 +37,7 @@ from cracktrade.errors import (
     RunCancelled,
 )
 from cracktrade.log import get_logger
-from cracktrade.optimize import optimize
+from cracktrade.optimize import DEFAULT_TRADE_FLOOR, TradeFloor, optimize
 from cracktrade.serialize import to_dict
 from cracktrade.settings import Settings, load_settings
 from cracktrade.strategy import build_strategy, required_warmup
@@ -115,6 +115,7 @@ class CracktradeEngine:
                 seed=run.seed,
                 workers=self.settings.workers,
                 objective_name=str(params.get("objective", "calmar")),
+                trade_floor=_trade_floor(params),
                 control=control,
                 capture_series=True,
             )
@@ -131,10 +132,23 @@ class CracktradeEngine:
             seed=run.seed,
             workers=self.settings.workers,
             objective_name=str(params.get("objective", "calmar")),
+            trade_floor=_trade_floor(params),
             control=control,
             capture_series=True,
         )
         return to_dict(report), report.fold_series, report.is_credible, None
+
+
+def _trade_floor(params: dict[str, Any]) -> TradeFloor:
+    """The trade floor a launch asked for.
+
+    Defaults are applied here as well as in the launch service, because a run queued before the
+    floor was configurable has neither key in its stored params and must still execute.
+    """
+    return TradeFloor(
+        minimum=int(params.get("min_trades", DEFAULT_TRADE_FLOOR.minimum)),
+        per_year=float(params.get("min_trades_per_year", DEFAULT_TRADE_FLOOR.per_year)),
+    )
 
 
 def load_market_data(

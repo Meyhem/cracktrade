@@ -14,7 +14,7 @@ from cracktrade import __version__
 from cracktrade.domain import INSTABILITY_THRESHOLD, MIN_TRADES_TO_JUDGE, SIGNIFICANCE
 from cracktrade.indicators.catalogue import install
 from cracktrade.indicators.describe import IndicatorDescription, describe_catalogue
-from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, OBJECTIVES
+from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
 
 #: Exit fields in stop-priority order (spec section 3.7). ``stop_priority`` is what lets the
@@ -56,6 +56,10 @@ class RunDefaults:
     folds: int | None = None
     scheme: str | None = None
     cache: bool | None = None
+    #: The trade floor, absent for a backtest, which does not search and has no objective to
+    #: constrain.
+    min_trades: int | None = None
+    min_trades_per_year: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +91,20 @@ def describe_engine() -> Meta:
         objectives=tuple(OBJECTIVES),
         fold_schemes=tuple(scheme.value for scheme in FoldScheme),
         backtest_defaults=RunDefaults(objective=DEFAULT_OBJECTIVE, epochs=0),
-        optimize_defaults=RunDefaults(objective=DEFAULT_OBJECTIVE, epochs=10, cache=True),
+        optimize_defaults=RunDefaults(
+            objective=DEFAULT_OBJECTIVE,
+            epochs=10,
+            cache=True,
+            min_trades=DEFAULT_TRADE_FLOOR.minimum,
+            min_trades_per_year=DEFAULT_TRADE_FLOOR.per_year,
+        ),
         walk_forward_defaults=RunDefaults(
             objective=DEFAULT_OBJECTIVE,
             epochs=10,
             folds=DEFAULT_FOLDS,
             scheme=FoldScheme.ANCHORED.value,
+            min_trades=DEFAULT_TRADE_FLOOR.minimum,
+            min_trades_per_year=DEFAULT_TRADE_FLOOR.per_year,
         ),
         indicators=describe_catalogue(),
         exit_fields=tuple(ExitField(name=name, stop_priority=rank) for name, rank in EXIT_FIELDS),

@@ -13,11 +13,17 @@ Everything stochastic comes from one seeded :class:`random.Random`. Two runs wit
 the same chassis and the same history produce the same winner, and a test asserts it: an
 irreproducible search is defect D12, and it is not less of one for being evolutionary.
 
-The search is deliberately *not* parallelised. The optimizer's ``workers=-1`` survives only
-because differential evolution with ``updating='deferred'`` evaluates a whole generation
-synchronously, so the result is worker-count independent (section 9.2). Nothing here has been
-proven to have that property yet, and a search whose answer depends on the machine it ran on
-would be worse than a slow one.
+The search is generational, and that is what makes it safe to distribute. A generation is bred in
+full from the seeded RNG before any of it is scored, and no score is read until every genome in
+the generation has one -- the same property that makes the optimizer's ``updating='deferred'``
+independent of worker count (section 9.2). So a caller may pass ``evaluate_batch`` to score a
+whole generation however it likes, and a search whose answer depended on the machine it ran on
+remains the thing this module refuses to be.
+
+Nothing here knows what a process is. The module's only concession to parallelism is that it
+hands out generations rather than genomes; the pool that scores them lives in
+:mod:`cracktrade.evolution.parallel`, and the accounting that keeps the trial count exact lives
+in :meth:`~cracktrade.evolution.protocol.Fitness.evaluate_batch`.
 """
 
 from __future__ import annotations
@@ -152,6 +158,7 @@ def run_evolution(
     seed: int,
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
+    evaluate_batch: Callable[[Sequence[Genome]], list[float]] | None = None,
 ) -> EvolutionOutcome:
     """Evolve a population under ``fitness``, lower being better.
 
@@ -161,14 +168,23 @@ def run_evolution(
         seed: seeds every stochastic decision in the run.
         on_generation: called with the generation index and the best score so far.
         control: progress and cooperative cancellation.
+        evaluate_batch: scores a whole generation at once, returning one score per genome in
+            order. It must be observationally identical to mapping ``fitness`` over the batch;
+            given that, the result of the search does not depend on how the work was
+            distributed. Defaults to doing exactly that, one genome at a time.
 
     Raises:
         RunCancelled: the caller asked for the run to stop.
     """
     rng = random.Random(seed)
 
+    def serially(batch: Sequence[Genome]) -> list[float]:
+        return [fitness(genome) for genome in batch]
+
+    evaluate = evaluate_batch if evaluate_batch is not None else serially
+
     population = [random_genome(rng) for _ in range(settings.population)]
-    scores = [fitness(genome) for genome in population]
+    scores = evaluate(population)
     history = [_trace(0, scores)]
 
     logger.info(
@@ -183,7 +199,7 @@ def run_evolution(
         # that is part parent and part child, and nothing downstream could interpret it.
         control.raise_if_cancelled()
 
-        population, scores = _advance(population, scores, fitness, settings, rng)
+        population, scores = _advance(population, scores, evaluate, settings, rng)
         history.append(_trace(generation, scores))
 
         best = min(scores)
@@ -206,11 +222,16 @@ def run_evolution(
 def _advance(
     population: list[Genome],
     scores: list[float],
-    fitness: Callable[[Genome], float],
+    evaluate: Callable[[Sequence[Genome]], list[float]],
     settings: GaSettings,
     rng: random.Random,
 ) -> tuple[list[Genome], list[float]]:
-    """One generation: keep the elite, breed the rest, score what changed."""
+    """One generation: keep the elite, breed the rest, score what changed.
+
+    Every child is bred before any of them is scored, which is not merely how it reads: it is
+    what lets ``evaluate`` distribute the generation without the outcome depending on how it
+    chose to.
+    """
     order = _ranking(scores)
 
     survivors = [population[index] for index in order[: settings.elites]]
@@ -229,7 +250,7 @@ def _advance(
         )
         children.append(mutate(child, rng, rate=settings.mutation_rate))
 
-    return survivors + children, survivor_scores + [fitness(child) for child in children]
+    return survivors + children, survivor_scores + evaluate(children)
 
 
 def _ranking(scores: Sequence[float]) -> list[int]:

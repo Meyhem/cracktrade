@@ -133,6 +133,7 @@ class CracktradeEngine:
                     generations=int(params.get("generations", 25)),
                 ),
                 seed=run.seed,
+                workers=self.settings.workers,
                 objective_name=str(params.get("objective", "calmar")),
                 trade_floor=_trade_floor(params),
                 segments=int(params.get("segments", 4)),

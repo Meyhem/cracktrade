@@ -45,9 +45,10 @@ class Settings(BaseSettings):
     #: Seed for every stochastic component. Mandatory for reproducibility -- defect D12.
     seed: int = 0
 
-    #: Worker processes for the optimizer. ``-1`` means "all cores". Results are identical
-    #: regardless of this value because differential evolution runs with
-    #: ``updating='deferred'`` (spec section 9.2).
+    #: Worker processes for the optimizer and the evolution search. ``-1`` means "all cores".
+    #: Results are identical regardless of this value: differential evolution runs with
+    #: ``updating='deferred'`` (spec section 9.2), and the genetic algorithm breeds each
+    #: generation in full before scoring any of it (spec section 16.4).
     workers: int = -1
 
     #: Fraction of history reserved for the out-of-sample test window (spec section 9.4).

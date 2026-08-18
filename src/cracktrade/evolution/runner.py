@@ -37,6 +37,7 @@ from cracktrade.domain import EvolutionResult, SegmentResult
 from cracktrade.errors import EvolutionError
 from cracktrade.evolution.blocks import library_warmup
 from cracktrade.evolution.genome import blocks_used, describe, render
+from cracktrade.evolution.parallel import evolution_pool, plan_workers
 from cracktrade.evolution.protocol import (
     DEFAULT_HOLDOUT_FRACTION,
     DEFAULT_MIN_SEGMENT_BARS,
@@ -88,6 +89,7 @@ def evolve(
     *,
     settings: GaSettings | None = None,
     seed: int = 0,
+    workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
     trade_floor: TradeFloor = DEFAULT_TRADE_FLOOR,
     segments: int = DEFAULT_SEGMENTS,
@@ -98,6 +100,13 @@ def evolve(
     capture_series: bool = False,
 ) -> EvolutionResult:
     """Compose a strategy for ``chassis``'s ticker and report it on unseen history.
+
+    ``workers`` is the number of processes scoring candidates, or ``-1`` to size the pool from
+    the search's budget (:func:`~cracktrade.evolution.parallel.plan_workers`). It does not change
+    the answer -- a generation is bred in full before any of it is scored, and the counts that
+    feed the deflation are merged in genome order by
+    :meth:`~cracktrade.evolution.protocol.Fitness.evaluate_batch` -- and a test asserts as much.
+    The default of one process bypasses the machinery entirely.
 
     Raises:
         EvolutionError: the history cannot support the division, or no genome in the whole
@@ -138,9 +147,26 @@ def evolve(
     )
 
     started = time.perf_counter()
-    outcome = run_evolution(
-        fitness, settings=ga, seed=seed, on_generation=on_generation, control=control
-    )
+    # Resolved from the budget as well as the setting: a search short enough to finish before
+    # its workers have imported vectorbt is faster without them.
+    processes = plan_workers(workers, budget=ga.budget)
+    if processes == 1:
+        outcome = run_evolution(
+            fitness, settings=ga, seed=seed, on_generation=on_generation, control=control
+        )
+    else:
+        # The pool lives only as long as the search. Everything after this -- the holdout, the
+        # overfitting probability, the stability surface -- is a handful of simulations in this
+        # process, and holding idle workers open through them would be waste.
+        with evolution_pool(fitness, workers=processes) as score_many:
+            outcome = run_evolution(
+                fitness,
+                settings=ga,
+                seed=seed,
+                on_generation=on_generation,
+                control=control,
+                evaluate_batch=lambda batch: fitness.evaluate_batch(batch, score_many),
+            )
     elapsed = time.perf_counter() - started
 
     if outcome.best_score == INFEASIBLE:

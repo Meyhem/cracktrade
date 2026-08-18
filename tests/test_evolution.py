@@ -11,15 +11,23 @@ holding.
   D12, and it is not less of one for being evolutionary.
 * **The holdout does not influence selection.** Asserted end to end rather than by inspection:
   two histories differing *only* in the holdout produce the same evolved strategy.
+
+Reproducibility now has a second half. Candidates may be scored across processes, so "same seed,
+same answer" has to hold at any worker count -- including the counts that feed the deflation,
+which the optimizer is allowed to lose track of under parallelism and this search is not. The
+tests under "parallel scoring" pin the merge against serial scoring directly, then assert the
+whole pipeline agrees at one worker and at two.
 """
 
 from __future__ import annotations
 
 import io
 import math
+import multiprocessing
 import random
 from datetime import date
 from itertools import pairwise
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
@@ -28,12 +36,14 @@ from rich.console import Console
 
 from cracktrade.cli.render import render_evolution
 from cracktrade.config import parse_strategy
+from cracktrade.control import RunControl
 from cracktrade.data import MarketData
 from cracktrade.domain import EvolutionResult
-from cracktrade.errors import EvolutionError
+from cracktrade.errors import EvolutionError, RunCancelled
 from cracktrade.evolution import (
     BLOCKS,
     Chassis,
+    Fitness,
     GaSettings,
     Genome,
     Slot,
@@ -51,12 +61,20 @@ from cracktrade.evolution import (
     split_for_evolution,
 )
 from cracktrade.evolution.blocks import GeneRef, instantiate
+from cracktrade.evolution.parallel import plan_workers
+from cracktrade.evolution.protocol import Scored, ScoreFailure, ScoreOutcome, score_strategy
 from cracktrade.indicators import registry
 from cracktrade.optimize import TradeFloor
+from cracktrade.optimize.objective import INFEASIBLE, get_objective
 from cracktrade.serialize import to_dict
 from cracktrade.signals import parse_expression
 from cracktrade.strategy import required_warmup
 from tests.factories import make_ohlcv
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from cracktrade.config import Strategy
 
 #: Enough bars for a 200-bar library warm-up, four evolution segments and a holdout.
 BARS = 900
@@ -328,6 +346,149 @@ def test_a_holdout_too_small_to_judge_is_refused() -> None:
         split_for_evolution(a_market(), warmup=200, segments=4, holdout_fraction=0.05)
 
 
+# ------------------------------------------------------------------ parallel scoring
+
+
+def a_fitness(*, min_trades: int = 0) -> Fitness:
+    regions = split_for_evolution(a_market(), warmup=library_warmup(), segments=4)
+    return Fitness(
+        chassis=a_chassis(),
+        segments=regions.segments,
+        objective=get_objective("calmar", min_trades=0),
+        min_trades=min_trades,
+    )
+
+
+def in_process(fitness: Fitness) -> Callable[[Sequence[Strategy]], list[ScoreOutcome]]:
+    """A ``score_many`` that does exactly what a worker pool would, without the processes.
+
+    Lets the merge be tested against serial scoring in milliseconds. The pool's own contribution
+    -- that it, too, returns outcomes in the order it was given them -- is what the end-to-end
+    worker-count test covers.
+    """
+
+    def score_many(strategies: Sequence[Strategy]) -> list[ScoreOutcome]:
+        return [
+            score_strategy(
+                strategy,
+                segments=fitness.segments,
+                objective=fitness.objective,
+                min_trades=fitness.min_trades,
+            )
+            for strategy in strategies
+        ]
+
+    return score_many
+
+
+def test_batch_evaluation_matches_serial_evaluation_exactly() -> None:
+    """The property the whole parallel path rests on.
+
+    Not "close enough": the trial count and the per-candidate Sharpes reach the deflated Sharpe
+    and the overfitting probability, so a batch that merged them differently would move numbers
+    a user decides where to put money on.
+    """
+    rng = random.Random(3)
+    genomes = [random_genome(rng) for _ in range(5)]
+    # A repeat within the batch, and one candidate already in the cache before it starts: the
+    # two ways a digest can be seen more than once.
+    genomes.append(genomes[1])
+
+    serial, batched = a_fitness(min_trades=5), a_fitness(min_trades=5)
+    serial(genomes[0])
+    batched(genomes[0])
+
+    expected = [serial(genome) for genome in genomes]
+    actual = batched.evaluate_batch(genomes, in_process(batched))
+
+    assert actual == expected
+    assert list(batched.results) == list(serial.results)
+    assert batched.results == serial.results
+    assert batched.evaluations == serial.evaluations
+    assert batched.failures == serial.failures
+    assert batched.infeasible == serial.infeasible
+    assert batched.trials == serial.trials
+    assert batched.trial_sharpes == serial.trial_sharpes
+
+
+def test_a_configuration_repeated_in_one_batch_is_simulated_once() -> None:
+    """Deduplication is what keeps the trial count a count of *distinct* configurations."""
+    genome = random_genome(random.Random(11))
+    fitness = a_fitness()
+    submitted: list[Sequence[Strategy]] = []
+
+    def score_many(strategies: Sequence[Strategy]) -> list[ScoreOutcome]:
+        submitted.append(strategies)
+        return [Scored(score=1.5, segment_scores=(1.5,), segment_sharpes=(0.5,), trades=30)] * len(
+            strategies
+        )
+
+    scores = fitness.evaluate_batch([genome, genome], score_many)
+
+    assert [len(batch) for batch in submitted] == [1]
+    assert scores == [1.5, 1.5]
+    assert fitness.trials == 1
+    # Every call still counts as an evaluation, exactly as a serial cache hit does.
+    assert fitness.evaluations == 2
+
+
+def test_a_candidate_that_fails_to_simulate_is_counted_once_per_occurrence() -> None:
+    """A failure is not cached, so a repeat re-fails -- which is what serial scoring does."""
+    genome = random_genome(random.Random(12))
+    fitness = a_fitness()
+
+    def score_many(strategies: Sequence[Strategy]) -> list[ScoreOutcome]:
+        return [ScoreFailure(error_type="BacktestError") for _ in strategies]
+
+    scores = fitness.evaluate_batch([genome, genome], score_many)
+
+    assert scores == [INFEASIBLE, INFEASIBLE]
+    assert fitness.failures == 2
+    assert fitness.failure_reasons == {"BacktestError": 2}
+    assert not fitness.results
+
+
+def test_a_batch_scorer_that_loses_a_result_is_refused() -> None:
+    """Silently short results would misalign every score after the gap."""
+    fitness = a_fitness()
+    genomes = [random_genome(random.Random(13)), random_genome(random.Random(14))]
+
+    with pytest.raises(EvolutionError, match="batch scoring returned"):
+        fitness.evaluate_batch(genomes, lambda _strategies: [])
+
+
+def test_scoring_a_generation_at_once_leaves_the_search_unchanged() -> None:
+    """The GA must not be able to tell that its generations were scored in batches."""
+    settings = GaSettings(population=10, generations=4)
+    serial = run_evolution(a_synthetic_fitness, settings=settings, seed=5)
+    batched = run_evolution(
+        a_synthetic_fitness,
+        settings=settings,
+        seed=5,
+        evaluate_batch=lambda batch: [a_synthetic_fitness(genome) for genome in batch],
+    )
+
+    assert batched.best == serial.best
+    assert batched.best_score == serial.best_score
+    assert batched.finalists == serial.finalists
+    assert [step.best_score for step in batched.history] == [
+        step.best_score for step in serial.history
+    ]
+
+
+def test_a_worker_count_must_be_chosen_or_a_positive_number() -> None:
+    assert plan_workers(3, budget=10) == 3
+    for refused in (0, -2):
+        with pytest.raises(ValueError, match="workers must be"):
+            plan_workers(refused, budget=10_000)
+
+
+def test_a_search_too_short_to_repay_a_worker_is_not_given_one() -> None:
+    """Starting a pool costs more than a brief search saves -- see EVALUATIONS_PER_WORKER."""
+    assert plan_workers(-1, budget=GaSettings(population=8, generations=2).budget) == 1
+    assert plan_workers(-1, budget=100_000) > 1
+
+
 # ------------------------------------------------------------------ end to end
 
 
@@ -434,6 +595,45 @@ def test_evolution_is_reproducible_end_to_end() -> None:
     assert first.strategy_yaml == second.strategy_yaml
     assert first.holdout_metrics == second.holdout_metrics
     assert first.distinct_configurations == second.distinct_configurations
+
+
+@pytest.mark.slow
+def test_the_evolved_result_is_identical_however_many_workers_run_it() -> None:
+    """The evolutionary counterpart of defect D12, and a stricter one.
+
+    The optimizer's equivalent may lose its failure tallies to child processes and says so
+    (``counts_exact``). Nothing here may: ``distinct_configurations`` is the trial count the
+    deflated Sharpe divides by, so a count that moved with the worker count would move a
+    published verdict with it.
+    """
+    settings = GaSettings(population=8, generations=2)
+    one = evolve(a_chassis(), a_market(), settings=settings, seed=21, workers=1)
+    two = evolve(a_chassis(), a_market(), settings=settings, seed=21, workers=2)
+
+    assert two.strategy_yaml == one.strategy_yaml
+    assert two.holdout_metrics == one.holdout_metrics
+    assert two.best_score_by_generation == one.best_score_by_generation
+    assert two.distinct_configurations == one.distinct_configurations
+    assert two.genomes_evaluated == one.genomes_evaluated
+    assert two.failed_candidates == one.failed_candidates
+    assert two.deflated == one.deflated
+    assert two.overfitting == one.overfitting
+
+
+@pytest.mark.slow
+def test_a_cancelled_parallel_search_stops_and_leaves_no_worker_behind() -> None:
+    """A pool outliving the run it was created for would leak a process per cancelled run."""
+    with pytest.raises(RunCancelled):
+        evolve(
+            a_chassis(),
+            a_market(),
+            settings=GaSettings(population=4, generations=2),
+            seed=3,
+            workers=2,
+            control=RunControl(should_stop=lambda: True),
+        )
+
+    assert multiprocessing.active_children() == []
 
 
 def test_an_unreachable_trade_floor_is_refused_rather_than_answered() -> None:

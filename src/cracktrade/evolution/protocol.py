@@ -28,6 +28,12 @@ median asks a harder question: how did this strategy do in an ordinary stretch o
 per-segment floor at section 9.3's default would reject nearly everything for a reason that has
 nothing to do with the market. The floor is applied once to the summed trade count, sized from
 the whole evolution region, and the per-segment objective is bound with no floor of its own.
+
+:meth:`Fitness.evaluate_batch` scores a whole generation at once and is what the process pool in
+:mod:`cracktrade.evolution.parallel` drives. Its contract is that the end state is
+indistinguishable from having called :meth:`Fitness.__call__` on each genome in turn, which is
+what keeps the trial count -- and therefore the deflation in section 12.3 -- exact however the
+work was distributed.
 """
 
 from __future__ import annotations
@@ -45,6 +51,8 @@ from cracktrade.optimize.objective import INFEASIBLE
 from cracktrade.optimize.windows import TestWindow, TrainWindow
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from cracktrade.config import Strategy
     from cracktrade.data import MarketData
     from cracktrade.evolution.genome import Chassis, Genome
@@ -195,6 +203,69 @@ class Scored:
     trades: int
 
 
+@dataclass(frozen=True, slots=True)
+class ScoreFailure:
+    """A configuration that could not be simulated at all.
+
+    Carries the exception's type name rather than the exception, because that name is the only
+    thing :meth:`Fitness._record_failure_name` ever uses and because a value crossing a process
+    boundary should be as small and as ordinary as possible.
+    """
+
+    error_type: str
+
+
+#: What scoring one configuration can produce. A worker returns this rather than mutating a
+#: :class:`Fitness`, since its mutations would happen to a copy in a child process and never
+#: return -- the failure mode section 9.2 accepts for the optimizer and this module refuses.
+type ScoreOutcome = Scored | ScoreFailure
+
+
+def score_strategy(
+    strategy: Strategy,
+    *,
+    segments: tuple[EvolutionWindow, ...],
+    objective: Objective,
+    min_trades: int,
+) -> Scored:
+    """Simulate one configuration on every evolution segment.
+
+    A free function rather than a method because it is the unit of work a worker process
+    executes, and a worker can only be handed something importable by name. It is pure: the
+    same strategy and the same segments give the same :class:`Scored` in any process.
+
+    Raises:
+        CracktradeError: the configuration could not be simulated.
+    """
+    scores: list[float] = []
+    sharpes: list[float] = []
+    trades = 0
+
+    for window in segments:
+        simulation = run_simulation(strategy, window.data)
+        metrics = extract_metrics(
+            simulation.portfolio,
+            risk_free_rate=strategy.execution.risk_free_rate,
+            offset=window.offset,
+        )
+        scores.append(objective(metrics))
+        sharpes.append(metrics.sharpe_ratio)
+        trades += metrics.total_trades
+
+    # One feasibility constraint, over the whole region. A candidate that traded too little
+    # to be evidence about anything is rejected outright rather than discounted -- the
+    # section 9.3 argument, unchanged: a three-trade result carries no information however
+    # large its return.
+    score = INFEASIBLE if trades < min_trades else statistics.median(scores)
+
+    return Scored(
+        score=score,
+        segment_scores=tuple(scores),
+        segment_sharpes=tuple(sharpes),
+        trades=trades,
+    )
+
+
 @dataclass(slots=True)
 class Fitness:
     """Scores a genome on the evolution segments, and remembers what it has already scored.
@@ -245,6 +316,87 @@ class Fitness:
             self.infeasible += 1
         return scored.score
 
+    def evaluate_batch(
+        self,
+        genomes: Sequence[Genome],
+        score_many: Callable[[Sequence[Strategy]], list[ScoreOutcome]],
+    ) -> list[float]:
+        """Score a whole generation, delegating only the simulations to ``score_many``.
+
+        The contract, and the reason worker-count independence is a property of this code rather
+        than a hope: given a ``score_many`` that agrees with :func:`score_strategy`, this leaves
+        the object in exactly the state ``[self(genome) for genome in genomes]`` would have left
+        it in, and returns exactly the same scores. Every count section 12.3 and section 12.4
+        consume -- :attr:`trials`, :attr:`trial_sharpes`, ``failures``, ``infeasible`` -- is
+        therefore identical however many processes did the work.
+
+        Three phases, because only the middle one is parallel:
+
+        1. Render, digest and deduplicate, in genome order, here in the calling process. Render
+           is pure and cheap, so distributing it would buy nothing and would move failure
+           counting into a child, where it could not be counted exactly.
+        2. Hand ``score_many`` the distinct configurations that are not already cached, in
+           first-occurrence order.
+        3. Merge in that same order -- which *is* the order serial scoring would have inserted
+           them in -- then walk the genomes again to produce the scores.
+
+        Failure recording is deferred to the last phase so that even the insertion order of
+        ``failure_reasons`` matches serial scoring. A configuration that failed is deliberately
+        not cached, so a second occurrence of it inside one batch is counted again, which is
+        what :meth:`__call__` does when it re-scores an uncached digest.
+        """
+        # One entry per genome: the digest to look its score up under, or the failure that
+        # rendering it produced. Distinct types rather than a nullable string, so the last phase
+        # cannot confuse a digest with an exception name.
+        plans: list[str | ScoreFailure] = []
+        pending: dict[str, Strategy] = {}
+
+        for genome in genomes:
+            self.evaluations += 1
+            try:
+                strategy = render(genome, self.chassis)
+            except CracktradeError as error:
+                plans.append(ScoreFailure(error_type=type(error).__name__))
+                continue
+
+            digest = configuration_digest(strategy)
+            plans.append(digest)
+            if digest not in self.results and digest not in pending:
+                pending[digest] = strategy
+
+        outcomes = score_many(list(pending.values()))
+        if len(outcomes) != len(pending):
+            msg = (
+                f"batch scoring returned {len(outcomes)} result(s) for {len(pending)} "
+                f"configuration(s). A result per configuration, in order, is what makes the "
+                f"search independent of how the work was distributed"
+            )
+            raise EvolutionError(msg)
+
+        scoring_failures: dict[str, str] = {}
+        for digest, outcome in zip(pending, outcomes, strict=True):
+            if isinstance(outcome, ScoreFailure):
+                scoring_failures[digest] = outcome.error_type
+                continue
+            self.results[digest] = outcome
+            if outcome.score == INFEASIBLE:
+                self.infeasible += 1
+
+        scores: list[float] = []
+        for plan in plans:
+            if isinstance(plan, ScoreFailure):
+                self._record_failure_name(plan.error_type)
+                scores.append(INFEASIBLE)
+                continue
+            failure = scoring_failures.get(plan)
+            if failure is not None:
+                self._record_failure_name(failure)
+                scores.append(INFEASIBLE)
+                continue
+            scores.append(self.results[plan].score)
+
+        return scores
+
     @property
     def trials(self) -> int:
         """Distinct configurations scored. The trial count section 12.3 deflates by."""
@@ -267,32 +419,11 @@ class Fitness:
         return max(self.failure_reasons.items(), key=lambda item: (item[1], item[0]))[0]
 
     def _score(self, strategy: Strategy) -> Scored:
-        scores: list[float] = []
-        sharpes: list[float] = []
-        trades = 0
-
-        for window in self.segments:
-            simulation = run_simulation(strategy, window.data)
-            metrics = extract_metrics(
-                simulation.portfolio,
-                risk_free_rate=strategy.execution.risk_free_rate,
-                offset=window.offset,
-            )
-            scores.append(self.objective(metrics))
-            sharpes.append(metrics.sharpe_ratio)
-            trades += metrics.total_trades
-
-        # One feasibility constraint, over the whole region. A candidate that traded too little
-        # to be evidence about anything is rejected outright rather than discounted -- the
-        # section 9.3 argument, unchanged: a three-trade result carries no information however
-        # large its return.
-        score = INFEASIBLE if trades < self.min_trades else statistics.median(scores)
-
-        return Scored(
-            score=score,
-            segment_scores=tuple(scores),
-            segment_sharpes=tuple(sharpes),
-            trades=trades,
+        return score_strategy(
+            strategy,
+            segments=self.segments,
+            objective=self.objective,
+            min_trades=self.min_trades,
         )
 
     def _record_failure(self, error: CracktradeError) -> None:
@@ -304,8 +435,15 @@ class Fitness:
         continues -- an aborted search reports nothing at all -- but the count reaches the
         result and the report says so.
         """
+        self._record_failure_name(type(error).__name__)
+
+    def _record_failure_name(self, name: str) -> None:
+        """Count a failure by its exception's type name.
+
+        Split from :meth:`_record_failure` because a failure that happened in a worker process
+        arrives as a name rather than as an exception -- see :class:`ScoreFailure`.
+        """
         self.failures += 1
-        name = type(error).__name__
         self.failure_reasons[name] = self.failure_reasons.get(name, 0) + 1
 
 

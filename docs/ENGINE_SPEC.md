@@ -1693,7 +1693,9 @@ Derived from the three legacy test files plus one regression test per defect.
 24. D9 — a config that fails to parse scores worse than a losing config.
 25. D10 — no bare `except` in the engine (AST-scanned).
 26. D11 — insufficient history raises.
-27. D12 — same seed → identical result at `workers=1` and `workers=-1`.
+27. D12 — same seed → identical result at `workers=1` and `workers=-1`. For evolution the bar is
+    higher: `workers=1` and `workers=2` agree on the trial count and the failure tallies too, not
+    only on the winner (§16.4).
 28. D13 — integer parameters take only integer values across the search.
 29. D14 — non-daily index rejected; dict-shaped `indicators` rejected; dtype is `float64`.
 30. D17 — every declared indicator parameter is a keyword its pandas_ta function accepts (§5.6),
@@ -2435,11 +2437,43 @@ strict-mypy codebase, and the working agreement to verify library behaviour rath
 it is a bad trade for two hundred lines of operators whose behaviour is this easy to assert
 directly.
 
-**Seeded and single-process.** Everything stochastic comes from one `random.Random(seed)`, and a
-test asserts that the same seed produces the same winner end to end — defect D12 is not less of
-a defect for being evolutionary. The search is deliberately *not* parallelised: §9.2's
-`workers=-1` is safe only because DE with `updating='deferred'` is provably worker-count
-independent, and nothing here has been shown to have that property.
+**Seeded and worker-count independent.** Everything stochastic comes from one
+`random.Random(seed)`, and a test asserts that the same seed produces the same winner end to end
+— defect D12 is not less of a defect for being evolutionary.
+
+The search *is* parallelised, and for the same reason §9.2's `workers=-1` is safe. The GA is
+generational: a generation is bred in full from the seeded RNG before any of it is scored, and no
+score is read until every genome in the generation has one. That is exactly the property DE gets
+from `updating='deferred'`, so a generation may be scored across a process pool and reassembled
+by position with an identical result. `run_evolution` takes an optional `evaluate_batch` and
+otherwise knows nothing about processes; the pool lives in `evolution/parallel.py`.
+
+**Unlike §9.2, the counts stay exact.** The optimizer reports `counts_exact=False` under
+parallelism because scipy's pool mutates copies of the fitness object and their tallies never
+return. Evolution cannot accept that: `distinct_configurations` is the trial count §12.3 deflates
+by, and the finalists are what §12.4 is computed across, so a count that moved with the worker
+count would move a published verdict with it. The division of labour is therefore inverted —
+the **parent** renders, digests and deduplicates, and the children do nothing but simulate and
+return a value (`Scored`, or the failing exception's type name). `Fitness.evaluate_batch` merges
+them in genome order, which is the order serial scoring would have produced, and its contract is
+that the resulting state is indistinguishable from having scored each genome in turn. A test
+asserts `workers=1` and `workers=2` agree on the strategy, the holdout metrics, the generation
+trace, the trial count, the evaluation and failure tallies, the deflated Sharpe and the PBO.
+
+**`workers` is an argument to `evolve()`, deliberately not a `GaSettings` field.** Search
+semantics may shape the result; worker count must not, and a setting that cannot reach the
+operators cannot be blamed for having done so.
+
+**More workers is not reliably faster, and `-1` is sized from the budget rather than the core
+count.** A worker spends ~2.5s importing vectorbt and numba before scoring anything, paid per
+worker, while the dedup cache is served in the parent — so a converging population offers a late
+generation far fewer new configurations than its size, and surplus workers idle having already
+cost their start-up. Measured on 32 cores: a 40/5 search was *faster* serially (9.6s vs 13.4s at
+eight workers), 100/30 ran 102s serially and 28s at eight, and 300/30 ran 290s serially, 57s at
+eight and 50s at sixteen. `plan_workers` therefore allows one worker per
+`EVALUATIONS_PER_WORKER` (500) of `GaSettings.budget`, capped at the core count, so a short
+search gets no pool at all. An explicit count is obeyed as given. Pinning BLAS threads changed
+none of these numbers; the cost is interpreter start-up, not thread contention.
 
 ### 16.5 What evolution may see
 

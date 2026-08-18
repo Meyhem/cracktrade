@@ -172,6 +172,7 @@ def evolve(
             data,
             settings=GaSettings(population=population, generations=generations),
             seed=settings.seed,
+            workers=settings.workers,
             objective_name=objective,
             trade_floor=TradeFloor(minimum=min_trades, per_year=min_trades_per_year),
             segments=segments,

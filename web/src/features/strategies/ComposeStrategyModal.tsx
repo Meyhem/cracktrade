@@ -164,14 +164,14 @@ export function ComposeStrategyModal({
             <NumberInput
               description={descriptionOf('population')}
               label="Population"
-              max={200}
+              max={5000}
               min={2}
               {...form.getInputProps('population')}
             />
             <NumberInput
               description={descriptionOf('generations')}
               label="Generations"
-              max={200}
+              max={100}
               min={1}
               {...form.getInputProps('generations')}
             />

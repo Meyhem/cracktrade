@@ -290,7 +290,7 @@ export function LaunchRunModal({
             <NumberInput
               description={descriptionOf('population')}
               label="Population"
-              max={200}
+              max={5000}
               min={2}
               onChange={(value) => setPopulation(Number(value) || 2)}
               value={population}
@@ -298,7 +298,7 @@ export function LaunchRunModal({
             <NumberInput
               description={descriptionOf('generations')}
               label="Generations"
-              max={200}
+              max={100}
               min={1}
               onChange={(value) => setGenerations(Number(value) || 1)}
               value={generations}

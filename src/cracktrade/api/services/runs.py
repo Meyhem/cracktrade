@@ -39,9 +39,11 @@ MAX_FOLDS = 20
 #: Ceilings on the evolutionary search. ``population * generations`` is the trial count the
 #: deflated Sharpe divides by (spec section 16.6), so an oversized search does not merely take
 #: longer -- it raises the bar its own result has to clear. These bound the typo, not the
-#: method: 200 x 200 is forty thousand configurations, which is already a very high bar.
-MAX_POPULATION = 200
-MAX_GENERATIONS = 200
+#: method: 5000 x 100 is half a million configurations, which is already a very high bar and,
+#: at roughly 0.1s per genome per segment, a multi-hour run -- a user asking for this much
+#: search is accepting both costs deliberately.
+MAX_POPULATION = 5000
+MAX_GENERATIONS = 100
 MAX_SEGMENTS = 12
 
 #: Fewer than four segments leaves the overfitting check with nothing to partition, so this is

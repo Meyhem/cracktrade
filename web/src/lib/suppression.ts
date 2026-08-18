@@ -31,7 +31,9 @@ function readNumber(source: Record<string, unknown>, key: string): number | null
  *
  * Walk-forward headlines carry no `suppressed` flag: their credibility verdict already
  * accounts for the trade count through the `trade_count` check, and the fold-level figures
- * are reported either way. Only backtest and optimize headlines suppress.
+ * are reported either way. Backtest, optimize and evolution headlines all suppress, and this
+ * reads the flag rather than the kind — so a kind added later is covered by having said so on
+ * the wire, not by being listed here.
  */
 export function suppressionOf(headline: Headline | null | undefined): Suppression {
   if (!headline) return { suppressed: false }

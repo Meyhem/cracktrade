@@ -16,6 +16,7 @@ export const testMeta: EngineMeta = {
   instability_threshold: 0.5,
   objectives: ['calmar', 'sortino', 'sharpe', 'legacy_pnl'],
   fold_schemes: ['anchored', 'rolling'],
+  evolution_warmup_bars: 200,
   defaults: {
     backtest: {
       objective: 'calmar',
@@ -34,6 +35,19 @@ export const testMeta: EngineMeta = {
       cache: true,
       min_trades: 20,
       min_trades_per_year: 4,
+    },
+    evolve: {
+      objective: 'calmar',
+      epochs: 0,
+      folds: null,
+      scheme: null,
+      cache: true,
+      min_trades: 20,
+      min_trades_per_year: 4,
+      population: 40,
+      generations: 25,
+      segments: 4,
+      holdout_fraction: 0.2,
     },
     walk_forward: {
       objective: 'calmar',
@@ -109,6 +123,7 @@ export function strategyRow(overrides: Partial<StrategyRow> = {}): StrategyRow {
     optimize_runs: 2,
     backtest_runs: 1,
     walk_forward_runs: 0,
+    evolve_runs: 0,
     versions: 3,
     last_run_id: '22222222-2222-2222-2222-222222222222',
     last_run_kind: 'optimize',

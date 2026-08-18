@@ -12,7 +12,8 @@ import { ProgressChart } from './ProgressChart'
 import { useRunDetails, useVersions } from './queries'
 import { availableKinds, buildRows, defaultKind, speakingRun } from './table'
 import type { MetricKey } from './delta'
-import type { RunDetailNarrowed, RunKind } from '../../api/types'
+import type { RunDetailNarrowed } from '../../api/types'
+import type { ComparableKind } from './delta'
 
 /**
  * Version history and comparison (brief §2.6).
@@ -28,7 +29,7 @@ export function HistoryTab() {
   const runs = useRuns({ strategyId: strategy.id, limit: 200 })
   const draft = useDraft(strategy.id, strategy.head)
 
-  const [chosenKind, setChosenKind] = useState<RunKind | null>(null)
+  const [chosenKind, setChosenKind] = useState<ComparableKind | null>(null)
   const [metric, setMetric] = useState<MetricKey>('returnPct')
 
   if (versions.isPending || runs.isPending) return <Loader size="sm" />
@@ -92,9 +93,9 @@ function Comparison({
 }: {
   versions: ReturnType<typeof useVersions>['data'] & object
   runs: Parameters<typeof speakingRun>[0]
-  kind: RunKind
-  kinds: RunKind[]
-  onKind: (next: RunKind) => void
+  kind: ComparableKind
+  kinds: ComparableKind[]
+  onKind: (next: ComparableKind) => void
   metric: MetricKey
   onMetric: (next: MetricKey) => void
 }) {
@@ -118,7 +119,7 @@ function Comparison({
     <Stack gap="md">
       <SegmentedControl
         data={kinds.map((entry) => ({ label: runKindLabel(entry), value: entry }))}
-        onChange={(value) => onKind(value as RunKind)}
+        onChange={(value) => onKind(value as ComparableKind)}
         value={kind}
         w="fit-content"
       />

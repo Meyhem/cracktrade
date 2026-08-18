@@ -13,7 +13,7 @@ import {
   Title,
   UnstyledButton,
 } from '@mantine/core'
-import { IconArrowsSort, IconSearch, IconUpload } from '@tabler/icons-react'
+import { IconArrowsSort, IconSearch, IconSparkles, IconUpload } from '@tabler/icons-react'
 import { Link, useSearchParams } from 'react-router'
 import { useDebouncedValue } from '@mantine/hooks'
 import { ProblemAlert } from '../../components/ProblemAlert'
@@ -26,6 +26,7 @@ import { dateOnly, relative, runCounts, runKindLabel } from '../../lib/format'
 import { useStrategies } from './queries'
 import { NewStrategyModal } from './NewStrategyModal'
 import { ImportStrategyModal } from './ImportStrategyModal'
+import { ComposeStrategyModal } from './ComposeStrategyModal'
 import type { StrategyRow, VerdictState } from '../../api/types'
 
 /**
@@ -138,6 +139,7 @@ export function StrategyListPage() {
   })
   const [newOpen, setNewOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [composeOpen, setComposeOpen] = useState(false)
 
   // The server does the filtering, so the request is debounced rather than fired per
   // keystroke; the input itself stays uncontrolled-fast.
@@ -176,6 +178,13 @@ export function StrategyListPage() {
             variant="default"
           >
             Import
+          </Button>
+          <Button
+            leftSection={<IconSparkles size={16} />}
+            onClick={() => setComposeOpen(true)}
+            variant="light"
+          >
+            Compose from scratch
           </Button>
           <Button onClick={() => setNewOpen(true)}>New strategy</Button>
         </Group>
@@ -277,6 +286,7 @@ export function StrategyListPage() {
                       optimize: row.optimize_runs,
                       backtest: row.backtest_runs,
                       walk_forward: row.walk_forward_runs,
+                      evolve: row.evolve_runs,
                     })}
                   </Text>
                 </Table.Td>
@@ -293,6 +303,7 @@ export function StrategyListPage() {
       )}
 
       <NewStrategyModal onClose={() => setNewOpen(false)} opened={newOpen} />
+      <ComposeStrategyModal onClose={() => setComposeOpen(false)} opened={composeOpen} />
       <ImportStrategyModal onClose={() => setImportOpen(false)} opened={importOpen} />
     </Stack>
   )

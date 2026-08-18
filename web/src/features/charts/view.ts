@@ -11,6 +11,7 @@ import { READY, type ChartState } from './state'
 import { SERIES } from './series'
 import {
   backtestResult,
+  evolutionResult,
   optimizationResult,
   validationResult,
   type Metrics,
@@ -94,6 +95,19 @@ export function viewOf(
       // `baseline_test_metrics` — that measures the user's own configuration, which is a
       // different question wearing the same shape.
       benchmarkYearly: optimization.benchmark?.metrics?.yearlyReturns ?? null,
+    }
+  }
+
+  if (kind === 'evolve') {
+    const evolution = evolutionResult(result)
+    return {
+      ...available,
+      // The holdout, and only the holdout. The evolution segments produced no reportable curve
+      // — the strategy drawn on them is the one they selected — so there is nothing here to
+      // stitch together and nothing to be tempted into stitching.
+      metrics: evolution.holdoutMetrics,
+      trades: [],
+      benchmarkYearly: evolution.benchmark?.metrics?.yearlyReturns ?? null,
     }
   }
 

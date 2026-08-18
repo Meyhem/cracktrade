@@ -14,6 +14,7 @@ import {
   Text,
   Title,
 } from '@mantine/core'
+import { IconAlertTriangle } from '@tabler/icons-react'
 import { Link, useSearchParams } from 'react-router'
 import { EmptyState } from '../../components/EmptyState'
 import { ProblemAlert } from '../../components/ProblemAlert'
@@ -223,6 +224,27 @@ function RunCharts({
     <Stack gap="xl">
       {run.kind === 'walk_forward' && (
         <FoldSelector count={foldCount} onChange={onFold} report={report} value={fold} />
+      )}
+
+      {/* Two things are true of these charts that are not true of any other run's, and both
+          would otherwise be invisible: the curve covers the holdout rather than the whole date
+          range, and the strategy it belongs to is not the one named at the top of this page.
+          Unlabelled, an evolution equity curve is a short window presented in a frame that
+          means "the whole backtest" everywhere else on this tab. */}
+      {run.kind === 'evolve' && (
+        <Alert color="orange" icon={<IconAlertTriangle size={18} />} variant="light">
+          <Stack gap={4}>
+            <Text fw={600} size="sm">
+              These charts cover the holdout only, for a strategy this one does not contain.
+            </Text>
+            <Text size="sm">
+              An evolution run composed its own entry and exit conditions using this
+              strategy&rsquo;s ticker and costs, then drew the curve below on the final stretch of
+              history it had never seen — not the full date range every other run here charts.
+              Promote the run to get a strategy whose charts describe itself.
+            </Text>
+          </Stack>
+        </Alert>
       )}
 
       <GroupHeading group={GROUPS[0]} />

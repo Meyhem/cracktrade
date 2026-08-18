@@ -16,7 +16,18 @@
  * at it.
  */
 
-export type RunKind = 'backtest' | 'optimize' | 'walk_forward'
+/**
+ * The kinds this tab compares — deliberately narrower than the API's `RunKind`.
+ *
+ * Evolution is excluded, and structurally rather than by a filter somewhere. This screen asks
+ * how *one strategy* changed across its versions, and an evolution run does not measure the
+ * strategy it is attached to: it measures a composition that lives in the run's result, built
+ * against that version's ticker and costs. A column of evolution holdout returns across four
+ * versions would be four different strategies plotted under one name, with a Δ between them
+ * that means nothing at all — which is the exact failure the rest of this module exists to
+ * refuse. Keeping it out of the type means no future caller can opt back in by accident.
+ */
+export type ComparableKind = 'backtest' | 'optimize' | 'walk_forward'
 
 /** The five figures the Δ column moves, in the engine's own units. */
 export type Figures = {
@@ -45,7 +56,7 @@ export type MetricKey = keyof Figures
 export type VersionRun = {
   version: number
   runId: string
-  kind: RunKind
+  kind: ComparableKind
   /** The objective the search maximised. Null for a backtest, which optimises nothing. */
   objective: string | null
   /** Walk-forward only. */
@@ -92,7 +103,7 @@ export function incomparability(older: VersionRun, newer: VersionRun): string | 
   return null
 }
 
-function kindName(kind: RunKind): string {
+function kindName(kind: ComparableKind): string {
   return kind === 'walk_forward'
     ? 'walk-forward'
     : kind === 'optimize'

@@ -3,11 +3,12 @@ import { screen } from '@testing-library/react'
 import { BacktestView } from './BacktestView'
 import { OptimizationView } from './OptimizationView'
 import { ValidationView } from './ValidationView'
+import { EvolutionView } from './EvolutionView'
 import { renderWithProviders } from '../../../test/render'
 import type { VerdictCheck } from '../../../api/types'
 
 /**
- * What the three run views refuse to say.
+ * What the four run views refuse to say.
  *
  * The assertions here are mostly negative, and that is the point. Every one of them is a rule
  * about withholding a number, and a screen that starts rendering a figure it should not is not
@@ -223,5 +224,103 @@ describe('the validation view', () => {
     )
 
     expect(screen.getAllByText(/not distinguishable from luck/i).length).toBeGreaterThan(0)
+  })
+})
+
+describe('the evolution view', () => {
+  const composed = {
+    is_credible: false,
+    failures: ['a 10% parameter nudge destroys 70% of the objective'],
+    composition:
+      'Enter when RSI(14) is below 32 and price is above its 50-day EMA; exit on a 6% stop.',
+    blocks: ['rsi_below_level', 'price_above_ma'],
+    strategy_yaml: 'strategy:\n  name: evolved_nvda\n',
+    holdout_metrics: metrics({ total_trades: 31, total_return_pct: 9.6 }),
+    benchmark: { benchmark: metrics({ total_return_pct: 5.7 }) },
+    distinct_configurations: 812,
+    genomes_evaluated: 1000,
+    segments: [
+      {
+        index: 0,
+        first_bar: '2016-01-04',
+        last_bar: '2017-06-30',
+        metrics: metrics({ total_return_pct: 44.2 }),
+        was_profitable: true,
+      },
+    ],
+  }
+
+  it('separates the holdout from the segments that chose the strategy', () => {
+    // The single most important distinction on this screen. The segments are the selection
+    // criterion; presenting them as four more results would make a search of 812 candidates
+    // look like five independent confirmations.
+    renderWithProviders(<EvolutionView checks={[]} result={composed} />)
+
+    expect(screen.getByText('The segments that chose it')).toBeInTheDocument()
+    expect(screen.getByText(/none of these are evidence/i)).toBeInTheDocument()
+    expect(screen.getByText('Holdout return')).toBeInTheDocument()
+  })
+
+  it('says what it composed, in words as well as YAML', () => {
+    renderWithProviders(<EvolutionView checks={[]} result={composed} />)
+
+    expect(screen.getByText(/RSI\(14\) is below 32/)).toBeInTheDocument()
+    expect(screen.getByText(/nobody chose these conditions/i)).toBeInTheDocument()
+  })
+
+  it('reports the trial count the deflation divides by', () => {
+    // Buried, this is just a statistic. Stated, it is the reason a good-looking holdout might
+    // still fail its own check.
+    renderWithProviders(<EvolutionView checks={[]} result={composed} />)
+
+    expect(screen.getByText('812')).toBeInTheDocument()
+    expect(screen.getByText(/812 distinct strategies were scored/i)).toBeInTheDocument()
+  })
+
+  it('withholds the holdout figures below the trade floor', () => {
+    renderWithProviders(
+      <EvolutionView
+        checks={[]}
+        result={{
+          ...composed,
+          holdout_metrics: metrics({
+            total_trades: 9,
+            total_return_pct: 41.7,
+            has_enough_trades_to_judge: false,
+          }),
+        }}
+      />,
+    )
+
+    expect(screen.getByText(TOO_FEW)).toBeInTheDocument()
+    expect(screen.queryByText('41.7%')).not.toBeInTheDocument()
+    // The composition is not a measurement, so suppression does not reach it.
+    expect(screen.getByText(/RSI\(14\) is below 32/)).toBeInTheDocument()
+  })
+
+  it('never presents an absent verdict as credible', () => {
+    renderWithProviders(<EvolutionView checks={[]} result={{ segments: [] }} />)
+
+    expect(screen.getByText('NOT CREDIBLE')).toBeInTheDocument()
+    expect(screen.queryByText('CREDIBLE')).not.toBeInTheDocument()
+  })
+
+  it('warns that the holdout has now been spent', () => {
+    // The caveat most likely to be lost between one run and the next: re-running evolution on
+    // the same ticker does not get a fresh holdout.
+    renderWithProviders(<EvolutionView checks={[]} result={composed} />)
+
+    expect(screen.getByText(/does not get a fresh one/i)).toBeInTheDocument()
+  })
+
+  it('says when the search stopped improving before its budget ran out', () => {
+    renderWithProviders(
+      <EvolutionView
+        checks={[]}
+        result={{ ...composed, best_score_by_generation: [-2, -1, -1, -1, -1, -1] }}
+      />,
+    )
+
+    expect(screen.getByText(/stopped improving at generation 2 of 6/i)).toBeInTheDocument()
   })
 })

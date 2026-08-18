@@ -562,6 +562,110 @@ export function optimizationResult(source: Json | null): OptimizationResult {
   }
 }
 
+export type Segment = {
+  index: number | null
+  firstBar: string | null
+  lastBar: string | null
+  bars: number | null
+  metrics: Metrics | null
+  wasProfitable: boolean | null
+}
+
+function segmentsOf(source: Json | null): Segment[] {
+  return records(source, 'segments').map((segment) => ({
+    index: number(segment, 'index'),
+    firstBar: text(segment, 'first_bar'),
+    lastBar: text(segment, 'last_bar'),
+    bars: number(segment, 'bars'),
+    metrics: metricsOf(record(segment, 'metrics')),
+    wasProfitable: flag(segment, 'was_profitable'),
+  }))
+}
+
+export type EvolutionResult = {
+  strategyName: string | null
+  ticker: string | null
+  objective: string | null
+  composition: string | null
+  blocks: string[]
+  strategyYaml: string | null
+  holdoutMetrics: Metrics | null
+  benchmark: Benchmark | null
+  segments: Segment[]
+  deflated: DeflatedSharpe | null
+  overfitting: Overfitting | null
+  stability: Stability | null
+  costs: CostSensitivity | null
+  meanReturnInterval: Interval | null
+  totalReturnInterval: Interval | null
+  population: number | null
+  generations: number | null
+  genomesEvaluated: number | null
+  distinctConfigurations: number | null
+  failedCandidates: number | null
+  mostCommonFailure: string | null
+  minTradesRequired: number | null
+  evolutionBars: number | null
+  holdoutBars: number | null
+  seed: number | null
+  elapsedSeconds: number | null
+  bestScoreByGeneration: (number | null)[]
+  profitableSegments: number | null
+  medianSegmentReturnPct: number | null
+  overfittingGapPct: number | null
+  isCredible: boolean | null
+  failures: string[]
+}
+
+/**
+ * A composed strategy and the evidence for it.
+ *
+ * `holdoutMetrics` is the headline and the only figure here measured on history the search
+ * never saw. `segments` is in-sample by construction — those windows *chose* this strategy —
+ * and is read out separately rather than folded into anything, so no caller can average the
+ * two together and produce a number that is part evidence and part its own reflection.
+ */
+export function evolutionResult(source: Json | null): EvolutionResult {
+  return {
+    strategyName: text(source, 'strategy_name'),
+    ticker: text(source, 'ticker'),
+    objective: text(source, 'objective'),
+    composition: text(source, 'composition'),
+    blocks: asArray(field(source, 'blocks'))
+      .map(asString)
+      .filter((block): block is string => block !== null),
+    strategyYaml: text(source, 'strategy_yaml'),
+    holdoutMetrics: metricsOf(record(source, 'holdout_metrics')),
+    benchmark: benchmarkOf(source),
+    segments: segmentsOf(source),
+    deflated: deflatedOf(source),
+    overfitting: overfittingOf(source),
+    stability: stabilityOf(source),
+    costs: costsOf(source),
+    meanReturnInterval: intervalOf(source, 'mean_return_interval'),
+    totalReturnInterval: intervalOf(source, 'total_return_interval'),
+    population: number(source, 'population'),
+    generations: number(source, 'generations'),
+    genomesEvaluated: number(source, 'genomes_evaluated'),
+    distinctConfigurations: number(source, 'distinct_configurations'),
+    failedCandidates: number(source, 'failed_candidates'),
+    mostCommonFailure: text(source, 'most_common_failure'),
+    minTradesRequired: number(source, 'min_trades_required'),
+    evolutionBars: number(source, 'evolution_bars'),
+    holdoutBars: number(source, 'holdout_bars'),
+    seed: number(source, 'seed'),
+    elapsedSeconds: number(source, 'elapsed_seconds'),
+    bestScoreByGeneration: asArray(field(source, 'best_score_by_generation')).map(asNumber),
+    profitableSegments: number(source, 'profitable_segments'),
+    medianSegmentReturnPct: number(source, 'median_segment_return_pct'),
+    overfittingGapPct: number(source, 'overfitting_gap_pct'),
+    isCredible: flag(source, 'is_credible'),
+    failures: asArray(field(source, 'failures'))
+      .map(asString)
+      .filter((detail): detail is string => detail !== null),
+  }
+}
+
 export type ValidationResult = {
   objective: string | null
   scheme: string | null

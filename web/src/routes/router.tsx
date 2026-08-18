@@ -33,6 +33,7 @@ export const router = createBrowserRouter([
           { path: 'optimizations', element: <RunsTab kind="optimize" /> },
           { path: 'backtests', element: <RunsTab kind="backtest" /> },
           { path: 'validation', element: <RunsTab kind="walk_forward" /> },
+          { path: 'evolution', element: <RunsTab kind="evolve" /> },
           { path: 'charts', Component: ChartsTab },
           { path: 'history', Component: HistoryTab },
           { path: 'runs/:runId', Component: RunViewPage },

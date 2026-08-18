@@ -323,3 +323,50 @@ describe('the robustness group', () => {
     expect(screen.getByRole('button', { name: 'Run a walk-forward' })).toBeInTheDocument()
   })
 })
+
+describe('an evolution run', () => {
+  const evolveRun = runFixture({
+    id: 'e0000000-0000-0000-0000-000000000000',
+    kind: 'evolve',
+    number: 9,
+  })
+
+  const evolveResult = {
+    holdout_metrics: metrics({ total_trades: 31, total_return_pct: 9.6 }),
+    benchmark: { benchmark: metrics({ total_return_pct: 5.7 }) },
+    composition: 'Enter when RSI(14) is below 32.',
+    segments: [],
+  }
+
+  it('says the curve is the holdout of a strategy this one does not contain', async () => {
+    // Without this the equity curve is a fifth of the date range drawn in the frame that means
+    // "the whole backtest" on every other run — and it belongs to a composition the strategy
+    // in the page header does not have.
+    server.use(...answering({ runs: [evolveRun], result: evolveResult }))
+    open()
+
+    expect(
+      await screen.findByText(/holdout only, for a strategy this one does not contain/i),
+    ).toBeInTheDocument()
+  })
+
+  it('is never the run the tab opens on', async () => {
+    // A walk-forward measures this strategy; an evolution run measures a different one. The
+    // default has to land on the former whichever finished more recently.
+    const validation = runFixture({
+      id: 'a0000000-0000-0000-0000-000000000000',
+      kind: 'walk_forward',
+      number: 3,
+      finished_at: '2020-01-01T00:00:00Z',
+    })
+    server.use(
+      ...answering({
+        runs: [evolveRun, validation],
+        result: { folds: [], ...evolveResult },
+      }),
+    )
+    open()
+
+    await waitFor(() => expect(screen.getByDisplayValue(/Walk-forward #3/)).toBeInTheDocument())
+  })
+})

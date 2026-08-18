@@ -15,8 +15,14 @@ import type { Run, RunKind } from '../../api/types'
  * A walk-forward is the only run that has been asked to survive data it never saw, so it
  * outranks an optimization, which outranks a single backtest. The default lands on the run
  * that has earned the most trust rather than the one that finished last.
+ *
+ * Evolution ranks last, and not because its evidence is weak — it has a holdout the search
+ * never touched. It ranks last because its curves are not *this strategy's*: they describe a
+ * composition that lives in the run, drawn over the holdout alone. Every other run on this tab
+ * charts the strategy in the page header, and defaulting to the one that does not would put a
+ * different strategy's equity curve under this strategy's name.
  */
-export const SERIOUSNESS: readonly RunKind[] = ['walk_forward', 'optimize', 'backtest']
+export const SERIOUSNESS: readonly RunKind[] = ['walk_forward', 'optimize', 'backtest', 'evolve']
 
 function launchedAt(run: Run): number {
   return new Date(run.finished_at ?? run.queued_at).getTime()

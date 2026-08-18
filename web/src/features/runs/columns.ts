@@ -30,4 +30,13 @@ export const HEADLINE_COLUMNS: Record<RunKind, { term: TermKey; label?: string }
     { term: 'trades' },
     { term: 'verdict' },
   ],
+  // The composition leads, because it is the only column that says what the run produced —
+  // every other kind of run measured a strategy the reader already knows.
+  evolve: [
+    { term: 'composition', label: 'What it built' },
+    { term: 'holdout', label: 'Holdout' },
+    { term: 'buy_and_hold' },
+    { term: 'trials', label: 'Strategies tried' },
+    { term: 'verdict' },
+  ],
 }

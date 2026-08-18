@@ -4,7 +4,8 @@ import { integer, percent, points, ratio } from '../../lib/format'
 import { deltaFor, type Delta, type MetricKey, type Movement } from './delta'
 import { summarise } from './summary'
 import type { BuiltRow } from './table'
-import type { RunKind, VersionSummary } from '../../api/types'
+import type { VersionSummary } from '../../api/types'
+import type { ComparableKind } from './delta'
 import { ExplainedLabel } from '../../components/Explain'
 
 /**
@@ -28,7 +29,7 @@ export function ComparisonTable({
 }: {
   rows: BuiltRow[]
   versions: VersionSummary[]
-  kind: RunKind
+  kind: ComparableKind
 }) {
   const noteFor = new Map(versions.map((entry) => [entry.version, entry]))
 
@@ -105,7 +106,7 @@ function Row({
   row: BuiltRow
   version: VersionSummary | undefined
   delta: Delta
-  kind: RunKind
+  kind: ComparableKind
 }) {
   const figures = row.run?.figures ?? null
   const suppressed = row.run !== null && figures === null

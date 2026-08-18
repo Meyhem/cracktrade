@@ -13,8 +13,8 @@ import {
   backtestResult,
   type Json,
 } from '../../lib/result'
-import type { Run, RunDetailNarrowed, RunKind } from '../../api/types'
-import type { Figures, VersionRow, VersionRun } from './delta'
+import type { Run, RunDetailNarrowed } from '../../api/types'
+import type { ComparableKind, Figures, VersionRow, VersionRun } from './delta'
 
 /**
  * Which run of a kind speaks for a version.
@@ -30,7 +30,7 @@ import type { Figures, VersionRow, VersionRun } from './delta'
  * The latest run is chosen by nothing except recency, reads the freshest price data, and is the
  * answer the user last saw. Where a version has more than one, the count is shown beside it.
  */
-export function speakingRun(runs: Run[], version: number, kind: RunKind): Run | null {
+export function speakingRun(runs: Run[], version: number, kind: ComparableKind): Run | null {
   const candidates = runs.filter(
     (run) => run.version === version && run.kind === kind && run.status === 'succeeded',
   )
@@ -42,7 +42,7 @@ export function speakingRun(runs: Run[], version: number, kind: RunKind): Run | 
   )
 }
 
-export function runCount(runs: Run[], version: number, kind: RunKind): number {
+export function runCount(runs: Run[], version: number, kind: ComparableKind): number {
   return runs.filter(
     (run) => run.version === version && run.kind === kind && run.status === 'succeeded',
   ).length
@@ -68,7 +68,7 @@ export function runCount(runs: Run[], version: number, kind: RunKind): number {
  * and for a walk-forward only the benchmark's own metrics. Subtracting one from the other here
  * would be this side inventing a statistic the engine declined to publish (spec §15.1).
  */
-export function figuresOfRun(kind: RunKind, result: Json | null): Figures | null {
+export function figuresOfRun(kind: ComparableKind, result: Json | null): Figures | null {
   if (kind === 'walk_forward') {
     const report = validationResult(result)
     if (report.totalTrades !== null && report.folds.length > 0 && !hasEnoughTrades(report.folds)) {
@@ -120,7 +120,7 @@ function hasEnoughTrades(folds: { metrics: { hasEnoughTradesToJudge: boolean | n
   return folds.some((fold) => fold.metrics?.hasEnoughTradesToJudge !== false)
 }
 
-export function tradesOfRun(kind: RunKind, result: Json | null): number | null {
+export function tradesOfRun(kind: ComparableKind, result: Json | null): number | null {
   if (kind === 'walk_forward') return validationResult(result).totalTrades
   if (kind === 'optimize') return optimizationResult(result).testMetrics?.totalTrades ?? null
   return metricsOf(recordOf(result, 'metrics'))?.totalTrades ?? null
@@ -134,7 +134,7 @@ function recordOf(source: Json | null, key: string): Json | null {
 }
 
 /** The verdict a walk-forward issued, or the honest absence of one. */
-export function verdictOfRun(kind: RunKind, result: Json | null): boolean | null {
+export function verdictOfRun(kind: ComparableKind, result: Json | null): boolean | null {
   return kind === 'walk_forward' ? validationResult(result).isCredible : null
 }
 
@@ -159,7 +159,7 @@ export function comparabilityOf(
  * took the server's default — so the request can be silent about a choice that was made. The
  * result records what the search actually maximised.
  */
-function objectiveFromResult(kind: RunKind, result: Json | null): string | null {
+function objectiveFromResult(kind: Run['kind'], result: Json | null): string | null {
   if (kind === 'walk_forward') return validationResult(result).objective
   if (kind === 'optimize') return optimizationResult(result).objective
   return null
@@ -181,7 +181,7 @@ function asCount(value: unknown): number | null {
 export type BuildInput = {
   versions: { version: number }[]
   runs: Run[]
-  kind: RunKind
+  kind: ComparableKind
   /** Run details, keyed by run id. Rows whose detail has not arrived are reported as pending. */
   details: Map<string, RunDetailNarrowed>
 }
@@ -229,7 +229,7 @@ export function buildRows(input: BuildInput): BuiltRow[] {
 }
 
 /** Which run kinds this strategy actually has succeeded runs for. */
-export function availableKinds(runs: Run[]): RunKind[] {
+export function availableKinds(runs: Run[]): ComparableKind[] {
   const kinds = new Set(runs.filter((run) => run.status === 'succeeded').map((run) => run.kind))
   return (['walk_forward', 'optimize', 'backtest'] as const).filter((kind) => kinds.has(kind))
 }
@@ -241,7 +241,7 @@ export function availableKinds(runs: Run[]): RunKind[] {
  * only one that pushes back on the hindsight the rest of this screen is exposed to. Backtest
  * next, then optimization.
  */
-export function defaultKind(runs: Run[]): RunKind | null {
+export function defaultKind(runs: Run[]): ComparableKind | null {
   const available = availableKinds(runs)
   return (
     available.find((kind) => kind === 'walk_forward') ??
@@ -251,7 +251,7 @@ export function defaultKind(runs: Run[]): RunKind | null {
   )
 }
 
-export function benchmarkOfRun(kind: RunKind, result: Json | null): number | null {
+export function benchmarkOfRun(kind: ComparableKind, result: Json | null): number | null {
   if (kind === 'walk_forward') return validationResult(result).benchmark?.totalReturnPct ?? null
   const comparison = benchmarkOf(result)
   return comparison?.metrics?.totalReturnPct ?? null

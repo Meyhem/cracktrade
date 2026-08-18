@@ -22,6 +22,7 @@ import { absolute, duration, runKindLabel } from '../../lib/format'
 import { BacktestView } from './view/BacktestView'
 import { OptimizationView } from './view/OptimizationView'
 import { ValidationView } from './view/ValidationView'
+import { EvolutionView } from './view/EvolutionView'
 import { PromoteRunModal } from './PromoteRunModal'
 import { asString, field } from '../../lib/result'
 import { explanationOf } from '../../lib/glossary'
@@ -54,7 +55,10 @@ export function RunViewPage() {
   const isPendingRun = run.status === 'queued' || run.status === 'running'
   // Promotable is the server's judgement, not ours: a backtest has nothing to promote, and
   // neither does a run that did not succeed.
-  const optimizedYaml = asString(field(data.result, 'optimized_yaml'))
+  // An evolution result calls it `strategy_yaml`: nothing was optimized *from*, because the
+  // configuration did not exist before the run. Same key resolution as the server's promote.
+  const optimizedYaml =
+    asString(field(data.result, 'optimized_yaml')) ?? asString(field(data.result, 'strategy_yaml'))
 
   return (
     <Stack gap="md">
@@ -138,6 +142,7 @@ export function RunViewPage() {
           {run.kind === 'walk_forward' && (
             <ValidationView checks={data.checks} result={data.result} />
           )}
+          {run.kind === 'evolve' && <EvolutionView checks={data.checks} result={data.result} />}
         </>
       )}
       <PromoteRunModal

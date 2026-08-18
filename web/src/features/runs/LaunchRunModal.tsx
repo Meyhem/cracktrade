@@ -22,10 +22,15 @@ import { useLaunchRun } from './queries'
 import type { RunKind } from '../../api/types'
 
 /**
- * The launch dialog for all three run kinds.
+ * The launch dialog for all four run kinds.
  *
  * Defaults come from `/meta` rather than being written here, so the dialog pre-fills with
  * what the engine would have used anyway.
+ *
+ * Evolution's branch differs from the other three in one way worth stating: its budget field
+ * is not only a time control. `population * generations` is the trial count the deflated
+ * Sharpe divides the result by, so asking for a bigger search raises the bar that search's own
+ * answer has to clear. A form that showed only the minutes would invite the user to turn it up.
  */
 
 /** Each objective the engine offers, mapped to the glossary entry that explains it. */
@@ -44,10 +49,41 @@ function objectiveExplanation(objective: string): string | undefined {
 /** A rough guide, not a promise: the search cost varies with the strategy. */
 const SECONDS_PER_EPOCH = 4
 
-function estimate(kind: RunKind, epochs: number, folds: number): string | null {
+/** One simulation per segment per genome, and a simulation is far cheaper than an epoch. */
+const SECONDS_PER_GENOME = 0.12
+
+function estimate(
+  kind: RunKind,
+  epochs: number,
+  folds: number,
+  budget: number,
+  segments: number,
+): string | null {
   if (kind === 'backtest') return null
+  if (kind === 'evolve') return duration(budget * segments * SECONDS_PER_GENOME)
   const searches = kind === 'walk_forward' ? folds : 1
   return duration(searches * epochs * SECONDS_PER_EPOCH)
+}
+
+/**
+ * Trading days a chassis has to span before evolution can divide it.
+ *
+ * The engine refuses the division itself and says so precisely; this reproduces the arithmetic
+ * only closely enough to stop the user queueing a run that cannot start. Warm-up comes from
+ * `/meta`, so the number is the engine's rather than one written here — and the segments and
+ * holdout are the ones this form is currently asking for, not the defaults.
+ */
+function requiredBars(warmup: number, segments: number, holdout: number): number {
+  const MIN_SEGMENT_BARS = 60
+  const evolutionBars = warmup + segments * MIN_SEGMENT_BARS
+  return Math.ceil(Math.max(evolutionBars / (1 - holdout), MIN_SEGMENT_BARS / holdout))
+}
+
+/** Trading days between two ISO dates, at roughly 252 a year. */
+function tradingDaysBetween(start: string | undefined, end: string | undefined): number | null {
+  if (!start || !end) return null
+  const days = (Date.parse(end) - Date.parse(start)) / 86_400_000
+  return Number.isFinite(days) ? Math.floor((days * 252) / 365) : null
 }
 
 export function LaunchRunModal({
@@ -74,6 +110,10 @@ export function LaunchRunModal({
   const [cache, setCache] = useState(defaults.cache ?? true)
   const [minTrades, setMinTrades] = useState(defaults.min_trades ?? 20)
   const [minTradesPerYear, setMinTradesPerYear] = useState(defaults.min_trades_per_year ?? 4)
+  const [population, setPopulation] = useState(defaults.population ?? 40)
+  const [generations, setGenerations] = useState(defaults.generations ?? 25)
+  const [segments, setSegments] = useState(defaults.segments ?? 4)
+  const [holdout, setHoldout] = useState(defaults.holdout_fraction ?? 0.2)
 
   useEffect(() => {
     if (!opened) return
@@ -84,6 +124,10 @@ export function LaunchRunModal({
     setCache(defaults.cache ?? true)
     setMinTrades(defaults.min_trades ?? 20)
     setMinTradesPerYear(defaults.min_trades_per_year ?? 4)
+    setPopulation(defaults.population ?? 40)
+    setGenerations(defaults.generations ?? 25)
+    setSegments(defaults.segments ?? 4)
+    setHoldout(defaults.holdout_fraction ?? 0.2)
     launch.reset()
     // `launch` is a stable mutation object; re-running this on its identity would reset the
     // form mid-edit.
@@ -91,29 +135,51 @@ export function LaunchRunModal({
   }, [opened, kind])
 
   const searches = kind === 'walk_forward'
+  const evolves = kind === 'evolve'
   const optimizes = kind !== 'backtest'
-  const nothingToSearch = optimizes && searchableParameters === 0
+  // Evolution composes its own indicators, so a fully pinned config is no obstacle to it —
+  // there is nothing of the base strategy for it to be blocked by.
+  const nothingToSearch = optimizes && !evolves && searchableParameters === 0
+
+  const budget = population * generations
+  const universe = (
+    strategy.head.config as { universe?: { start_date?: string; end_date?: string } }
+  ).universe
+  const availableBars = tradingDaysBetween(universe?.start_date, universe?.end_date)
+  const needed = requiredBars(meta.evolution_warmup_bars, segments, holdout)
+  const tooShort = evolves && availableBars !== null && availableBars < needed
 
   const submit = () => {
     const params: Record<string, unknown> =
       kind === 'backtest'
         ? {}
-        : kind === 'optimize'
+        : kind === 'evolve'
           ? {
               objective,
-              epochs,
+              population,
+              generations,
+              segments,
+              holdout_fraction: holdout,
               cache,
               min_trades: minTrades,
               min_trades_per_year: minTradesPerYear,
             }
-          : {
-              objective,
-              epochs,
-              folds,
-              scheme,
-              min_trades: minTrades,
-              min_trades_per_year: minTradesPerYear,
-            }
+          : kind === 'optimize'
+            ? {
+                objective,
+                epochs,
+                cache,
+                min_trades: minTrades,
+                min_trades_per_year: minTradesPerYear,
+              }
+            : {
+                objective,
+                epochs,
+                folds,
+                scheme,
+                min_trades: minTrades,
+                min_trades_per_year: minTradesPerYear,
+              }
 
     launch.mutate(
       { strategyId: strategy.id, kind, params },
@@ -130,7 +196,7 @@ export function LaunchRunModal({
     )
   }
 
-  const estimated = estimate(kind, epochs, folds)
+  const estimated = estimate(kind, epochs, folds, budget, segments)
 
   return (
     <Modal onClose={onClose} opened={opened} title={`Run ${runKindLabel(kind).toLowerCase()}`}>
@@ -152,6 +218,24 @@ export function LaunchRunModal({
           </Text>
         )}
 
+        {evolves && (
+          <>
+            <Alert color="blue" variant="light">
+              <Text size="sm">{descriptionOf('chassis')}</Text>
+            </Alert>
+
+            {tooShort && (
+              <Alert color="orange" icon={<IconAlertTriangle size={18} />} variant="light">
+                This strategy&rsquo;s date range is about {availableBars} trading days, and this
+                division needs roughly {needed}. The block library reaches back{' '}
+                {meta.evolution_warmup_bars} bars before the first scored one, and each of the{' '}
+                {segments} segments plus the holdout needs enough bars to mean anything. Widen the
+                dates on the Config tab, or ask for fewer segments.
+              </Alert>
+            )}
+          </>
+        )}
+
         {optimizes && (
           <>
             <Select
@@ -165,14 +249,16 @@ export function LaunchRunModal({
               onChange={(value) => value && setObjective(value)}
               value={objective}
             />
-            <NumberInput
-              description={descriptionOf('epochs')}
-              label="Epochs"
-              max={200}
-              min={1}
-              onChange={(value) => setEpochs(Number(value) || 1)}
-              value={epochs}
-            />
+            {!evolves && (
+              <NumberInput
+                description={descriptionOf('epochs')}
+                label="Epochs"
+                max={200}
+                min={1}
+                onChange={(value) => setEpochs(Number(value) || 1)}
+                value={epochs}
+              />
+            )}
             <NumberInput
               description={descriptionOf('min_trades')}
               label="Minimum trades"
@@ -196,6 +282,64 @@ export function LaunchRunModal({
               training window. Above the floor it has no preference for trading more, so this is the
               setting that rules out a result built on a handful of trades.
             </Text>
+          </>
+        )}
+
+        {evolves && (
+          <>
+            <NumberInput
+              description={descriptionOf('population')}
+              label="Population"
+              max={200}
+              min={2}
+              onChange={(value) => setPopulation(Number(value) || 2)}
+              value={population}
+            />
+            <NumberInput
+              description={descriptionOf('generations')}
+              label="Generations"
+              max={200}
+              min={1}
+              onChange={(value) => setGenerations(Number(value) || 1)}
+              value={generations}
+            />
+
+            {/* The point of this box. Every other kind's budget control trades time for
+                thoroughness; here it also raises the bar the answer has to clear, and a user
+                who only sees the minutes will reach for a bigger number believing bigger is
+                strictly better. */}
+            <Alert color="gray" variant="light">
+              <Stack gap={4}>
+                <Text fw={600} size="sm">
+                  Up to {budget.toLocaleString()} strategies will be tried.
+                </Text>
+                <Text size="sm">
+                  That count is not only a time cost. The deflated Sharpe divides the winner&rsquo;s
+                  result by how many attempts produced it, because the best of{' '}
+                  {budget.toLocaleString()} tries looks good whether or not anything is there. A
+                  larger search has to find a better strategy to pass the same check.
+                </Text>
+              </Stack>
+            </Alert>
+
+            <NumberInput
+              description={descriptionOf('segments')}
+              label="Segments"
+              max={12}
+              min={4}
+              onChange={(value) => setSegments(Number(value) || 4)}
+              value={segments}
+            />
+            <NumberInput
+              decimalScale={2}
+              description={descriptionOf('holdout')}
+              label="Holdout share"
+              max={0.5}
+              min={0.1}
+              onChange={(value) => setHoldout(Number(value) || 0.2)}
+              step={0.05}
+              value={holdout}
+            />
           </>
         )}
 
@@ -224,7 +368,7 @@ export function LaunchRunModal({
           </>
         )}
 
-        {kind === 'optimize' && (
+        {(kind === 'optimize' || evolves) && (
           <Checkbox
             checked={cache}
             description={explanationOf('cache_prices')}
@@ -235,8 +379,11 @@ export function LaunchRunModal({
 
         {estimated && (
           <Text c="dimmed" size="xs">
-            Roughly {estimated}, very approximately — {searches ? `${folds} searches of ` : ''}
-            {epochs} generations. The real cost depends on the strategy.
+            Roughly {estimated}, very approximately —{' '}
+            {evolves
+              ? `${budget.toLocaleString()} strategies across ${segments} segments`
+              : `${searches ? `${folds} searches of ` : ''}${epochs} generations`}
+            . The real cost depends on the strategy.
           </Text>
         )}
 
@@ -244,8 +391,12 @@ export function LaunchRunModal({
           <Button onClick={onClose} variant="default">
             Cancel
           </Button>
-          <Button disabled={nothingToSearch} loading={launch.isPending} onClick={submit}>
-            Run
+          <Button
+            disabled={nothingToSearch || tooShort}
+            loading={launch.isPending}
+            onClick={submit}
+          >
+            {evolves ? 'Compose' : 'Run'}
           </Button>
         </Group>
       </Stack>

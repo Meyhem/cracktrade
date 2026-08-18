@@ -55,8 +55,8 @@ export type Issue = Schemas['Issue']
 export type MetaResponse = Schemas['MetaResponse']
 export type HealthResponse = Schemas['HealthResponse']
 
-/** The three things a run can be. Kept as a union because every screen branches on it. */
-export const RUN_KINDS = ['backtest', 'optimize', 'walk_forward'] as const
+/** The four things a run can be. Kept as a union because every screen branches on it. */
+export const RUN_KINDS = ['backtest', 'optimize', 'walk_forward', 'evolve'] as const
 export type RunKind = (typeof RUN_KINDS)[number]
 
 export const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const
@@ -138,7 +138,27 @@ export type WalkForwardHeadline = {
   failed_checks: number
 }
 
-export type Headline = BacktestHeadline | OptimizeHeadline | WalkForwardHeadline
+/**
+ * An evolution run's columns.
+ *
+ * `composition` is not a measurement — it says what the search built — so it survives
+ * suppression, while every figure below the trade floor is omitted exactly as elsewhere.
+ */
+export type EvolveHeadline = {
+  composition: string | null
+  trials: number
+  trades: number
+  is_credible: boolean
+  failed_checks: number
+  suppressed: boolean
+  trade_floor: number
+  holdout_return_pct?: number | null
+  benchmark_return_pct?: number | null
+  max_drawdown_pct?: number | null
+  profitable_segments?: string | null
+}
+
+export type Headline = BacktestHeadline | OptimizeHeadline | WalkForwardHeadline | EvolveHeadline
 
 /** Launch parameters, per kind, as `/meta` pre-fills them. */
 export type RunDefaults = {
@@ -149,6 +169,11 @@ export type RunDefaults = {
   folds: number | null
   scheme: string | null
   cache: boolean | null
+  /** Evolution only; null for every other kind. */
+  population?: number | null
+  generations?: number | null
+  segments?: number | null
+  holdout_fraction?: number | null
 }
 
 export type IndicatorParameter = {

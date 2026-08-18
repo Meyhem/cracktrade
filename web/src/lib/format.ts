@@ -73,21 +73,24 @@ const RUN_KIND_LABEL: Record<string, string> = {
   backtest: 'Backtest',
   optimize: 'Optimization',
   walk_forward: 'Walk-forward',
+  evolve: 'Evolution',
 }
 
 export function runKindLabel(kind: string): string {
   return RUN_KIND_LABEL[kind] ?? kind
 }
 
-/** The compact form used in list cells: `3 opt · 1 bt · 1 wf`. */
+/** The compact form used in list cells: `3 opt · 1 bt · 1 wf · 2 evo`. */
 export function runCounts(counts: {
   optimize: number
   backtest: number
   walk_forward: number
+  evolve?: number
 }): string {
   const parts: string[] = []
   if (counts.optimize > 0) parts.push(`${counts.optimize} opt`)
   if (counts.backtest > 0) parts.push(`${counts.backtest} bt`)
   if (counts.walk_forward > 0) parts.push(`${counts.walk_forward} wf`)
+  if (counts.evolve && counts.evolve > 0) parts.push(`${counts.evolve} evo`)
   return parts.length > 0 ? parts.join(' · ') : 'none'
 }

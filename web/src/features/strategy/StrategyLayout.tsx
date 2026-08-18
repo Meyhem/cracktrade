@@ -30,6 +30,7 @@ const TABS = [
   { value: 'optimizations', label: 'Optimizations' },
   { value: 'backtests', label: 'Backtests' },
   { value: 'validation', label: 'Validation' },
+  { value: 'evolution', label: 'Evolution' },
   { value: 'charts', label: 'Charts' },
   { value: 'history', label: 'History' },
 ] as const
@@ -129,6 +130,12 @@ export function StrategyLayout() {
                 Optimize
               </Button>
               <Button onClick={() => setLaunchKind('walk_forward')}>Walk-forward</Button>
+              {/* Beside the run buttons because it is one, but visually quieter: it uses this
+                  strategy's ticker and costs and ignores everything else about it, which is
+                  not what someone reaching for a button in this row expects by default. */}
+              <Button onClick={() => setLaunchKind('evolve')} variant="light">
+                Evolve
+              </Button>
               <Button onClick={() => setForkOpen(true)} variant="default">
                 Fork
               </Button>

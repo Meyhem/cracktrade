@@ -713,6 +713,8 @@ export interface components {
             defaults: {
                 [key: string]: unknown;
             };
+            /** Evolution Warmup Bars */
+            evolution_warmup_bars: number;
             /** Indicators */
             indicators: {
                 [key: string]: unknown;
@@ -1055,6 +1057,8 @@ export interface components {
             backtest_runs: number;
             /** Walk Forward Runs */
             walk_forward_runs: number;
+            /** Evolve Runs */
+            evolve_runs: number;
             /** Versions */
             versions: number;
             /** Last Run Id */

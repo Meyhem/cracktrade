@@ -2588,3 +2588,31 @@ recorded as an engine fault, for what is really a history that should never have
 - **Fold 0 is the holdout, not the run.** An evolution run captures one series bundle and it covers
   the holdout only. Anything rendering those points must say so, or it shows a partial history in
   a frame that means "the whole backtest" everywhere else.
+
+### 17.5 What the web UI must keep separate
+
+The run view (`EvolutionView`) is arranged around one distinction, and the arrangement is
+normative because getting it wrong is not a cosmetic problem.
+
+**The holdout leads; the segments come after the verdict, under their own heading, with the
+"none of these are evidence" caption.** The segments are the selection criterion. Presented
+beside the holdout they read as four more confirmations, which turns a search of N candidates
+into what looks like five independent results. They are shown at all because the spread across
+them is what fitness selected on, and a winner carried by one segment differs from a steady one
+in a way the median cannot express.
+
+**The trial count is stated where the reader is choosing it, not only where it is applied.** The
+launch dialog's population and generations fields say that `population * generations` is the
+number the deflated Sharpe divides by, so a bigger search raises its own bar. Every other run
+kind's budget control trades time for thoroughness; this one also trades away credibility, and a
+form showing only the runtime invites the user to turn it up.
+
+**Evolution is excluded from the history tab by type**, not by a filter — `ComparableKind` in
+`web/src/features/history/delta.ts` omits it. That screen asks how one strategy changed across
+its versions; a column of evolution holdout returns across four versions is four different
+strategies under one name.
+
+**Evolution ranks last in the charts tab's default selection** (`SERIOUSNESS`), and its charts
+carry a banner. Not because its evidence is weak — the holdout is genuinely unseen — but because
+those curves describe a composition the strategy in the page header does not contain, drawn over
+the holdout rather than the full date range every other run charts.

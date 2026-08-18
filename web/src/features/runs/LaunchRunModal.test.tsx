@@ -33,12 +33,27 @@ function validateWith(paths: string[]) {
   )
 }
 
-function openDialog(kind: RunKind = 'optimize') {
+function openDialog(kind: RunKind = 'optimize', strategy = strategyDetail()) {
   return renderWithProviders(
-    <StrategyContext value={{ strategy: strategyDetail() }}>
+    <StrategyContext value={{ strategy }}>
       <LaunchRunModal kind={kind} onClose={() => {}} opened />
     </StrategyContext>,
   )
+}
+
+/** A chassis whose date range is far too short for the block library's warm-up. */
+function shortHistory() {
+  const base = strategyDetail()
+  return {
+    ...base,
+    head: {
+      ...base.head,
+      config: {
+        strategy: { name: 'rsi_pullback' },
+        universe: { ticker: 'NVDA', start_date: '2025-01-01', end_date: '2025-12-31' },
+      },
+    },
+  }
 }
 
 describe('the nothing-to-search guard', () => {
@@ -75,5 +90,46 @@ describe('the nothing-to-search guard', () => {
     expect(await screen.findByText(/exactly as written/i)).toBeInTheDocument()
     expect(screen.queryByText(NOTHING_TO_SEARCH)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled()
+  })
+})
+
+describe('the evolution branch', () => {
+  it('states the search budget as a cost in credibility, not only in minutes', async () => {
+    // The reason this dialog differs from the other three. Every other budget control trades
+    // time for thoroughness; here a bigger number also raises the bar the answer must clear,
+    // and a form that showed only the runtime would invite the user to turn it up.
+    server.use(validateWith(['indicators.rsi_ind.window']))
+    openDialog('evolve')
+
+    expect(await screen.findByText(/Up to 1,000 strategies will be tried/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/divides the winner’s result by how many attempts/i),
+    ).toBeInTheDocument()
+  })
+
+  it('is not blocked by a fully pinned configuration', async () => {
+    // Evolution composes its own indicators, so there is nothing of the base strategy for the
+    // nothing-to-search guard to be about.
+    server.use(validateWith([]))
+    openDialog('evolve')
+
+    expect(await screen.findByRole('button', { name: 'Compose' })).toBeEnabled()
+    expect(screen.queryByText(NOTHING_TO_SEARCH)).not.toBeInTheDocument()
+  })
+
+  it('refuses a date range too short to divide, before the run is queued', async () => {
+    server.use(validateWith(['indicators.rsi_ind.window']))
+    openDialog('evolve', shortHistory())
+
+    expect(await screen.findByText(/date range is about/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Compose' })).toBeDisabled()
+  })
+
+  it('offers no epoch count, which evolution does not have', async () => {
+    server.use(validateWith(['indicators.rsi_ind.window']))
+    openDialog('evolve')
+
+    expect(await screen.findByLabelText('Population')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Epochs')).not.toBeInTheDocument()
   })
 })

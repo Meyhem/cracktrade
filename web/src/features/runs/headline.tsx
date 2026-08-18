@@ -1,7 +1,7 @@
 import { Table, Text, Tooltip } from '@mantine/core'
 import { headlineFigure, suppressionOf, type Reported } from '../../lib/suppression'
 import { percent, points, integer } from '../../lib/format'
-import type { Run, RunKind, WalkForwardHeadline } from '../../api/types'
+import type { EvolveHeadline, Run, RunKind, WalkForwardHeadline } from '../../api/types'
 
 /**
  * The per-kind list columns, rendered from the server's own headline.
@@ -138,6 +138,49 @@ export function HeadlineCells({ run, kind }: { run: Run; kind: RunKind }) {
         </Table.Td>
         <Table.Td>
           <Count value={raw.trades} />
+        </Table.Td>
+      </>
+    )
+  }
+
+  if (kind === 'evolve') {
+    const evolved = headline as EvolveHeadline | null
+    return (
+      <>
+        <Table.Td>
+          {/* Truncated rather than wrapped: the full sentence is on the run page, and a row
+              that grows to three lines makes the table it lives in unreadable. */}
+          <Text lineClamp={2} size="sm" title={evolved?.composition ?? undefined}>
+            {evolved?.composition ?? '—'}
+          </Text>
+        </Table.Td>
+        <Table.Td>
+          <Figure
+            render={(v) => percent(v, { signed: true })}
+            suppressed={suppressed}
+            value={figure('holdout_return_pct')}
+          />
+        </Table.Td>
+        <Table.Td>
+          <Figure
+            render={(v) => percent(v, { signed: true })}
+            suppressed={suppressed}
+            value={figure('benchmark_return_pct')}
+          />
+        </Table.Td>
+        <Table.Td>
+          <Count value={raw.trials} />
+        </Table.Td>
+        <Table.Td>
+          {evolved ? (
+            <Text c={evolved.is_credible ? 'teal' : 'red'} fw={600} size="sm">
+              {evolved.is_credible ? 'Credible' : `Not credible · ${evolved.failed_checks} failed`}
+            </Text>
+          ) : (
+            <Text c="dimmed" size="sm">
+              —
+            </Text>
+          )}
         </Table.Td>
       </>
     )

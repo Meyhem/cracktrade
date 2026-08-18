@@ -505,6 +505,82 @@ export const GLOSSARY = {
       'everything was rejected, the floor is above what this strategy can produce.',
     group: 'search',
   },
+  evolution: {
+    title: 'Evolution',
+    plain:
+      'A search that writes the strategy itself. You give it a ticker and it composes the buy ' +
+      'and sell conditions from a fixed library of building blocks, then keeps what scored best.',
+    catch:
+      'Nobody chose these conditions for a reason. They were kept because they fit past data, ' +
+      'and the same procedure produces a confident-looking answer from a market with nothing in it.',
+    group: 'search',
+  },
+  composition: {
+    title: 'Composition',
+    plain: 'The conditions the search built, written out in plain words rather than as settings.',
+    group: 'search',
+  },
+  chassis: {
+    title: 'Chassis',
+    plain:
+      'The parts evolution is not allowed to choose: which ticker, over which dates, at what ' +
+      'trading costs. It takes those from the strategy you launched it from and composes the rest.',
+    catch:
+      'The starting strategy contributes nothing else. Its own buy and sell rules are ignored ' +
+      'entirely, so an evolution run against it is not a variation on it.',
+    group: 'search',
+  },
+  population: {
+    title: 'Population',
+    plain: 'How many candidate strategies exist at once. Each round keeps the best and rebuilds.',
+    group: 'search',
+  },
+  generations: {
+    title: 'Generations',
+    plain: 'How many rounds of keep-the-best-and-rebuild the search gets.',
+    catch:
+      'Population multiplied by generations is how many strategies get tried, and that number ' +
+      'raises the bar the winner has to clear. A bigger search is not a better one.',
+    group: 'search',
+  },
+  segments: {
+    title: 'Segments',
+    plain:
+      'The stretches of history a candidate is scored on. Its score is the middling one of ' +
+      'those, not the total, so one lucky stretch cannot carry it.',
+    catch:
+      'Four is the minimum, because the overfitting check compares halves against each other ' +
+      'and has nothing to compare with fewer.',
+    group: 'search',
+  },
+  holdout: {
+    title: 'Holdout',
+    plain:
+      'The most recent slice of history, split off before the search starts and shown to the ' +
+      'winner only, once, after every choice is final.',
+    catch:
+      'It is a single stretch, looked at once. Running evolution again on the same ticker ' +
+      'spends it — the second answer has been chosen partly by knowing how the first one did.',
+    group: 'validation',
+  },
+  in_sample_segments: {
+    title: 'In-sample segments',
+    plain:
+      'How the winner did on the stretches that chose it. Shown because it is what the search ' +
+      'saw, not because it is evidence.',
+    catch:
+      'These numbers picked this strategy out of thousands, so of course they flatter it. The ' +
+      'holdout column is the only one that was not involved in the choosing.',
+    group: 'validation',
+  },
+  search_progress: {
+    title: 'Best score by generation',
+    plain: 'The best score in each round, showing whether the search was still finding anything.',
+    catch:
+      'A line that goes flat early means the remaining rounds cost time and bought nothing, ' +
+      'while still counting against the winner as attempts made.',
+    group: 'search',
+  },
   trade_floor_required: {
     title: 'Trade floor',
     plain:

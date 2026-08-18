@@ -40,6 +40,11 @@ const EMPTY_STATE: Record<RunKind, { title: string; body: string; action: string
     body: 'A walk-forward optimizes and evaluates across successive folds, then judges whether the result survives its robustness checks. It is the only run that issues a verdict, and the only evidence on this screen that pushes back on having chosen the ticker with hindsight.',
     action: 'Run a walk-forward',
   },
+  evolve: {
+    title: 'Nothing composed yet',
+    body: 'Evolution writes the strategy itself. It takes this strategy’s ticker, dates and trading costs — and nothing else from it — then composes entry and exit conditions from a fixed library of blocks, keeping what scored best across four stretches of history. The last fifth is split off beforehand and shown to the winner once, which is the only number here that was not involved in choosing it.',
+    action: 'Compose a strategy',
+  },
 }
 
 function CancelButton({ run }: { run: Run }) {

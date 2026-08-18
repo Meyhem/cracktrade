@@ -76,12 +76,6 @@ class SearchDiagnostics:
         """Whether enough candidates failed that the search was not really searching."""
         return self.failure_fraction > FAILURE_WARNING_FRACTION
 
-    def record_failure(self, error: Exception) -> None:
-        """Count one failed candidate, keyed by exception type."""
-        self.failures += 1
-        name = type(error).__name__
-        self.failure_reasons[name] = self.failure_reasons.get(name, 0) + 1
-
     @property
     def most_common_failure(self) -> str | None:
         """The exception type that failed most often, if any did."""

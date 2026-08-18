@@ -16,7 +16,6 @@ import os
 import signal
 import socket
 import threading
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -234,39 +233,3 @@ def shutdown_on_signal(halt: threading.Event) -> Iterator[None]:
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
-
-
-@contextlib.contextmanager
-def background_worker(
-    settings: ApiSettings, *, provider: MarketDataProvider | None = None
-) -> Iterator[threading.Event]:
-    """Run the worker in a thread. For tests and for a single-process development setup."""
-    stop = threading.Event()
-    thread = threading.Thread(
-        target=run_forever,
-        args=(settings,),
-        kwargs={"provider": provider, "stop": stop},
-        daemon=True,
-    )
-    thread.start()
-    try:
-        yield stop
-    finally:
-        stop.set()
-        thread.join(timeout=30.0)
-
-
-def wait_until_idle(connection: psycopg.Connection[TupleRow], *, timeout: float = 60.0) -> bool:
-    """Block until nothing is queued or running. Returns False on timeout."""
-    from cracktrade.api.repos.rows import RunStatus
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        with unit_of_work_on(connection) as work:
-            outstanding = RunRepo(work.connection).count(
-                statuses=(RunStatus.QUEUED, RunStatus.RUNNING)
-            )
-        if outstanding == 0:
-            return True
-        time.sleep(0.1)
-    return False

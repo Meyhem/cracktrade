@@ -110,6 +110,19 @@ markers = [
     "causality: look-ahead conformance tests",
     "db: tests requiring the compose Postgres (see docker-compose.yml)",
 ]
+# A deprecation warning is how a library announces that behaviour this engine depends on is
+# going to change. Printing it in a summary nobody reads is the same as not knowing: the
+# starlette/httpx one below sat in every run unnoticed. Warnings fail the suite; each
+# exemption is named, bounded to one message, and carries what removes it.
+filterwarnings = [
+    "error",
+    # starlette 1.6 prefers httpx2 and warns when falling back to httpx 0.x. Raised at import
+    # of `starlette.testclient`, so it is unreachable from our code. Removed by swapping the
+    # dev dependency `httpx` for `httpx2`. Note the category: StarletteDeprecationWarning
+    # subclasses UserWarning, not DeprecationWarning, so it survives a -W error::Deprecation-
+    # Warning run and has to be named exactly.
+    "default:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src/cracktrade"]

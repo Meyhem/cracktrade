@@ -36,14 +36,9 @@ from cracktrade.config import PositionSizingType
 from cracktrade.errors import BacktestError
 
 if TYPE_CHECKING:
-    import numpy.typing as npt
-
     from cracktrade.backtest.stops import StopConfiguration
     from cracktrade.config import ExecutionConfig, PositionSizing
     from cracktrade.data import MarketData
-
-#: Integer bar positions at which positions were opened.
-type BarPositions = npt.NDArray[np.int64]
 
 #: Fill convention for stop orders. Verified: fills at the stop level when the bar reaches it,
 #: and at the open when the bar gaps past it.
@@ -169,19 +164,6 @@ def simulate(
         freq=FREQ,
         seed=seed,
     )
-
-
-def entry_positions(portfolio: vbt.Portfolio) -> BarPositions:
-    """The integer bar positions at which positions were actually opened.
-
-    This is what the holding constraints key off, rather than the entry *signals* -- a signal
-    that fires while already in a position opens nothing (defect D8).
-    """
-    records = portfolio.trades.records
-    if records.empty:
-        return np.zeros(0, dtype=np.int64)
-    opened: BarPositions = records["entry_idx"].to_numpy().astype(np.int64)
-    return opened
 
 
 def _resolve_size(sizing: PositionSizing | None) -> tuple[float, str]:

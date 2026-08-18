@@ -12,7 +12,7 @@ a single byte of market data is downloaded.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -41,11 +41,6 @@ def register_validator(validator: SemanticValidator) -> None:
     """Add a semantic check to the validation pass."""
     if validator not in _VALIDATORS:
         _VALIDATORS.append(validator)
-
-
-def registered_validators() -> Sequence[SemanticValidator]:
-    """The active semantic checks, in the order they run."""
-    return tuple(_VALIDATORS)
 
 
 def load_strategy(path: Path) -> Strategy:

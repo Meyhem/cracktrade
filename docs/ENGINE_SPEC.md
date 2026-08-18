@@ -79,6 +79,20 @@ none of them shapes a result the way the engine pins above do. Any api-layer lib
 a result depends on gets an exact pin plus a pinning test at the moment it is first relied on,
 same rule as everywhere.
 
+**[NEW — decided 2026-08-18.] Deprecation warnings fail the suite.** Pinning tests catch a
+library that has *already* changed under us. A deprecation warning is the same library saying
+it is *about to*, and it was being written to a summary at the end of a run that nobody reads —
+which is indistinguishable from not knowing. `filterwarnings = ["error", ...]` in
+`pyproject.toml` makes that fatal instead, so the notice lands while the old behaviour still
+works and there is time to act on it, rather than as a broken backtest after an upgrade.
+
+Exemptions are a named allowlist, never a category-wide mute: one entry per warning, matched on
+its message, carrying the reason it cannot be fixed here and what removes it. A warning raised
+inside a dependency at import time is the only thing that qualifies — anything reachable from
+our own code gets fixed rather than listed. Note when writing an entry that a warning's *class*
+need not be `DeprecationWarning`: `StarletteDeprecationWarning` subclasses `UserWarning`, so a
+filter aimed at the obvious category silently matches nothing.
+
 ### 1.3 Dropped
 
 **[DROP]** Google Drive storage, Zulip bot and all chat handlers, the watchdog subsystem, Plotly

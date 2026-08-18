@@ -1,4 +1,4 @@
-import { createTheme, type MantineColorsTuple } from '@mantine/core'
+import { createTheme, Tooltip, type MantineColorsTuple } from '@mantine/core'
 
 /**
  * The palette.
@@ -31,6 +31,25 @@ export const theme = createTheme({
   headings: { fontWeight: '600' },
   defaultRadius: 'sm',
   cursorType: 'pointer',
+  components: {
+    /**
+     * Tooltips are pinned to one surface in both colour schemes.
+     *
+     * Mantine's default inverts the tooltip against the page — near-black in light mode, but
+     * `gray-2` with black text in dark mode. That flip breaks any tooltip whose body carries
+     * colour: the `Watch out:` caveat in `Explain` is a light yellow chosen to read on a dark
+     * surface, and on `gray-2` it fell to roughly 1.3:1 — invisible on exactly the sentence
+     * that says a number is not what it looks like.
+     *
+     * `dark.9` (#141414) is the same value in both schemes, so a colour picked inside a
+     * tooltip contrasts the same way everywhere. The shadow does the separating work the
+     * inversion used to do, since #141414 against the dark body (#242424) is a quiet edge.
+     */
+    Tooltip: Tooltip.extend({
+      defaultProps: { color: 'dark.9' },
+      styles: { tooltip: { boxShadow: 'var(--mantine-shadow-md)' } },
+    }),
+  },
 })
 
 /**

@@ -30,6 +30,8 @@ export function Explain({ term }: { term: TermKey }) {
             {title}
           </Text>
           <Text size="xs">{plain}</Text>
+          {/* yellow.4 reads at ~13:1 on the tooltip surface the theme pins to `dark.9`; it is
+              only safe because that surface no longer flips with the colour scheme. */}
           {caveat && (
             <Text c="yellow.4" size="xs">
               Watch out: {caveat}

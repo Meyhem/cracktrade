@@ -2,8 +2,9 @@
 
 Normative reference: ``docs/ENGINE_SPEC.md`` section 16.4.
 
-An elitist generational GA: tournament selection, per-slot uniform crossover, per-slot mutation,
-and the best few genomes carried forward untouched. It is written out rather than taken from a
+An elitist generational GA: tournament selection, per-position uniform crossover within each
+variable-length condition chain, per-slot content mutation plus chain grow/shrink, and the best
+few genomes carried forward untouched. It is written out rather than taken from a
 framework because the alternative was carrying an untyped dependency through a strict-mypy
 codebase and pinning tests for the tenth of it we would use -- and because the working agreement
 is to verify library behaviour rather than assume it, which is a poor trade for two hundred lines
@@ -36,7 +37,10 @@ from cracktrade.control import NO_CONTROL, RunControl
 from cracktrade.evolution.blocks import BLOCKS
 from cracktrade.evolution.genome import (
     COMBINATORS,
+    MAX_CONDITIONS,
     MAX_HOLDING_GENE,
+    MIN_ENTRY_CONDITIONS,
+    MIN_EXIT_CONDITIONS,
     MIN_HOLDING_GENE,
     STOP_GENES,
     STOP_KINDS,
@@ -81,8 +85,15 @@ BLOCK_SWAP_RATE: Final = 0.3
 #: Mutation step for a gene, as a share of its range.
 GENE_SIGMA: Final = 0.15
 
-#: Chance that an optional exit mechanism is present in a freshly drawn genome.
+#: Chance that an optional exit mechanism is present in a freshly drawn genome, and, per slot
+#: beyond a chain's minimum length, the chance the chain keeps growing while it is being drawn.
 OPTIONAL_PRESENCE: Final = 0.5
+
+#: Given a chain is chosen to mutate structurally, and both a grow and a shrink are legal, the
+#: chance the move is a shrink. Equal-weighted so the chain does not drift toward the arity
+#: ceiling by construction of the operator itself -- see :func:`_mutate_chain` for the (accepted,
+#: unsolved-here) drift risk that remains regardless.
+STRUCTURE_SHRINK_RATE: Final = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,12 +306,14 @@ def _tournament(
 
 def random_genome(rng: random.Random) -> Genome:
     """Draw a genome uniformly from the reachable space."""
+    entries, entry_ops = _random_chain(rng, minimum=MIN_ENTRY_CONDITIONS)
+    exits, exit_ops = _random_chain(rng, minimum=MIN_EXIT_CONDITIONS)
     return repair(
         Genome(
-            entry_a=random_slot(rng),
-            entry_b=random_slot(rng) if rng.random() < OPTIONAL_PRESENCE else None,
-            combinator=rng.choice(COMBINATORS),
-            exit_condition=random_slot(rng) if rng.random() < OPTIONAL_PRESENCE else None,
+            entries=entries,
+            entry_ops=entry_ops,
+            exits=exits,
+            exit_ops=exit_ops,
             stop=random_stop(rng) if rng.random() < OPTIONAL_PRESENCE else None,
             take_profit_pct=(
                 _draw(TAKE_PROFIT_GENE, rng) if rng.random() < OPTIONAL_PRESENCE else None
@@ -313,6 +326,23 @@ def random_genome(rng: random.Random) -> Genome:
             ),
         )
     )
+
+
+def _random_chain(rng: random.Random, *, minimum: int) -> tuple[tuple[Slot, ...], tuple[str, ...]]:
+    """Draw a chain of between ``minimum`` and :data:`MAX_CONDITIONS` condition slots.
+
+    ``minimum`` slots are always drawn; each slot past that is conditional on a coin flip at
+    :data:`OPTIONAL_PRESENCE` -- the same geometric process that already governed whether the
+    old fixed-shape genome's optional second entry condition or exit condition was present,
+    generalised from a single yes/no choice to a chain that may keep growing up to the cap.
+    """
+    slots = [random_slot(rng) for _ in range(minimum)]
+    ops: list[str] = []
+    while len(slots) < MAX_CONDITIONS and rng.random() < OPTIONAL_PRESENCE:
+        if slots:
+            ops.append(rng.choice(COMBINATORS))
+        slots.append(random_slot(rng))
+    return tuple(slots), tuple(ops)
 
 
 def random_slot(rng: random.Random) -> Slot:
@@ -328,19 +358,26 @@ def random_stop(rng: random.Random) -> Stop:
 
 
 def crossover(first: Genome, second: Genome, rng: random.Random) -> Genome:
-    """Uniform crossover over slots.
+    """Uniform crossover, per position within each variable-length chain.
 
-    The unit of exchange is a whole slot -- block choice together with its genes -- because the
-    gene vector's length and meaning are properties of the block. Mixing a block index from one
-    parent with gene values from the other would produce arities that do not match and numbers
-    that mean something else.
+    See :func:`_crossover_chain` for the chain algorithm. The exit mechanisms are still
+    fixed-shape fields, so they keep the original slot-for-slot exchange: the unit of exchange is
+    a whole slot -- block choice together with its genes -- because the gene vector's length and
+    meaning are properties of the block. Mixing a block index from one parent with gene values
+    from the other would produce arities that do not match and numbers that mean something else.
     """
+    entries, entry_ops = _crossover_chain(
+        first.entries, first.entry_ops, second.entries, second.entry_ops, rng
+    )
+    exits, exit_ops = _crossover_chain(
+        first.exits, first.exit_ops, second.exits, second.exit_ops, rng
+    )
     return repair(
         Genome(
-            entry_a=_pick(first.entry_a, second.entry_a, rng),
-            entry_b=_pick(first.entry_b, second.entry_b, rng),
-            combinator=_pick(first.combinator, second.combinator, rng),
-            exit_condition=_pick(first.exit_condition, second.exit_condition, rng),
+            entries=entries,
+            entry_ops=entry_ops,
+            exits=exits,
+            exit_ops=exit_ops,
             stop=_pick(first.stop, second.stop, rng),
             take_profit_pct=_pick(first.take_profit_pct, second.take_profit_pct, rng),
             max_holding_days=_pick(first.max_holding_days, second.max_holding_days, rng),
@@ -349,21 +386,64 @@ def crossover(first: Genome, second: Genome, rng: random.Random) -> Genome:
     )
 
 
-def mutate(genome: Genome, rng: random.Random, *, rate: float) -> Genome:
-    """Perturb a genome slot by slot.
+def _crossover_chain(
+    first_slots: tuple[Slot, ...],
+    first_ops: tuple[str, ...],
+    second_slots: tuple[Slot, ...],
+    second_ops: tuple[str, ...],
+    rng: random.Random,
+) -> tuple[tuple[Slot, ...], tuple[str, ...]]:
+    """Uniform crossover over a chain whose two parents may have different lengths.
 
-    A condition slot mutates in one of two ways: it swaps its block, discarding genes that no
-    longer mean anything, or it nudges the numbers inside the block it already has. The optional
-    slots -- second entry condition, exit condition, stop, take-profit, holding bounds -- toggle
-    between present and absent, which is how the search reaches simpler strategies rather than
-    only more elaborate ones.
+    A fixed-shape slot can be exchanged position by position because both parents always have
+    that position. A variable-length chain cannot: the child needs a length before any
+    position-wise exchange means anything. So one parent is chosen, by coin flip, as the
+    *structure donor* -- the child's length is exactly that parent's length, never a length
+    neither parent had -- and then every position is filled independently: from either parent if
+    both have a slot there, otherwise from whichever parent does (which is always at least the
+    donor, by construction). This keeps the "slot is the unit of exchange" principle the
+    fixed-shape genome already used, just applied per position within a donor-sized window
+    instead of at two fixed names.
     """
+    donor_is_first = rng.random() < 0.5
+    length = len(first_slots) if donor_is_first else len(second_slots)
+
+    slots = tuple(
+        _pick(first_slots[i], second_slots[i], rng)
+        if i < len(first_slots) and i < len(second_slots)
+        else (first_slots[i] if i < len(first_slots) else second_slots[i])
+        for i in range(length)
+    )
+    ops = tuple(
+        _pick(first_ops[i], second_ops[i], rng)
+        if i < len(first_ops) and i < len(second_ops)
+        else (first_ops[i] if i < len(first_ops) else second_ops[i])
+        for i in range(max(0, length - 1))
+    )
+    return slots, ops
+
+
+def mutate(genome: Genome, rng: random.Random, *, rate: float) -> Genome:
+    """Perturb a genome, chain by chain, then field by field.
+
+    Each chain independently mutates the content of every slot it already has, redraws each
+    operator it already has, and may grow or shrink by exactly one slot -- see
+    :func:`_mutate_chain`. The exit mechanisms -- stop, take-profit, holding bounds -- keep their
+    original per-field toggle-between-present-and-absent behaviour, which is how the search
+    reaches simpler strategies rather than only more elaborate ones.
+    """
+    entries, entry_ops = _mutate_chain(
+        genome.entries, genome.entry_ops, rng, rate=rate, minimum=MIN_ENTRY_CONDITIONS
+    )
+    exits, exit_ops = _mutate_chain(
+        genome.exits, genome.exit_ops, rng, rate=rate, minimum=MIN_EXIT_CONDITIONS
+    )
     return repair(
         Genome(
-            entry_a=_mutate_slot(genome.entry_a, rng, rate=rate),
-            entry_b=_mutate_optional_slot(genome.entry_b, rng, rate=rate),
-            combinator=(rng.choice(COMBINATORS) if rng.random() < rate else genome.combinator),
-            exit_condition=_mutate_optional_slot(genome.exit_condition, rng, rate=rate),
+            entries=entries,
+            entry_ops=entry_ops,
+            exits=exits,
+            exit_ops=exit_ops,
             stop=_mutate_stop(genome.stop, rng, rate=rate),
             take_profit_pct=_mutate_optional_gene(
                 genome.take_profit_pct, TAKE_PROFIT_GENE, rng, rate=rate
@@ -378,6 +458,49 @@ def mutate(genome: Genome, rng: random.Random, *, rate: float) -> Genome:
     )
 
 
+def _mutate_chain(
+    slots: tuple[Slot, ...],
+    ops: tuple[str, ...],
+    rng: random.Random,
+    *,
+    rate: float,
+    minimum: int,
+) -> tuple[tuple[Slot, ...], tuple[str, ...]]:
+    """Mutate one condition chain: per-slot content, per-op value, and maybe its length.
+
+    Growing and shrinking are mutually exclusive within one call, chosen with equal weight
+    (:data:`STRUCTURE_SHRINK_RATE`) when both are legal at the current length -- the same
+    reasoning :data:`BLOCK_SWAP_RATE` already applies to a single slot's content, generalised to
+    the chain's shape. Shrinking removes a *randomly chosen* existing slot, not always the newest
+    one: always pruning the latest addition would make every earlier slot permanent once added,
+    the opposite of a search meant to keep revisiting structure.
+
+    Known accepted risk, not solved here: nothing in this operator discourages growth, so a GA
+    tends to drift toward :data:`~cracktrade.evolution.genome.MAX_CONDITIONS` over generations,
+    since an extra condition rarely hurts in-sample fitness. A parsimony term belongs in the
+    fitness function (``protocol.py``), not here.
+    """
+    slots_list = [_mutate_slot(slot, rng, rate=rate) for slot in slots]
+    ops_list = [rng.choice(COMBINATORS) if rng.random() < rate else op for op in ops]
+
+    can_grow = len(slots_list) < MAX_CONDITIONS
+    can_shrink = len(slots_list) > minimum
+    if (can_grow or can_shrink) and rng.random() < rate:
+        shrink = can_shrink and (not can_grow or rng.random() < STRUCTURE_SHRINK_RATE)
+        if shrink:
+            index = rng.randrange(len(slots_list))
+            del slots_list[index]
+            if ops_list:
+                del ops_list[min(index, len(ops_list) - 1)]
+        else:
+            had_neighbour = len(slots_list) >= 1
+            slots_list.append(random_slot(rng))
+            if had_neighbour:
+                ops_list.append(rng.choice(COMBINATORS))
+
+    return tuple(slots_list), tuple(ops_list)
+
+
 def _mutate_slot(slot: Slot, rng: random.Random, *, rate: float) -> Slot:
     if rng.random() >= rate:
         return slot
@@ -390,14 +513,6 @@ def _mutate_slot(slot: Slot, rng: random.Random, *, rate: float) -> Slot:
             _nudge(gene, value, rng) for gene, value in zip(block.genes, slot.values, strict=True)
         ),
     )
-
-
-def _mutate_optional_slot(slot: Slot | None, rng: random.Random, *, rate: float) -> Slot | None:
-    if slot is None:
-        return random_slot(rng) if rng.random() < rate else None
-    if rng.random() < rate * BLOCK_SWAP_RATE:
-        return None
-    return _mutate_slot(slot, rng, rate=rate)
 
 
 def _mutate_stop(stop: Stop | None, rng: random.Random, *, rate: float) -> Stop | None:

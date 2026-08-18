@@ -2,11 +2,12 @@
 
 Normative reference: ``docs/ENGINE_SPEC.md`` section 16.3.
 
-A genome is a fixed set of *slots*: one or two entry conditions and how to combine them, an
-optional exit condition, and the exit mechanisms (stop, take-profit, holding bounds). Each slot
-holds a block choice together with that block's gene values, and the slot is the unit crossover
-exchanges -- swapping a block index without its genes would hand the child an arity that does
-not match its block.
+A genome is a variable-length chain of one to five entry conditions and, independently, a
+variable-length chain of zero to five exit conditions, each chain joined pairwise by an
+independently-drawn ``&``/``|``, plus the exit mechanisms (stop, take-profit, holding bounds).
+Each condition is a *slot*: a block choice together with that block's gene values, and the slot
+is the unit crossover exchanges -- swapping a block index without its genes would hand the child
+an arity that does not match its block.
 
 :func:`render` turns a genome into a validated :class:`~cracktrade.config.Strategy`. It is
 **total**: every genome the operators can produce renders to a strategy that passes structural
@@ -35,15 +36,22 @@ if TYPE_CHECKING:
 
     from cracktrade.config import PositionSizing, Strategy
 
-#: Slot prefixes, which become the leading part of every rendered indicator name. Two slots may
-#: hold the same block, and the schema requires indicator names to be unique.
-ENTRY_A: Final = "ea"
-ENTRY_B: Final = "eb"
-EXIT: Final = "xc"
+#: Prefix for each condition's rendered indicator names, combined with its position in the chain
+#: (``f"{ENTRY_PREFIX}{index}"``, e.g. ``"e0"``, ``"e1"``) so two conditions in the same chain --
+#: or an entry and an exit condition -- never collide, even when they share a block.
+ENTRY_PREFIX: Final = "e"
+EXIT_PREFIX: Final = "x"
 
-#: How two entry conditions may be combined. Element-wise operators, per the section 2.1
-#: grammar -- ``and``/``or`` do not vectorise over price series and are rejected by it.
+#: How conditions in a chain may be combined, pairwise. Element-wise operators, per the section
+#: 2.1 grammar -- ``and``/``or`` do not vectorise over price series and are rejected by it.
 COMBINATORS: Final[tuple[str, ...]] = ("&", "|")
+
+#: Bounds on a condition chain's length. An entry chain may never be empty -- a strategy needs at
+#: least one entry signal -- while an exit chain may, which preserves the "mechanical exits only"
+#: case where the only exit logic is a stop, a take-profit, or a holding cap.
+MIN_ENTRY_CONDITIONS: Final = 1
+MIN_EXIT_CONDITIONS: Final = 0
+MAX_CONDITIONS: Final = 5
 
 #: The stop mechanisms a genome may choose between, plus their gene bounds. Only one stop is
 #: ever active (section 3.7's priority chain), so the genome picks a kind rather than carrying
@@ -102,14 +110,43 @@ class Genome:
     something else still holds a reference to -- the same discipline the config models follow.
     """
 
-    entry_a: Slot
-    entry_b: Slot | None
-    combinator: str
-    exit_condition: Slot | None
+    entries: tuple[Slot, ...]
+    entry_ops: tuple[str, ...]
+    exits: tuple[Slot, ...]
+    exit_ops: tuple[str, ...]
     stop: Stop | None
     take_profit_pct: float | None
     max_holding_days: int | None
     min_holding_days: int | None
+
+    def __post_init__(self) -> None:
+        _validate_chain(self.entries, self.entry_ops, MIN_ENTRY_CONDITIONS, "entries")
+        _validate_chain(self.exits, self.exit_ops, MIN_EXIT_CONDITIONS, "exits")
+
+
+def _validate_chain(
+    slots: tuple[Slot, ...], ops: tuple[str, ...], minimum: int, label: str
+) -> None:
+    """The invariant every condition chain must hold: length in bounds, one op fewer than slots.
+
+    A constructor-time check, not a repair -- the same precedent :class:`~cracktrade.evolution.
+    blocks.Gene` and :class:`~cracktrade.evolution.blocks.ConditionBlock` already set. It matters
+    here because tests build a ``Genome`` by hand at several sites, bypassing :func:`repair`.
+    """
+    if not minimum <= len(slots) <= MAX_CONDITIONS:
+        msg = (
+            f"{label}: expected between {minimum} and {MAX_CONDITIONS} conditions, got {len(slots)}"
+        )
+        raise ValueError(msg)
+    if len(ops) != max(0, len(slots) - 1):
+        msg = (
+            f"{label}: expected {max(0, len(slots) - 1)} operator(s) for {len(slots)} "
+            f"condition(s), got {len(ops)}"
+        )
+        raise ValueError(msg)
+    if any(op not in COMBINATORS for op in ops):
+        msg = f"{label}: operator(s) must be one of {COMBINATORS}"
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,28 +225,42 @@ def render(genome: Genome, chassis: Chassis) -> Strategy:
     return build_strategy(mapping(genome, chassis))
 
 
+def _fold(
+    slots: Sequence[Slot], ops: Sequence[str], prefix: str
+) -> tuple[str, list[Mapping[str, Any]]]:
+    """Left-fold a condition chain into one expression, prefix-scoped by position.
+
+    Every step re-wraps the running expression in parentheses, not just the newest term, so a
+    chain of any length folds to e.g. ``((a) & (b)) | (c)`` and the grammar's precedence trap --
+    '&'/'|' bind more tightly than comparison, so an unparenthesised operand parses as something
+    else entirely -- can never bite regardless of how many conditions are chained. A single-slot
+    chain folds to its bare expression, unwrapped.
+    """
+    indicators: list[Mapping[str, Any]] = []
+    instance = instantiate(BLOCKS[slots[0].block], f"{prefix}0", slots[0].values)
+    indicators.extend(instance.indicators)
+    expression = instance.expression
+
+    for index, (slot, op) in enumerate(zip(slots[1:], ops, strict=True), start=1):
+        instance = instantiate(BLOCKS[slot.block], f"{prefix}{index}", slot.values)
+        indicators.extend(instance.indicators)
+        expression = f"({expression}) {op} ({instance.expression})"
+
+    return expression, indicators
+
+
 def mapping(genome: Genome, chassis: Chassis) -> dict[str, Any]:
     """The strategy mapping a genome describes, before validation."""
     indicators: list[Mapping[str, Any]] = []
 
-    entry_a = instantiate(BLOCKS[genome.entry_a.block], ENTRY_A, genome.entry_a.values)
-    indicators.extend(entry_a.indicators)
-    entry_signal = entry_a.expression
-
-    if genome.entry_b is not None:
-        entry_b = instantiate(BLOCKS[genome.entry_b.block], ENTRY_B, genome.entry_b.values)
-        indicators.extend(entry_b.indicators)
-        # Both sides parenthesised: '&' and '|' bind more tightly than comparison, so the
-        # unparenthesised form parses as something else entirely and the grammar rejects it.
-        entry_signal = f"({entry_a.expression}) {genome.combinator} ({entry_b.expression})"
+    entry_signal, entry_indicators = _fold(genome.entries, genome.entry_ops, ENTRY_PREFIX)
+    indicators.extend(entry_indicators)
 
     exit_rule: dict[str, Any] = {}
-    if genome.exit_condition is not None:
-        exit_block = instantiate(
-            BLOCKS[genome.exit_condition.block], EXIT, genome.exit_condition.values
-        )
-        indicators.extend(exit_block.indicators)
-        exit_rule["signal"] = exit_block.expression
+    if genome.exits:
+        exit_signal, exit_indicators = _fold(genome.exits, genome.exit_ops, EXIT_PREFIX)
+        indicators.extend(exit_indicators)
+        exit_rule["signal"] = exit_signal
 
     if genome.stop is not None:
         exit_rule[STOP_FIELDS[genome.stop.kind]] = round(genome.stop.value, 2)
@@ -246,7 +297,7 @@ def repair(genome: Genome) -> Genome:
     make a run's reproducibility depend on how often it was needed.
     """
     exits = (
-        genome.exit_condition is not None
+        bool(genome.exits)
         or genome.stop is not None
         or genome.take_profit_pct is not None
         or genome.max_holding_days is not None
@@ -262,15 +313,23 @@ def repair(genome: Genome) -> Genome:
         return genome
 
     return Genome(
-        entry_a=genome.entry_a,
-        entry_b=genome.entry_b,
-        combinator=genome.combinator,
-        exit_condition=genome.exit_condition,
+        entries=genome.entries,
+        entry_ops=genome.entry_ops,
+        exits=genome.exits,
+        exit_ops=genome.exit_ops,
         stop=genome.stop,
         take_profit_pct=genome.take_profit_pct,
         max_holding_days=max_holding,
         min_holding_days=min_holding,
     )
+
+
+def _describe_chain(slots: tuple[Slot, ...], ops: tuple[str, ...]) -> str:
+    """Block names in a chain, joined by the operators between them."""
+    text = BLOCKS[slots[0].block].name
+    for slot, op in zip(slots[1:], ops, strict=True):
+        text = f"{text} {op} {BLOCKS[slot.block].name}"
+    return text
 
 
 def describe(genome: Genome) -> str:
@@ -279,14 +338,11 @@ def describe(genome: Genome) -> str:
     The evolved YAML says what the strategy *is*; this says what it was assembled *from*, which
     is the part a reader cannot recover from the YAML once the block names are gone.
     """
-    entry = BLOCKS[genome.entry_a.block].name
-    if genome.entry_b is not None:
-        entry = f"{entry} {genome.combinator} {BLOCKS[genome.entry_b.block].name}"
+    parts = [f"entry: {_describe_chain(genome.entries, genome.entry_ops)}"]
 
-    parts = [f"entry: {entry}"]
     exits: list[str] = []
-    if genome.exit_condition is not None:
-        exits.append(BLOCKS[genome.exit_condition.block].name)
+    if genome.exits:
+        exits.append(_describe_chain(genome.exits, genome.exit_ops))
     if genome.stop is not None:
         exits.append(f"{genome.stop.kind} stop {genome.stop.value:.2f}")
     if genome.take_profit_pct is not None:
@@ -301,5 +357,4 @@ def describe(genome: Genome) -> str:
 
 def blocks_used(genome: Genome) -> tuple[str, ...]:
     """Names of every block the genome composed, in slot order."""
-    slots: Sequence[Slot | None] = (genome.entry_a, genome.entry_b, genome.exit_condition)
-    return tuple(BLOCKS[slot.block].name for slot in slots if slot is not None)
+    return tuple(BLOCKS[slot.block].name for slot in (*genome.entries, *genome.exits))

@@ -2379,7 +2379,11 @@ Three consequences of the library being curated, all deliberate:
 
 - **The space is bounded and countable.** "How many distinct strategies were considered" has an
   exact answer, which is what §16.6's deflation consumes. Open-ended expression evolution would
-  not have one.
+  not have one. §16.3's variable-length condition chains multiply this space further — a genome
+  may compose up to five entry conditions and, separately, up to five exit conditions — but the
+  count §16.6 deflates by is still the number of distinct configurations *actually evaluated*,
+  not a theoretical enumeration of the reachable space, so a larger reachable space does not by
+  itself weaken the deflation.
 - **There are no breakout blocks.** `rolling_max` includes the current bar, so
   `close > rolling_max(close, n)` is false on every bar of every history, and the shifted form
   the comparison actually wants is unexpressible by design (§2.1). Channel *position* stands in:
@@ -2397,14 +2401,20 @@ means the opposite of what its block name says, and that no reader would catch.
 
 ### 16.3 The genome
 
-Fixed-shape slots (`evolution/genome.py`): entry condition A, an optional entry condition B, the
-combinator joining them (`&` or `|`), an optional exit condition, an optional stop (one kind out
-of fixed/trailing/ATR, so §3.7's priority chain can never shadow a gene the search paid for), an
+Variable-length chains (`evolution/genome.py`): one to five entry conditions, and —
+independently — zero to five exit conditions, each chain joined pairwise by an
+independently-drawn combinator (`&` or `|`), plus an optional stop (one kind out of
+fixed/trailing/ATR, so §3.7's priority chain can never shadow a gene the search paid for), an
 optional take-profit, and optional holding bounds.
 
-A slot holds a block choice **together with** its gene values, and the slot is the unit of
-crossover. Exchanging a block index without its genes would hand the child an arity that does
-not match its block and numbers that mean something else.
+A slot holds a block choice **together with** its gene values, and the slot is still the unit of
+crossover — exchanging a block index without its genes would hand the child an arity that does
+not match its block and numbers that mean something else. What is new relative to the genome's
+original two-slot shape is that a chain's own **length** is now also something the operators
+choose, not a fixed count of named positions; §16.4 covers how. Rendering folds a chain
+left-associatively, re-parenthesising the running expression at every step (`((a) & (b)) | (c)`),
+so the grammar's precedence trap — `&`/`|` bind more tightly than comparison — can never bite
+regardless of chain length.
 
 **Rendering is total.** Every genome the operators can produce renders to a strategy that passes
 structural and semantic validation, and `tests/test_evolution.py` asserts it over the reachable
@@ -2425,12 +2435,31 @@ evolution put it.
 
 ### 16.4 The search
 
-An elitist generational GA (`evolution/search.py`): tournament selection, per-slot uniform
-crossover, per-slot mutation, and the best few genomes carried forward untouched and unscored.
-Defaults: population 40, 25 generations, 2 elites, tournament 3, crossover 0.9, mutation 0.2 per
-slot. A mutating condition slot either swaps its block outright (30%) or nudges the numbers
-inside the block it has; optional slots toggle between present and absent, which is how the
-search reaches simpler strategies rather than only more elaborate ones.
+An elitist generational GA (`evolution/search.py`): tournament selection, per-position uniform
+crossover within each variable-length condition chain, per-slot mutation, and the best few
+genomes carried forward untouched and unscored. Defaults: population 40, 25 generations, 2
+elites, tournament 3, crossover 0.9, mutation 0.2 per slot. A mutating condition slot either
+swaps its block outright (30%) or nudges the numbers inside the block it has.
+
+**Crossover picks a chain's length from one parent, never from neither.** A fixed-shape slot
+exchanges position by position because both parents always have that position; a variable-length
+chain cannot, since the child needs a length before any position-wise exchange means anything. So
+one parent is chosen by coin flip as the *structure donor* — the child's chain length is exactly
+that parent's own length — and then every position is filled independently, from either parent
+where both have a slot there, otherwise from whichever does. A child's length therefore always
+traces back to an actual parent rather than to an unconstrained recombination.
+
+**Mutation may grow or shrink a chain by one condition, in addition to the existing content
+mutation.** Equally weighted between growing and shrinking when both are legal at the chain's
+current length, generalising the old toggle between a single optional slot being present or
+absent — which is how the search reaches both simpler and more elaborate strategies at any length
+between the bounds, not only strictly more elaborate ones. Shrinking removes a randomly chosen
+existing slot, not always the newest, so no earlier slot becomes permanent once added. Nothing in
+this operator resists growth, though: an extra condition essentially never hurts *in-sample*
+fitness, so the GA will tend to drift chains toward the five-condition ceiling over enough
+generations regardless of whether the added complexity earns its keep out-of-sample. This is an
+accepted, currently unaddressed risk — countering it would mean a parsimony term in the fitness
+function (§16.5), which is a separate change from the genome and operators described here.
 
 **Hand-written rather than taken from a framework.** DEAP is untyped, which is a poor fit for a
 strict-mypy codebase, and the working agreement to verify library behaviour rather than assume

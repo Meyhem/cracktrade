@@ -42,6 +42,9 @@ from cracktrade.domain import EvolutionResult
 from cracktrade.errors import EvolutionError, RunCancelled
 from cracktrade.evolution import (
     BLOCKS,
+    MAX_CONDITIONS,
+    MIN_ENTRY_CONDITIONS,
+    MIN_EXIT_CONDITIONS,
     Chassis,
     Fitness,
     GaSettings,
@@ -63,6 +66,7 @@ from cracktrade.evolution import (
 from cracktrade.evolution.blocks import GeneRef, instantiate
 from cracktrade.evolution.parallel import plan_workers
 from cracktrade.evolution.protocol import Scored, ScoreFailure, ScoreOutcome, score_strategy
+from cracktrade.evolution.search import random_slot
 from cracktrade.indicators import registry
 from cracktrade.optimize import TradeFloor
 from cracktrade.optimize.objective import INFEASIBLE, get_objective
@@ -169,8 +173,75 @@ def test_every_reachable_genome_renders_to_a_valid_strategy() -> None:
 
     for _ in range(400):
         render(genome, a_chassis())
+        _assert_chain_invariants(genome)
         partner = random_genome(rng)
         genome = mutate(crossover(genome, partner, rng), rng, rate=0.4)
+
+
+def _assert_chain_invariants(genome: Genome) -> None:
+    """What :func:`_validate_chain` enforces at construction time, checked again here.
+
+    Cheap to fold into the existing reachable-space loop rather than write a new one, and it is
+    exactly what would catch an off-by-one in the mutation operator's op-index bookkeeping when
+    a chain grows or shrinks.
+    """
+    assert MIN_ENTRY_CONDITIONS <= len(genome.entries) <= MAX_CONDITIONS
+    assert len(genome.entry_ops) == len(genome.entries) - 1
+    assert MIN_EXIT_CONDITIONS <= len(genome.exits) <= MAX_CONDITIONS
+    assert len(genome.exit_ops) == max(0, len(genome.exits) - 1)
+
+
+def test_a_genome_at_the_arity_ceiling_on_both_sides_renders() -> None:
+    """Five entry conditions and five exit conditions, chained with mixed operators."""
+    rng = random.Random(13)
+    entries = tuple(random_slot(rng) for _ in range(MAX_CONDITIONS))
+    exits = tuple(random_slot(rng) for _ in range(MAX_CONDITIONS))
+    genome = repair(
+        Genome(
+            entries=entries,
+            entry_ops=tuple(rng.choice(("&", "|")) for _ in range(MAX_CONDITIONS - 1)),
+            exits=exits,
+            exit_ops=tuple(rng.choice(("&", "|")) for _ in range(MAX_CONDITIONS - 1)),
+            stop=None,
+            take_profit_pct=None,
+            max_holding_days=10,
+            min_holding_days=None,
+        )
+    )
+    strategy = render(genome, a_chassis())
+    assert all(f"e{index}_" in strategy.entry.signal for index in range(MAX_CONDITIONS))
+    exit_signal = strategy.exit.signal
+    assert exit_signal is not None
+    assert all(f"x{index}_" in exit_signal for index in range(MAX_CONDITIONS))
+
+
+def test_crossover_child_length_always_traces_back_to_a_parent() -> None:
+    """Locks in the structure-donor guarantee against a regression to blended lengths."""
+    rng = random.Random(17)
+    short = Genome(
+        entries=(random_slot(rng),),
+        entry_ops=(),
+        exits=(),
+        exit_ops=(),
+        stop=None,
+        take_profit_pct=None,
+        max_holding_days=10,
+        min_holding_days=None,
+    )
+    long = Genome(
+        entries=tuple(random_slot(rng) for _ in range(MAX_CONDITIONS)),
+        entry_ops=tuple(rng.choice(("&", "|")) for _ in range(MAX_CONDITIONS - 1)),
+        exits=(),
+        exit_ops=(),
+        stop=None,
+        take_profit_pct=None,
+        max_holding_days=10,
+        min_holding_days=None,
+    )
+
+    for seed in range(200):
+        child = crossover(short, long, random.Random(seed))
+        assert len(child.entries) in (1, MAX_CONDITIONS)
 
 
 def test_a_rendered_strategy_never_repeats_an_indicator_name() -> None:
@@ -186,10 +257,13 @@ def test_a_two_condition_entry_parenthesises_both_sides() -> None:
     """'&' binds tighter than a comparison, so the unparenthesised form means something else."""
     genome = repair(
         Genome(
-            entry_a=Slot(block=_block_index("rsi_below_level"), values=(14.0, 30.0)),
-            entry_b=Slot(block=_block_index("adx_above_level"), values=(14.0, 25.0)),
-            combinator="&",
-            exit_condition=None,
+            entries=(
+                Slot(block=_block_index("rsi_below_level"), values=(14.0, 30.0)),
+                Slot(block=_block_index("adx_above_level"), values=(14.0, 25.0)),
+            ),
+            entry_ops=("&",),
+            exits=(),
+            exit_ops=(),
             stop=None,
             take_profit_pct=None,
             max_holding_days=10,
@@ -197,7 +271,7 @@ def test_a_two_condition_entry_parenthesises_both_sides() -> None:
         )
     )
     signal = render(genome, a_chassis()).entry.signal
-    assert signal == "(ea_rsi < 30.00) & (eb_adx_adx > 25.00)"
+    assert signal == "(e0_rsi < 30.00) & (e1_adx_adx > 25.00)"
 
 
 def test_rendering_is_a_pure_function_of_the_genome() -> None:
@@ -214,10 +288,10 @@ def test_rendering_is_a_pure_function_of_the_genome() -> None:
 
 def test_repair_gives_a_genome_with_no_way_out_a_holding_cap() -> None:
     stranded = Genome(
-        entry_a=Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),
-        entry_b=None,
-        combinator="&",
-        exit_condition=None,
+        entries=(Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),),
+        entry_ops=(),
+        exits=(),
+        exit_ops=(),
         stop=None,
         take_profit_pct=None,
         max_holding_days=None,
@@ -229,10 +303,10 @@ def test_repair_gives_a_genome_with_no_way_out_a_holding_cap() -> None:
 
 def test_repair_yields_the_holding_floor_to_the_cap() -> None:
     inverted = Genome(
-        entry_a=Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),
-        entry_b=None,
-        combinator="&",
-        exit_condition=None,
+        entries=(Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),),
+        entry_ops=(),
+        exits=(),
+        exit_ops=(),
         stop=None,
         take_profit_pct=None,
         max_holding_days=5,
@@ -261,7 +335,7 @@ def a_synthetic_fitness(genome: Genome) -> float:
     divergence in the operators look like a divergence in the market data.
     """
     key = describe(genome)
-    return float(len(key) % 17) - genome.entry_a.block
+    return float(len(key) % 17) - genome.entries[0].block
 
 
 def test_the_same_seed_produces_the_same_search() -> None:
@@ -668,10 +742,10 @@ def test_a_stop_kind_maps_onto_the_field_the_schema_expects() -> None:
         ("atr", "atr_stop_multiplier"),
     ):
         genome = Genome(
-            entry_a=Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),
-            entry_b=None,
-            combinator="&",
-            exit_condition=None,
+            entries=(Slot(block=0, values=tuple(gene.low for gene in BLOCKS[0].genes)),),
+            entry_ops=(),
+            exits=(),
+            exit_ops=(),
             stop=Stop(kind=kind, value=5.0),
             take_profit_pct=None,
             max_holding_days=None,

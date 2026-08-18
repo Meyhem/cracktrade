@@ -71,6 +71,12 @@ class _WorkerState:
 #: population repeats configurations heavily, so the *new* configurations in a late generation
 #: are far fewer than the population and can easily be fewer than the workers.
 #:
+#: **Measured against the two-condition genome, not the variable-length chains genome.py now
+#: allows.** A genome can carry up to ~10 blocks' worth of indicators instead of ~3, so a single
+#: simulation now costs more, and the far larger reachable space means the dedup cache above hits
+#: less often -- both push the serial/pool crossover point below the number measured here. Not
+#: retuned blind, per the same working agreement; re-measuring this table is follow-up work.
+#:
 #: On a 32-core machine, scoring a 1500-bar history over four segments:
 #:
 #: =========== ======= ======== ========= =========

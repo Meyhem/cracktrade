@@ -82,9 +82,10 @@ ParamValue = GeneRef | int | float
 class IndicatorTemplate:
     """One indicator a block needs, before its genes have values.
 
-    ``alias`` is what the block's expression refers to. The rendered strategy gets a slot-scoped
-    name instead (``entry_a_ma`` and so on), because two slots may both want a 50-day EMA and
-    the schema requires indicator names to be unique.
+    ``alias`` is what the block's expression refers to. The rendered strategy gets a
+    position-scoped name instead (``e0_ma``, ``e1_ma``, and so on -- see ``genome.ENTRY_PREFIX``/
+    ``EXIT_PREFIX``), because two conditions in the same chain, or an entry and an exit
+    condition, may both want a 50-day EMA and the schema requires indicator names to be unique.
     """
 
     alias: str

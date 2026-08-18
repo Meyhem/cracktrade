@@ -1855,7 +1855,16 @@ trusting the application:
 - `run` rows mutate only while non-terminal — status, progress, worker lease, and the single
   result-landing update. Identity fields (`kind`, `version`, `number`, `params`, `seed`,
   `queued_at`) are frozen at insert, and the whole row freezes on reaching a terminal status;
-- nothing is ever deleted. There is no delete operation at any layer (§15.2).
+- nothing is deleted **piecemeal**. No version, no run and no series can be removed on its
+  own, at any layer. The single exception is deleting a whole strategy, which takes its entire
+  history with it and is described in §14.8.
+
+  **[AMENDED — 2026-08-18.]** This bullet previously read "nothing is ever deleted. There is
+  no delete operation at any layer." That was true when written and is no longer: a registry
+  that only ever grows is one nobody can read, and the list screen is the working surface of
+  this application. What the append-only guarantee was actually defending — that a stored
+  result cannot be revised, and that a history cannot be rewritten to explain a result it did
+  not produce — is untouched. Deleting everything is not rewriting anything.
 
 **Restoring an old config appends; it never rewinds.** A restore writes a new head version whose
 config is a copy of the target and whose `restored_from` records the source. Runs made against
@@ -1970,6 +1979,56 @@ is not `credible`. Only the strategy's own credible walk-forward against its own
 it, and editing that head brings it back — because the clearance was about a configuration, and
 the configuration has changed. Nothing rewrites the snapshot; the past stays as it was recorded.
 
+### 14.8 Deleting a strategy — the one exception
+
+**[NEW — decided 2026-08-18.]** A strategy can be deleted, whole. It takes its versions, its
+runs, and their captured series with it, and it cannot be undone. Nothing smaller is
+deletable: there is no way to remove one version, one run, or one series, because that is the
+operation that would let a surviving result be explained by a config that no longer says what
+it said.
+
+**Why this is not a soft delete.** An `archived` flag was the alternative and was rejected. It
+keeps the audit trail perfectly and solves nothing the user asked for: the rows stay, the name
+stays taken, and every query in the application grows a filter that some future screen will
+forget — at which point an archived strategy reappears in exactly the list it was hidden from.
+A user deleting a mistake wants it gone, and a delete that only pretends is the kind of
+authoritative-looking half-truth §0 exists to prevent.
+
+**The escape hatch is scoped, not opened.** The append-only triggers of §14.2 still refuse
+`DELETE`. They make one exception: a transaction that has declared *which strategy it is
+purging*, by setting the transaction-local `cracktrade.purge_strategy_id`, may delete that
+strategy's own rows and no others. Three properties follow, and all three are pinned by tests
+in `tests/api/test_schema.py`:
+
+- an ordinary `DELETE` — a stray statement, a buggy repository, a `psql` session — sets
+  nothing and is refused with the message it was refused with before;
+- a purge of A cannot reach B's versions, runs, or series, however the statement is written.
+  The permission names a strategy rather than granting a mode, so it is not a window during
+  which everything is deletable;
+- PostgreSQL reverts the setting at `COMMIT`/`ROLLBACK`, so the permission cannot outlive its
+  transaction or be inherited by the next borrower of a pooled connection.
+
+`UPDATE` is not affected at any point. During a purge the rows can go; not one of them can be
+rewritten first.
+
+**Two refusals, both 409.** The service layer decides whether a delete may proceed:
+
+| Refused when | Because |
+| --- | --- |
+| a run is `queued` or `running` | the worker holds a lease on it; removing the version it is measuring would surface as an engine failure for a run that had not failed. Cancelling is the caller's move — cancelling someone's run as a side effect of a delete they might reconsider is worse than making them say so |
+| a fork or a promotion descends from it | the child's lineage is a foreign key into rows this would remove, and "forked from X v3" is a historical fact, not a crumb worth leaving pointed at nothing. Deleting children is a decision to be made child by child |
+
+Descendants are found by asking the database what points here — both the parent link and the
+promoted child's `origin_run_id` — rather than by trusting the shape the create path writes.
+
+**Deliberately not refused: having succeeded or failed runs.** That is the ordinary state of a
+strategy worth deleting. A guard permitting only never-run strategies would refuse in exactly
+the case the feature exists for.
+
+The response is a receipt — the name, and how many versions, runs and series went — rather
+than an empty `204`. An irreversible operation should be able to say how much it did, and a
+user who expected one run and reads eleven has learned something while it still matters.
+
 ---
 
 ## 15. HTTP interface
@@ -2051,7 +2110,13 @@ one address and added at another, which reads as a rewrite of the strategy.
 
 ### 15.2 Guarantees carried into the API surface
 
-- **No delete.** No endpoint deletes a strategy, version, or run (§14.2).
+- **One delete, and it is the whole strategy.** `DELETE /strategies/{id}` removes a strategy
+  with its versions, runs and series, guarded and irreversible (§14.8). No endpoint deletes a
+  version or a run in its own right, and none removes one without its strategy.
+
+  **[AMENDED — 2026-08-18.]** Previously "No delete. No endpoint deletes a strategy, version,
+  or run." Narrowed rather than withdrawn — see the note in §14.2 for what the guarantee was
+  actually protecting.
 - **Suppression is honest end to end.** Below `MIN_TRADES_TO_JUDGE` closed trades (§8), the
   withheld figures are not sent — not in a detail response and not in a list row. A client
   cannot render a suppressed number it was never given.

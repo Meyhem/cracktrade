@@ -457,3 +457,31 @@ def test_a_backtest_has_no_checks_and_no_diff(client: TestClient, db_url: str) -
     body = client.get(f"{BASE}/runs/{run_id}").json()
     assert body["checks"] == []
     assert body["config_diff"] == []
+
+
+# --------------------------------------------------------------------------- deleting
+
+
+def test_a_promoted_child_blocks_deleting_its_parent(client: TestClient, db_url: str) -> None:
+    """A promotion points at the parent *and* at the run it came out of.
+
+    Both are foreign keys into rows a purge of the parent would remove, and the child's own
+    warning is rendered from that run. Deleting the parent underneath it would leave a strategy
+    whose banner cites a measurement that no longer exists.
+    """
+    parent_id = _strategy(client)
+    run_id = _optimize_run(client, db_url, parent_id)
+    promoted = client.post(f"{BASE}/runs/{run_id}/promote", json={"name": "momentum_v3"})
+    assert promoted.status_code == 201, promoted.text
+
+    response = client.delete(f"{BASE}/strategies/{parent_id}")
+    assert response.status_code == 409
+    assert "momentum_v3" in response.json()["detail"]
+
+    # And once the child is gone the parent is deletable, run and all. The child's own queued
+    # backtest has to be cancelled first -- promotion launches one.
+    child_id = promoted.json()["strategy_id"]
+    backtest_id = promoted.json()["backtest_run_id"]
+    assert client.post(f"{BASE}/runs/{backtest_id}/cancel").status_code == 202
+    assert client.delete(f"{BASE}/strategies/{child_id}").status_code == 200
+    assert client.delete(f"{BASE}/strategies/{parent_id}").status_code == 200

@@ -136,7 +136,20 @@ export interface paths {
         get: operations["get_strategy_api_v1_strategies__strategy_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete One Strategy
+         * @description Delete a strategy, its versions, its runs and their captured series. **Irreversible.**
+         *
+         *     The only endpoint in the interface that destroys anything, and the only exception to the
+         *     no-delete guarantee of spec section 15.2 -- narrowed, not withdrawn: versions and runs
+         *     remain undeletable in their own right, and no endpoint removes one without its strategy.
+         *
+         *     ``409`` when a run is still queued or running, or when a fork or promotion descends from
+         *     it; the detail names what is in the way. ``200`` carries a receipt of what went, because
+         *     an irreversible operation that answers with an empty body leaves the caller to guess how
+         *     much it did.
+         */
+        delete: operations["delete_one_strategy_api_v1_strategies__strategy_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -554,6 +567,25 @@ export interface components {
              * @default []
              */
             warnings: components["schemas"]["Issue"][];
+        };
+        /**
+         * DeletedStrategy
+         * @description What a delete destroyed.
+         *
+         *     A body rather than a bare 204. The operation is irreversible and the interface should be
+         *     able to say how much it removed -- "deleted Momentum: 4 versions, 11 runs" is a receipt,
+         *     and a user who expected one run and reads eleven has learned something while it still
+         *     matters that they know it.
+         */
+        DeletedStrategy: {
+            /** Name */
+            name: string;
+            /** Versions */
+            versions: number;
+            /** Runs */
+            runs: number;
+            /** Series */
+            series: number;
         };
         /**
          * DiffResponse
@@ -1402,6 +1434,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrategyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_one_strategy_api_v1_strategies__strategy_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedStrategy"];
                 };
             };
             /** @description Validation Error */

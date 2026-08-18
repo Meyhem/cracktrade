@@ -40,8 +40,10 @@ fallback.
 - Pagination: `?limit=` (default 50) + `?offset=` on `GET /runs` only; every other collection
   is small by nature (personal tool). No auth — single user, local. If that changes, auth is a
   middleware concern and an `owner_id` column; no endpoint shape changes.
-- **There are no DELETE endpoints.** Strategies, versions, and runs are never deleted —
-  append-only is a product guarantee, enforced by the schema.
+- **There is exactly one DELETE endpoint**, and it removes a whole strategy
+  (`DELETE /strategies/{id}`, §2). Versions, runs and series are never deleted in their own
+  right and never outlive their strategy — append-only is still enforced by the schema, with
+  one scoped exception for the purge (spec §14.8).
 
 ---
 
@@ -209,6 +211,22 @@ copy-existing option.
 
 `201` → new strategy, `origin: forked`, v1 = exact copy of the parent config at that version.
 A fork starts a fresh history at v1 — it does not inherit the parent's versions.
+
+### `DELETE /strategies/{id}`
+
+The Delete dialog on the strategy header. Removes the strategy, every version, every run and
+every captured series. **Irreversible**, which is why the dialog asks for the name to be typed
+rather than offering a confirm button.
+
+`200` → a receipt of what went, rather than an empty `204`:
+
+```jsonc
+{ "name": "momentum_v2", "versions": 7, "runs": 8, "series": 24 }
+```
+
+`409` when a run is still `queued` or `running` (cancel it first), or when a fork or promotion
+descends from it (the `detail` names them). `404` for an unknown id. Nothing partial: the whole
+delete is one transaction.
 
 ### `GET /strategies/{id}`
 
@@ -511,6 +529,7 @@ code path for rendering a run. Fallback when SSE is unavailable: poll
 | New strategy dialog (copy existing) / Fork button / "Fork from v6" | `POST /strategies/{id}/fork` |
 | Import config dialog (preview → confirm) | `POST /config/validate` → `POST /strategies/import` |
 | Strategy list + verdict filter | `GET /strategies` |
+| Delete strategy dialog (type-the-name) | `DELETE /strategies/{id}` |
 | Detail header, verdict banner, promoted warning | `GET /strategies/{id}` |
 | Config tab: form ⇄ YAML, namespace chips, search ranges, live errors | `GET /strategies/{id}` + `POST /config/validate` |
 | Save vN / diff-against-head panel | `POST /strategies/{id}/versions` |

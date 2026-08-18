@@ -21,6 +21,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import TupleRow
 
 from cracktrade.api.app import create_app
+from cracktrade.api.db.migrate import discover
 from cracktrade.api.db.uow import unit_of_work_on
 from cracktrade.api.middleware import MAX_ID_LENGTH, _safe
 from cracktrade.api.repos import RunRepo
@@ -131,7 +132,12 @@ def test_health_reports_a_database_that_was_never_migrated(db_server_url: str) -
         body = response.json()
         assert body["migrations_current"] is False
         assert body["applied_migrations"] == 0
-        assert body["pending_migrations"] == ["0001_initial.sql"]
+        # The whole chain, in order, read from the same files the migrator reads. Spelling it
+        # out here would mean every future migration failed this test for no reason, and the
+        # assertion is about an unmigrated database reporting what it lacks -- not about how
+        # many migrations happen to exist today.
+        assert body["pending_migrations"] == [migration.path.name for migration in discover()]
+        assert body["pending_migrations"][0] == "0001_initial.sql"
 
         with psycopg.connect(url) as connection:
             found = connection.execute("SELECT to_regclass('schema_migrations')").fetchone()

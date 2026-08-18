@@ -12,8 +12,10 @@ from uuid import UUID
 
 from cracktrade.api.db.uow import UnitOfWork
 from cracktrade.api.errors import ConflictError, NotFoundError, ValidationFailedError
-from cracktrade.api.repos import StrategyRepo, VersionRepo
+from cracktrade.api.repos import RunRepo, StrategyRepo, VersionRepo
 from cracktrade.api.repos.rows import (
+    PurgeCounts,
+    RunStatus,
     StrategyOrigin,
     StrategyOverviewRow,
     StrategyRow,
@@ -302,6 +304,66 @@ def restore_version(
         restored_from=version,
         after=head.version,
     )
+
+
+#: Run states a worker may still act on. Deleting the strategy underneath one of these would
+#: pull the version a running execution is measuring out from under it, and the worker would
+#: report a database failure for a run that was actually fine.
+LIVE_STATUSES: tuple[RunStatus, ...] = (RunStatus.QUEUED, RunStatus.RUNNING)
+
+
+@dataclass(frozen=True, slots=True)
+class Deleted:
+    """A strategy that no longer exists, and the size of what went with it."""
+
+    name: str
+    counts: PurgeCounts
+
+
+def delete_strategy(work: UnitOfWork, strategy_id: UUID) -> Deleted:
+    """Delete a strategy, its versions, its runs and their captured series. **Irreversible.**
+
+    The one destructive operation in the application, and a deliberate exception to the
+    append-only guarantee of spec section 14.2 rather than a softening of it: everything that
+    survives the delete is as immutable as it was before, and the escape hatch the triggers
+    honour is scoped to this one strategy's own rows (spec section 14.8).
+
+    Two refusals, both 409 and both naming what to do about it:
+
+    * a run still queued or running -- the worker is holding a lease on it, and deleting the
+      version it is measuring would surface as an engine failure for a run that had not
+      failed. Cancelling first is the caller's move, not ours: cancelling someone's run as a
+      side effect of a delete they might reconsider is worse than making them say so;
+    * a fork or a promotion descended from it -- its lineage is a foreign key into rows this
+      would remove. Silently orphaning a child would turn "forked from X v3" into a crumb
+      pointing at nothing, and the child's origin is a historical fact rather than a
+      convenience. Deleting the children first is a decision to be made child by child.
+
+    Deliberately *not* refused: having succeeded or failed runs. That is the ordinary state of
+    a strategy worth deleting, and a guard that only permitted deleting never-run strategies
+    would leave exactly the rows the user wants gone.
+    """
+    strategies = StrategyRepo(work.connection)
+    strategy = require_strategy(work, strategy_id)
+
+    live = RunRepo(work.connection).count(strategy_id=strategy_id, statuses=LIVE_STATUSES)
+    if live:
+        raise ConflictError(
+            f"{strategy.name} has {live} run{'' if live == 1 else 's'} still queued or running. "
+            f"Cancel them, then delete."
+        )
+
+    children = strategies.descendants(strategy_id)
+    if children:
+        named = ", ".join(child.name for child in children)
+        raise ConflictError(
+            f"{strategy.name} cannot be deleted while {named} "
+            f"{'descends' if len(children) == 1 else 'descend'} from it. "
+            f"Delete or fork off {'that strategy' if len(children) == 1 else 'those strategies'} "
+            f"first."
+        )
+
+    return Deleted(name=strategy.name, counts=strategies.purge(strategy_id))
 
 
 def require_strategy(work: UnitOfWork, strategy_id: UUID) -> StrategyRow:

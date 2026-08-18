@@ -18,7 +18,7 @@ from cracktrade.api.repos.rows import StrategyOverviewRow, VersionRow
 from cracktrade.api.services.config import ConfigComparison, ConfigReview
 from cracktrade.api.services.diff import Change, SectionDiff
 from cracktrade.api.services.health import Health
-from cracktrade.api.services.strategies import StrategyDetails
+from cracktrade.api.services.strategies import Deleted, StrategyDetails
 from cracktrade.api.services.verdict import PromotedWarning, VerdictBlock
 from cracktrade.serialize import to_dict
 
@@ -295,6 +295,30 @@ class CreatedStrategy(BaseModel):
 
     strategy: StrategyDetail
     warnings: list[Issue] = []
+
+
+class DeletedStrategy(BaseModel):
+    """What a delete destroyed.
+
+    A body rather than a bare 204. The operation is irreversible and the interface should be
+    able to say how much it removed -- "deleted Momentum: 4 versions, 11 runs" is a receipt,
+    and a user who expected one run and reads eleven has learned something while it still
+    matters that they know it.
+    """
+
+    name: str
+    versions: int
+    runs: int
+    series: int
+
+    @classmethod
+    def of(cls, deleted: Deleted) -> DeletedStrategy:
+        return cls(
+            name=deleted.name,
+            versions=deleted.counts.versions,
+            runs=deleted.counts.runs,
+            series=deleted.counts.series,
+        )
 
 
 class SectionDiffOut(BaseModel):

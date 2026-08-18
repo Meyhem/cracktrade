@@ -343,3 +343,43 @@ def test_a_strategy_with_runs_but_no_validation_is_unvalidated(
     detail = client.get(f"{BASE}/strategies/{strategy_id}").json()
     assert detail["verdict"]["state"] == "unvalidated"
     assert detail["verdict"]["summary"] is None
+
+
+# --------------------------------------------------------------------------- deleting
+
+
+def test_deleting_a_strategy_takes_its_runs_and_captured_series_with_it(
+    client: TestClient, db_url: str
+) -> None:
+    """The delete reaches all the way down to the per-bar series the Charts tab draws.
+
+    Series are the one thing with no route of its own to check afterwards, and the table they
+    live in is keyed by run rather than by strategy -- so a purge that missed them would leave
+    rows nothing can reach and nothing can delete, in a table that refuses DELETE.
+    """
+    strategy_id = _strategy(client)
+    run = _launch(client, strategy_id, "backtest")
+    _work_the_queue(db_url)
+    assert client.get(f"{BASE}/runs/{run['id']}").json()["run"]["status"] == "succeeded"
+
+    response = client.delete(f"{BASE}/strategies/{strategy_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["runs"] == 1
+    assert body["series"] > 0
+
+    assert client.get(f"{BASE}/runs/{run['id']}").status_code == 404
+    assert client.get(f"{BASE}/runs").json()["runs"] == []
+
+
+def test_a_finished_run_does_not_block_the_delete(client: TestClient, db_url: str) -> None:
+    """Having been run is the ordinary state of a strategy worth deleting.
+
+    A guard that only permitted deleting never-run strategies would refuse in exactly the case
+    the feature exists for, so the refusal is about runs still in flight and nothing else.
+    """
+    strategy_id = _strategy(client)
+    _launch(client, strategy_id, "backtest")
+    _work_the_queue(db_url)
+
+    assert client.delete(f"{BASE}/strategies/{strategy_id}").status_code == 200

@@ -131,6 +131,118 @@ def test_a_run_cannot_be_deleted(db: psycopg.Connection[TupleRow]) -> None:
     assert "never deleted" in message
 
 
+# --------------------------------------------------------------------------- guarded purge
+
+
+def _declare_purge(db: psycopg.Connection[TupleRow], strategy_id: str) -> None:
+    """Say, for this transaction only, which strategy is being purged."""
+    db.execute("SELECT set_config('cracktrade.purge_strategy_id', %s, true)", (strategy_id,))
+
+
+def _populate(db: psycopg.Connection[TupleRow], strategy_id: str, name: str, run_id: str) -> None:
+    """A strategy with a version, a run, and a captured series -- one of everything."""
+    _strategy(db, strategy_id, name=name)
+    _version(db, strategy_id)
+    _run(db, run_id, strategy_id=strategy_id)
+    db.execute(
+        "INSERT INTO run_series (run_id, name, points) VALUES (%s, 'equity', %s)",
+        (run_id, json.dumps({"dates": [], "values": []})),
+    )
+
+
+def test_a_declared_purge_may_delete_its_own_rows(db: psycopg.Connection[TupleRow]) -> None:
+    """The one hole in append-only, and it only opens for a transaction that names a strategy."""
+    run_id = "00000000-0000-0000-0000-0000000000b1"
+    _populate(db, STRATEGY, "momentum_v2", run_id)
+    db.commit()
+
+    _declare_purge(db, STRATEGY)
+    db.execute("DELETE FROM run_series WHERE run_id = %s", (run_id,))
+    db.execute("DELETE FROM run WHERE strategy_id = %s", (STRATEGY,))
+    db.execute("DELETE FROM strategy_version WHERE strategy_id = %s", (STRATEGY,))
+    db.execute("DELETE FROM strategy WHERE id = %s", (STRATEGY,))
+    db.commit()
+
+    remaining = db.execute("SELECT count(*) FROM strategy").fetchone()
+    assert remaining is not None
+    assert remaining[0] == 0
+
+
+def test_a_purge_cannot_reach_another_strategys_rows(db: psycopg.Connection[TupleRow]) -> None:
+    """Scoped to the named strategy, so a purge of one is not a window on the rest.
+
+    The whole point of naming the strategy rather than setting a boolean: a permission that
+    merely said "deleting is allowed right now" would make every other strategy's history
+    deletable by a mistyped WHERE clause for the length of the transaction.
+    """
+    mine = "00000000-0000-0000-0000-0000000000b1"
+    theirs = "00000000-0000-0000-0000-0000000000b2"
+    _populate(db, STRATEGY, "momentum_v2", mine)
+    _populate(db, OTHER, "other_strategy", theirs)
+    db.commit()
+
+    _declare_purge(db, STRATEGY)
+    assert "append-only" in _rejects(
+        db, lambda: db.execute("DELETE FROM strategy_version WHERE strategy_id = %s", (OTHER,))
+    )
+
+    _declare_purge(db, STRATEGY)
+    assert "never deleted" in _rejects(
+        db, lambda: db.execute("DELETE FROM run WHERE strategy_id = %s", (OTHER,))
+    )
+
+    _declare_purge(db, STRATEGY)
+    assert "append-only" in _rejects(
+        db, lambda: db.execute("DELETE FROM run_series WHERE run_id = %s", (theirs,))
+    )
+
+
+def test_an_unguarded_delete_is_refused_exactly_as_before(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The escape hatch is opt-in, so a statement that does not know about it sees no change."""
+    run_id = "00000000-0000-0000-0000-0000000000b1"
+    _populate(db, STRATEGY, "momentum_v2", run_id)
+    db.commit()
+
+    assert "append-only" in _rejects(db, lambda: db.execute("DELETE FROM run_series"))
+    assert "never deleted" in _rejects(db, lambda: db.execute("DELETE FROM run"))
+    assert "append-only" in _rejects(db, lambda: db.execute("DELETE FROM strategy_version"))
+
+
+def test_the_purge_permission_dies_with_its_transaction(db: psycopg.Connection[TupleRow]) -> None:
+    """``set_config(..., true)`` is transaction-local, which is why it is safe on a pool.
+
+    A permission that survived COMMIT would be inherited by whichever request borrowed the
+    connection next, and that request would be free to delete a strategy nobody asked about.
+    """
+    run_id = "00000000-0000-0000-0000-0000000000b1"
+    _populate(db, STRATEGY, "momentum_v2", run_id)
+    _declare_purge(db, STRATEGY)
+    db.commit()
+
+    assert "append-only" in _rejects(
+        db, lambda: db.execute("DELETE FROM strategy_version WHERE strategy_id = %s", (STRATEGY,))
+    )
+
+
+def test_a_purge_still_cannot_edit_anything(db: psycopg.Connection[TupleRow]) -> None:
+    """Deletion was made reachable; immutability was not touched.
+
+    A stored result is a record of a measurement rather than a cache of one (spec 14.1). That
+    holds during a purge too: the rows can go, but not one of them can be rewritten first.
+    """
+    run_id = "00000000-0000-0000-0000-0000000000b1"
+    _populate(db, STRATEGY, "momentum_v2", run_id)
+    db.commit()
+
+    _declare_purge(db, STRATEGY)
+    assert "append-only" in _rejects(db, lambda: db.execute("UPDATE strategy_version SET note='x'"))
+
+    _declare_purge(db, STRATEGY)
+    assert "append-only" in _rejects(db, lambda: db.execute("UPDATE run_series SET points='{}'"))
+
+
 # --------------------------------------------------------------------------- run lifecycle
 
 

@@ -183,3 +183,16 @@ class SeriesRow:
     name: str
     fold: int
     points: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class PurgeCounts:
+    """What a strategy delete destroyed, counted before the rows went.
+
+    Returned so the interface can report the size of what it did rather than a bare success.
+    A user who has just deleted seven runs should be told it was seven.
+    """
+
+    versions: int
+    runs: int
+    series: int

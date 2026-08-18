@@ -19,6 +19,7 @@ import { VerdictChip } from '../../components/VerdictChip'
 import { useStrategy } from '../strategies/queries'
 import { LaunchRunModal } from '../runs/LaunchRunModal'
 import { ForkStrategyModal } from './ForkStrategyModal'
+import { DeleteStrategyModal } from './DeleteStrategyModal'
 import { ValidateConfigModal } from './ValidateConfigModal'
 import { StrategyContext } from './context'
 import { dateOnly } from '../../lib/format'
@@ -70,6 +71,7 @@ export function StrategyLayout() {
   const { data: strategy, error, isPending } = useStrategy(strategyId ?? '')
   const [launchKind, setLaunchKind] = useState<RunKind | null>(null)
   const [forkOpen, setForkOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [validateOpen, setValidateOpen] = useState(false)
 
   if (isPending) {
@@ -130,6 +132,13 @@ export function StrategyLayout() {
               <Button onClick={() => setForkOpen(true)} variant="default">
                 Fork
               </Button>
+              {/* Last, subtle, and the only red thing in the header. It sits beside Fork
+                  because both are "what happens to this strategy" rather than "run it", but
+                  it is deliberately the least prominent control on the row: nothing here
+                  should be easier to hit than the buttons that produce evidence. */}
+              <Button color="red" onClick={() => setDeleteOpen(true)} variant="subtle">
+                Delete
+              </Button>
             </Group>
           </Group>
 
@@ -161,6 +170,7 @@ export function StrategyLayout() {
           <LaunchRunModal kind={launchKind} onClose={() => setLaunchKind(null)} opened />
         )}
         <ForkStrategyModal onClose={() => setForkOpen(false)} opened={forkOpen} />
+        <DeleteStrategyModal onClose={() => setDeleteOpen(false)} opened={deleteOpen} />
         <ValidateConfigModal onClose={() => setValidateOpen(false)} opened={validateOpen} />
       </Stack>
     </StrategyContext>

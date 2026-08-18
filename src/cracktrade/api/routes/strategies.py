@@ -1,4 +1,4 @@
-"""Strategies: listing, creating, importing, forking, and config validation."""
+"""Strategies: listing, creating, importing, forking, deleting, and config validation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from cracktrade.api.schemas.requests import (
 from cracktrade.api.schemas.responses import (
     ConfigDiffResponse,
     CreatedStrategy,
+    DeletedStrategy,
     Issue,
     StrategyDetail,
     StrategyList,
@@ -34,6 +35,7 @@ from cracktrade.api.services.config import (
 from cracktrade.api.services.strategies import (
     Created,
     create_strategy,
+    delete_strategy,
     fork_strategy,
     import_strategy,
     strategy_details,
@@ -156,3 +158,22 @@ def post_fork(strategy_id: UUID, body: ForkStrategyRequest, work: Work) -> Creat
     """Copy a strategy at some version into a new one starting at v1."""
     created = fork_strategy(work, source_id=strategy_id, name=body.name, version=body.version)
     return _created(work, created)
+
+
+# --------------------------------------------------------------------------- deleting
+
+
+@router.delete("/strategies/{strategy_id}", response_model=DeletedStrategy)
+def delete_one_strategy(strategy_id: UUID, work: Work) -> DeletedStrategy:
+    """Delete a strategy, its versions, its runs and their captured series. **Irreversible.**
+
+    The only endpoint in the interface that destroys anything, and the only exception to the
+    no-delete guarantee of spec section 15.2 -- narrowed, not withdrawn: versions and runs
+    remain undeletable in their own right, and no endpoint removes one without its strategy.
+
+    ``409`` when a run is still queued or running, or when a fork or promotion descends from
+    it; the detail names what is in the way. ``200`` carries a receipt of what went, because
+    an irreversible operation that answers with an empty body leaves the caller to guess how
+    much it did.
+    """
+    return DeletedStrategy.of(delete_strategy(work, strategy_id))

@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from '../../api/client'
 import { queryKeys, type StrategyListFilters } from '../../api/keys'
-import type { CreatedStrategy, StrategyDetail, StrategyList, StrategyRow } from '../../api/types'
+import type {
+  CreatedStrategy,
+  DeletedStrategy,
+  StrategyDetail,
+  StrategyList,
+  StrategyRow,
+} from '../../api/types'
 
 export type StrategyListResult = Omit<StrategyList, 'strategies'> & {
   strategies: StrategyRow[]
@@ -94,6 +100,40 @@ export function useForkStrategy() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.strategies.all })
+    },
+  })
+}
+
+/**
+ * Deleting a strategy, its versions, its runs and their captured series.
+ *
+ * The only destructive call the client makes. It is irreversible on the server (spec §14.8),
+ * so there is deliberately no optimistic update: the row disappears when the server says it
+ * has gone, not when the user clicks. An optimistic delete that then failed — a run started
+ * in the meantime, a fork created in another tab — would show a strategy vanishing and
+ * reappearing, and the reappearance is the part nobody reads.
+ *
+ * The detail query is *removed* rather than invalidated. Invalidating would refetch an id
+ * that now 404s and park an error in the cache for a screen that is being navigated away
+ * from anyway.
+ */
+export function useDeleteStrategy() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (strategyId: string): Promise<DeletedStrategy> => {
+      const result = await api.DELETE('/api/v1/strategies/{strategy_id}', {
+        params: { path: { strategy_id: strategyId } },
+      })
+      return unwrap(result)
+    },
+    onSuccess: (_deleted, strategyId) => {
+      queryClient.removeQueries({ queryKey: queryKeys.strategies.detail(strategyId) })
+      queryClient.removeQueries({ queryKey: queryKeys.versions.all(strategyId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.strategies.all })
+      // The run lists are per-strategy filtered but the all-runs page is not, and this
+      // strategy's runs were just removed from under it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     },
   })
 }

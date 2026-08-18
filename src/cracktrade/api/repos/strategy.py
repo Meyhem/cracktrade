@@ -8,6 +8,7 @@ from uuid import UUID
 from cracktrade.api.errors import NotFoundError
 from cracktrade.api.repos.base import Repository
 from cracktrade.api.repos.rows import (
+    PurgeCounts,
     RunKind,
     RunStatus,
     StrategyOrigin,
@@ -15,6 +16,12 @@ from cracktrade.api.repos.rows import (
     StrategyRow,
     Verdict,
 )
+
+#: The transaction-local setting migration 0002 has the append-only triggers read. Setting it
+#: is how a transaction declares which strategy it is purging; PostgreSQL reverts it at COMMIT
+#: or ROLLBACK, so the permission cannot outlive the transaction or leak onto the next borrower
+#: of a pooled connection.
+PURGE_SETTING = "cracktrade.purge_strategy_id"
 
 _COLUMNS = """
   id, name, origin, parent_strategy_id, parent_version, origin_run_id,
@@ -147,6 +154,72 @@ class StrategyRepo(Repository):
             f"SELECT {_OVERVIEW_COLUMNS} FROM strategy_overview {where} ORDER BY name", params
         )
         return [_overview(row) for row in rows]
+
+    def descendants(self, strategy_id: UUID) -> list[StrategyRow]:
+        """Strategies whose existence is recorded as coming from this one.
+
+        Both lineage edges, because both are foreign keys into rows a purge would remove: a
+        **fork** points at the strategy, and a **promotion** points at the strategy *and* at
+        the run it was promoted out of. A promotion whose parent link were somehow written
+        elsewhere would still be caught by the second arm, which is why this asks the database
+        what points here rather than trusting the shape the service writes.
+
+        ``DISTINCT`` because a promotion matches on both arms at once.
+        """
+        rows = self._fetch_all(
+            f"""
+            SELECT DISTINCT {_COLUMNS} FROM strategy
+            WHERE parent_strategy_id = %s
+               OR origin_run_id IN (SELECT id FROM run WHERE strategy_id = %s)
+            ORDER BY name
+            """,
+            (strategy_id, strategy_id),
+        )
+        return [_strategy(row) for row in rows]
+
+    def purge(self, strategy_id: UUID) -> PurgeCounts:
+        """Delete a strategy and everything belonging to it. **Irreversible.**
+
+        The only destructive operation in the application, and the only caller of the escape
+        hatch migration 0002 opened. It does not decide *whether* to delete -- the refusals
+        live in :func:`cracktrade.api.services.strategies.delete_strategy`, because a
+        repository that decided would be a repository the service could forget to ask.
+
+        Ordering is leaf-first because the foreign keys are real: series reference runs, runs
+        reference versions through the composite key, versions reference the strategy. Counts
+        are taken before the deletes rather than from ``rowcount`` on each statement, so the
+        number reported is of the rows that existed rather than of the rows one statement
+        happened to reach.
+        """
+        counts = self._counts(strategy_id)
+        self._execute(f"SELECT set_config('{PURGE_SETTING}', %s, true)", (str(strategy_id),))
+        self._execute(
+            "DELETE FROM run_series WHERE run_id IN (SELECT id FROM run WHERE strategy_id = %s)",
+            (strategy_id,),
+        )
+        self._execute("DELETE FROM run WHERE strategy_id = %s", (strategy_id,))
+        self._execute("DELETE FROM strategy_version WHERE strategy_id = %s", (strategy_id,))
+        self._execute("DELETE FROM strategy WHERE id = %s", (strategy_id,))
+        # Withdrawn immediately rather than left for COMMIT to revert. The unit of work may go
+        # on to do something else on this connection, and a permission that stays granted for
+        # the rest of the transaction is wider than the statements that needed it.
+        self._execute(f"SELECT set_config('{PURGE_SETTING}', '', true)")
+        return counts
+
+    def _counts(self, strategy_id: UUID) -> PurgeCounts:
+        """What a purge of this strategy would destroy."""
+        row = self._fetch_one(
+            """
+            SELECT
+              (SELECT count(*) FROM strategy_version WHERE strategy_id = %s),
+              (SELECT count(*) FROM run WHERE strategy_id = %s),
+              (SELECT count(*) FROM run_series
+                 WHERE run_id IN (SELECT id FROM run WHERE strategy_id = %s))
+            """,
+            (strategy_id, strategy_id, strategy_id),
+        )
+        assert row is not None  # scalar subqueries always yield one row
+        return PurgeCounts(versions=int(row[0]), runs=int(row[1]), series=int(row[2]))
 
     def count_by_verdict(self) -> dict[Verdict, int]:
         """Totals behind the filter chips. Absent verdicts are reported as zero, not omitted."""

@@ -675,14 +675,126 @@ def test_unknown_request_fields_are_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_there_is_no_way_to_delete_anything(client: TestClient) -> None:
-    """Append-only is a product guarantee, so the verb must not exist on the surface."""
+def test_a_version_has_no_delete_of_its_own(client: TestClient) -> None:
+    """Append-only survived the arrival of strategy deletion, narrowed rather than withdrawn.
+
+    A strategy can be deleted whole. Reaching into its history and removing one version cannot
+    be done at any layer -- that is the operation that would let a result be explained by a
+    config that no longer says what it said.
+    """
     created = _create(client)
-    for path in (
-        f"{BASE}/strategies/{created['id']}",
-        f"{BASE}/strategies/{created['id']}/versions/1",
-    ):
-        assert client.delete(path).status_code in (404, 405)
+    assert client.delete(f"{BASE}/strategies/{created['id']}/versions/1").status_code in (404, 405)
+
+
+# --------------------------------------------------------------------------- deleting
+
+
+def test_deleting_a_strategy_removes_it_and_reports_what_went(client: TestClient) -> None:
+    created = _create(client)
+    response = client.delete(f"{BASE}/strategies/{created['id']}")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"name": "momentum_v2", "versions": 1, "runs": 0, "series": 0}
+    assert client.get(f"{BASE}/strategies/{created['id']}").status_code == 404
+    assert client.get(f"{BASE}/strategies").json()["strategies"] == []
+
+
+def test_deleting_takes_the_whole_history_with_it(client: TestClient) -> None:
+    """Every version, not only the head -- and the count says how many."""
+    created = _create(client)
+    edited = {**_config(), "entry": {"signal": "close > sma_long * 1.01"}}
+    saved = client.post(
+        f"{BASE}/strategies/{created['id']}/versions",
+        json={"base_version": 1, "config": edited},
+    )
+    assert saved.status_code == 201, saved.text
+
+    response = client.delete(f"{BASE}/strategies/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["versions"] == 2
+
+
+def test_deleting_an_unknown_strategy_is_a_404(client: TestClient) -> None:
+    missing = "00000000-0000-0000-0000-0000000000ff"
+    response = client.delete(f"{BASE}/strategies/{missing}")
+    assert response.status_code == 404
+    assert response.json()["type"].endswith("not-found")
+
+
+def test_deleting_frees_the_name(client: TestClient) -> None:
+    """Names are unique, so a delete that left one reserved would be a delete that half-worked."""
+    created = _create(client)
+    assert client.delete(f"{BASE}/strategies/{created['id']}").status_code == 200
+    assert _create(client)["name"] == "momentum_v2"
+
+
+def test_a_strategy_with_a_queued_run_is_not_deletable(client: TestClient) -> None:
+    """The worker holds a lease on it; the caller cancels first, deliberately rather than as a
+    side effect of a delete they might still reconsider."""
+    created = _create(client)
+    launched = client.post(f"{BASE}/strategies/{created['id']}/runs", json={"kind": "backtest"})
+    assert launched.status_code == 202, launched.text
+
+    response = client.delete(f"{BASE}/strategies/{created['id']}")
+    assert response.status_code == 409
+    assert "queued or running" in response.json()["detail"]
+    assert client.get(f"{BASE}/strategies/{created['id']}").status_code == 200
+
+
+def test_a_cancelled_run_no_longer_blocks_the_delete(client: TestClient) -> None:
+    """The refusal is about runs in flight, not about a strategy having ever been run."""
+    created = _create(client)
+    launched = client.post(f"{BASE}/strategies/{created['id']}/runs", json={"kind": "backtest"})
+    run_id = launched.json()["id"]
+    # 202: a queued run is ended outright, since nothing has started to ask.
+    assert client.post(f"{BASE}/runs/{run_id}/cancel").status_code == 202
+
+    response = client.delete(f"{BASE}/strategies/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["runs"] == 1
+
+
+def test_a_forked_child_blocks_deleting_its_parent(client: TestClient) -> None:
+    """Its lineage is a foreign key into rows this would remove, and "forked from X v1" is a
+    historical fact rather than a crumb worth pointing at nothing."""
+    parent = _create(client)
+    forked = client.post(f"{BASE}/strategies/{parent['id']}/fork", json={"name": "momentum_v3"})
+    assert forked.status_code == 201, forked.text
+
+    response = client.delete(f"{BASE}/strategies/{parent['id']}")
+    assert response.status_code == 409
+    assert "momentum_v3" in response.json()["detail"]
+
+    # The child itself has nothing descending from it, and deleting it clears the way.
+    child_id = forked.json()["strategy"]["id"]
+    assert client.delete(f"{BASE}/strategies/{child_id}").status_code == 200
+    assert client.delete(f"{BASE}/strategies/{parent['id']}").status_code == 200
+
+
+def test_the_refusal_names_every_descendant(client: TestClient) -> None:
+    parent = _create(client)
+    for name in ("branch_a", "branch_b"):
+        assert (
+            client.post(f"{BASE}/strategies/{parent['id']}/fork", json={"name": name}).status_code
+            == 201
+        )
+
+    detail = client.delete(f"{BASE}/strategies/{parent['id']}").json()["detail"]
+    assert "branch_a" in detail
+    assert "branch_b" in detail
+
+
+def test_deleting_a_fork_leaves_its_parent_alone(client: TestClient) -> None:
+    """Lineage points one way. A child is not part of its parent, and removing it takes
+    nothing of the parent's with it."""
+    parent = _create(client)
+    forked = client.post(f"{BASE}/strategies/{parent['id']}/fork", json={"name": "momentum_v3"})
+    child_id = forked.json()["strategy"]["id"]
+
+    assert client.delete(f"{BASE}/strategies/{child_id}").status_code == 200
+    parent_detail = client.get(f"{BASE}/strategies/{parent['id']}")
+    assert parent_detail.status_code == 200
+    assert parent_detail.json()["counts"]["versions"] == 1
 
 
 def test_the_openapi_document_is_served(client: TestClient) -> None:

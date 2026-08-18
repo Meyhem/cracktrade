@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
+import { useComputedColorScheme } from '@mantine/core'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
-import { EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { bracketMatching } from '@codemirror/language'
 import { yaml } from '@codemirror/lang-yaml'
 import { lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
+import { editorTheme } from './editorTheme'
 import type { Issue } from '../../api/types'
 
 /**
@@ -14,6 +16,11 @@ import type { Issue } from '../../api/types'
  * pushed in rather than produced by a `linter` extension, because a linter is a function from
  * document to problems and the only honest such function here is a round trip — running one
  * locally would mean two answers about the same text, differing while a request is in flight.
+ *
+ * Colours live in `editorTheme`, swapped through a compartment when the scheme changes. This is
+ * the one surface in the app where a rebuild is not an option: the editor holds the user's
+ * unsaved text, cursor and undo history, and toggling the scheme is not a reason to lose any of
+ * them.
  */
 export function YamlPane({
   errors,
@@ -30,6 +37,12 @@ export function YamlPane({
   const view = useRef<EditorView | null>(null)
   const latest = useRef(onChange)
   latest.current = onChange
+  const scheme = useComputedColorScheme('light')
+  const theme = useRef(new Compartment())
+
+  // The scheme at creation time, readable without making it a dependency of the setup effect.
+  const schemeAtSetup = useRef(scheme)
+  schemeAtSetup.current = scheme
 
   useEffect(() => {
     const element = host.current
@@ -39,7 +52,7 @@ export function YamlPane({
       parent: element,
       state: EditorState.create({
         doc: value,
-        extensions: extensions(latest),
+        extensions: extensions(latest, theme.current, schemeAtSetup.current),
       }),
     })
     view.current = editor
@@ -51,6 +64,12 @@ export function YamlPane({
     // on every keystroke would discard the cursor along with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const editor = view.current
+    if (!editor) return
+    editor.dispatch({ effects: theme.current.reconfigure(editorTheme(scheme)) })
+  }, [scheme])
 
   useEffect(() => {
     const editor = view.current
@@ -69,13 +88,17 @@ export function YamlPane({
   return <div data-testid="yaml-editor" ref={host} style={{ minHeight: 400 }} />
 }
 
-function extensions(latest: { current: (next: string) => void }): Extension[] {
+function extensions(
+  latest: { current: (next: string) => void },
+  theme: Compartment,
+  scheme: 'light' | 'dark',
+): Extension[] {
   return [
     lineNumbers(),
     history(),
     bracketMatching(),
     lintGutter(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    theme.of(editorTheme(scheme)),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     yaml(),
     EditorView.lineWrapping,

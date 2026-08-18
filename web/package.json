@@ -24,6 +24,7 @@
     "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
+    "@lezer/highlight": "^1.2.3",
     "@mantine/core": "^9.5.1",
     "@mantine/dates": "^9.5.1",
     "@mantine/form": "^9.5.1",

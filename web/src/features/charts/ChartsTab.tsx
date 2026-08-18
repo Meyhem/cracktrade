@@ -81,10 +81,15 @@ export function ChartsTab() {
   const foldParam = params.get('fold')
   const fold = foldParam === null || foldParam === 'combined' ? null : Number(foldParam)
 
-  const set = (key: string, value: string | null) => {
+  // One navigation per interaction. Two sequential calls would each rebuild from this render's
+  // `params`, so the second would silently undo the first — which is how switching runs used to
+  // flash the query string and leave the old chart on screen.
+  const set = (updates: Record<string, string | null>) => {
     const next = new URLSearchParams(params)
-    if (value === null) next.delete(key)
-    else next.set(key, value)
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null) next.delete(key)
+      else next.set(key, value)
+    }
     setParams(next, { replace: true })
   }
 
@@ -102,8 +107,7 @@ export function ChartsTab() {
               description="Charts describe one run."
               label="Showing"
               onChange={(value) => {
-                set('run', value)
-                set('fold', null)
+                set({ run: value, fold: null })
               }}
               value={selected.id}
               w={460}
@@ -136,7 +140,7 @@ export function ChartsTab() {
         <Box style={{ flex: 1, minWidth: 0 }}>
           <RunCharts
             fold={fold}
-            onFold={(next) => set('fold', next === null ? 'combined' : String(next))}
+            onFold={(next) => set({ fold: next === null ? 'combined' : String(next) })}
             onLaunchWalkForward={() => setLaunchOpen(true)}
             run={selected}
             tradeFloorValue={meta.meta.trade_floor}

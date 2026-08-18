@@ -128,6 +128,30 @@ describe('choosing a run', () => {
     expect(await screen.findByText(/the most serious run available/i)).toBeInTheDocument()
   })
 
+  it('switches the charts when another run is picked', async () => {
+    // The selection is two query parameters, and writing them with two separate navigations
+    // meant the second rebuilt from the pre-navigation URL and discarded the first. The symptom
+    // was a query string that flickered and a run selector that snapped back.
+    server.use(
+      ...answering({
+        runs: [
+          runFixture({ id: RUN_ID, kind: 'walk_forward', number: 7 }),
+          runFixture({ id: 'bt', kind: 'backtest', number: 6 }),
+        ],
+        result: { metrics: metrics(), trades: trades(48), folds: [] },
+      }),
+    )
+    open()
+
+    const selector = await screen.findByRole('combobox', { name: /Showing/ })
+    await userEvent.click(selector)
+    await userEvent.click(await screen.findByRole('option', { name: /Backtest #6/ }))
+
+    await waitFor(() => {
+      expect((selector as HTMLInputElement).value).toMatch(/Backtest #6/)
+    })
+  })
+
   it('warns when the selected run describes a configuration that has since changed', async () => {
     server.use(
       ...answering({

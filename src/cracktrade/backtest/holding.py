@@ -44,6 +44,7 @@ def holding_signal_nb(
     c: Any,
     entries: npt.NDArray[np.bool_],
     exits: npt.NDArray[np.bool_],
+    forced_exits: npt.NDArray[np.bool_],
     entry_bar: npt.NDArray[np.int64],
     minimum: int,
     maximum: int,
@@ -57,12 +58,21 @@ def holding_signal_nb(
     written on the first bar at which a position is *observed*, which is the bar after the one
     the entry order filled on -- ``position_now`` reflects the state before this bar's order.
 
+    ``forced_exits`` carries the intraday session-close rule (spec section 7.6) and is checked
+    **before** the minimum-holding gate, which is the whole reason it is a separate argument
+    rather than being OR-ed into ``exits`` by the caller. The minimum-holding rule works by
+    suppressing exits, so a forced close folded into the ordinary exit series would be
+    swallowed by it and the position would be carried overnight -- silently, and precisely on
+    the strategies that asked to hold for a while. An empty history's mask is all-False, so
+    daily runs are unaffected.
+
     Stops are not consulted here. They are applied by the simulation independently and always
-    fire, including inside the minimum-holding window: a stop-loss disabled for the first N days
-    is not a stop-loss (spec section 7.2).
+    fire, including inside the minimum-holding window: a stop-loss disabled for the first N
+    bars is not a stop-loss (spec section 7.2).
     """
     is_entry = flex_select_auto_nb(entries, c.i, c.col, c.flex_2d)
     is_exit = flex_select_auto_nb(exits, c.i, c.col, c.flex_2d)
+    is_forced = flex_select_auto_nb(forced_exits, c.i, c.col, c.flex_2d)
 
     if c.position_now == 0:
         entry_bar[c.col] = _UNSET
@@ -72,6 +82,9 @@ def holding_signal_nb(
         entry_bar[c.col] = c.i - 1
 
     held = c.i - entry_bar[c.col]
+
+    if is_forced:
+        return False, True, False, False
 
     if maximum > 0 and held >= maximum:
         return False, True, False, False

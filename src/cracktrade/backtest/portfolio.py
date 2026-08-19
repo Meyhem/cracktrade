@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
+from cracktrade.backtest.calendar import DAILY, Calendar
 from cracktrade.backtest.holding import (
     as_signal_column,
     holding_signal_nb,
@@ -36,6 +37,8 @@ from cracktrade.config import PositionSizingType
 from cracktrade.errors import BacktestError
 
 if TYPE_CHECKING:
+    import numpy.typing as npt
+
     from cracktrade.backtest.stops import StopConfiguration
     from cracktrade.config import ExecutionConfig, PositionSizing
     from cracktrade.data import MarketData
@@ -50,13 +53,6 @@ STOP_EXIT_PRICE: Final = "stoplimit"
 #: which is what the configuration means.
 STOP_ENTRY_PRICE: Final = "fillprice"
 
-#: Bar frequency. Daily only -- see :func:`require_daily_bars`.
-FREQ: Final = "1D"
-
-#: Trading days per year, for annualising. Passed at every metric call site rather than through
-#: ``vbt.settings``, which is process-global state a library must not mutate.
-YEAR_FREQ: Final = "252 days"
-
 #: How each sizing type maps onto vectorbt. Spec section 3.8.
 _SIZING: Final[dict[PositionSizingType, str]] = {
     PositionSizingType.FIXED_PCT: "percent",
@@ -64,41 +60,57 @@ _SIZING: Final[dict[PositionSizingType, str]] = {
     PositionSizingType.FIXED_SHARES: "amount",
 }
 
+#: How far a history's measured bar spacing may sit from its declared interval before the two
+#: are treated as disagreeing. Generous, because the median is compared against exact bar
+#: widths that differ by a factor of two between adjacent intervals -- 25% cannot confuse 15m
+#: with 30m, but absorbs a history whose sessions are unusually chopped up.
+_SPACING_TOLERANCE: Final = 0.25
 
-def require_daily_bars(data: MarketData) -> None:
-    """Reject any history that is not daily bars.
 
-    Annualisation assumes 252 bars per year. An intraday or weekly series would be silently
-    mis-annualised by a factor of several, so the frequency is checked rather than assumed
-    (spec section 7.5).
+def require_interval(data: MarketData) -> None:
+    """Reject a history whose bars are not the width the strategy declared.
 
-    Real daily data is not evenly spaced -- weekends and holidays leave gaps -- so the test is
-    on the *median* spacing rather than on an inferred frequency, which is ``None`` for any
-    genuine market history.
+    Everything time-based is annualised from the declared interval (spec section 7.5), so a
+    daily strategy fed 30-minute bars would divide by a year that is seventeen times too short,
+    and an intraday strategy fed daily bars by one seventeen times too long. Neither failure is
+    visible in the output: both produce a plausible-looking Sharpe. This check is what stands
+    between the user and that number.
+
+    Real market data is not evenly spaced -- weekends, holidays and overnight gaps all leave
+    holes -- so the test is on the *median* spacing rather than on an inferred frequency, which
+    is ``None`` for any genuine history. On intraday data the median is the within-session
+    spacing, because the overnight gaps are a minority of the intervals.
 
     Raises:
-        BacktestError: the bars are not daily.
+        BacktestError: the bars do not match the declared interval.
     """
     if len(data) < 3:
         return
 
-    gaps = np.diff(data.index.to_numpy()).astype("timedelta64[h]").astype(np.float64)
+    gaps = np.diff(data.index.to_numpy()).astype("timedelta64[s]").astype(np.float64)
     median_gap = float(np.median(gaps))
+    expected = data.interval.bar_timedelta.total_seconds()
 
-    if median_gap < 24.0:
-        msg = (
-            f"{data.ticker} has a median bar spacing of {median_gap:.1f} hours, which is "
-            f"intraday. This engine annualises on 252 daily bars and would overstate every "
-            f"time-based metric on intraday data"
-        )
-        raise BacktestError(msg)
+    if abs(median_gap - expected) <= _SPACING_TOLERANCE * expected:
+        return
 
-    if median_gap > 24.0 * 4:
-        msg = (
-            f"{data.ticker} has a median bar spacing of {median_gap / 24:.1f} days, which is "
-            f"not daily. This engine annualises on 252 daily bars"
-        )
-        raise BacktestError(msg)
+    msg = (
+        f"{data.ticker} was requested at {data.interval.value} bars, but its median bar "
+        f"spacing is {_describe(median_gap)} rather than the expected "
+        f"{_describe(expected)}. Every annualised figure is derived from the declared "
+        f"interval, so continuing would scale the return, Sharpe and drawdown of this run by "
+        f"a factor of roughly {expected / median_gap:.3g} without saying so"
+    )
+    raise BacktestError(msg)
+
+
+def _describe(seconds: float) -> str:
+    """A bar spacing in whichever unit reads naturally."""
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} minutes"
+    if seconds < 24 * 3600:
+        return f"{seconds / 3600:.1f} hours"
+    return f"{seconds / (24 * 3600):.1f} days"
 
 
 def simulate(
@@ -110,6 +122,8 @@ def simulate(
     sizing: PositionSizing | None,
     *,
     holding: tuple[int, int] = (0, 0),
+    forced_exits: npt.NDArray[np.bool_] | None = None,
+    calendar: Calendar = DAILY,
     seed: int,
 ) -> vbt.Portfolio:
     """Run one simulation with every result-affecting parameter pinned.
@@ -121,11 +135,18 @@ def simulate(
     the holding-period rules can be applied against realised positions during the run (spec
     section 7.2). A side effect worth noting: the signal function returns one decision per bar,
     so an entry and an exit can never collide and vectorbt's conflict resolution is never
-    reached.
+    reached -- which is also why the ``signals.clean`` quirk that deletes an exit colliding
+    with an entry cannot bite here.
+
+    ``forced_exits`` is the intraday session-close mask (spec section 7.6); ``None`` means no
+    bar forces a close, which is the daily case.
     """
     frame = data.frame
     size, size_type = _resolve_size(sizing)
     minimum, maximum = holding
+    forced = (
+        np.zeros(len(frame), dtype=np.bool_) if forced_exits is None else forced_exits
+    ).reshape(-1, 1)
 
     return vbt.Portfolio.from_signals(
         close=frame["Close"],
@@ -133,6 +154,7 @@ def simulate(
         signal_args=(
             as_signal_column(entries),
             as_signal_column(exits),
+            forced,
             holding_state(),
             minimum,
             maximum,
@@ -161,7 +183,7 @@ def simulate(
         accumulate=False,
         cash_sharing=False,
         size_granularity=None,
-        freq=FREQ,
+        freq=calendar.freq,
         seed=seed,
     )
 
@@ -183,11 +205,13 @@ def _resolve_size(sizing: PositionSizing | None) -> tuple[float, str]:
     return value, size_type
 
 
-def metric(portfolio: vbt.Portfolio, name: str, **kwargs: Any) -> Any:
-    """Call a vectorbt metric with the trading-day calendar pinned.
+def metric(
+    portfolio: vbt.Portfolio, name: str, *, calendar: Calendar = DAILY, **kwargs: Any
+) -> Any:
+    """Call a vectorbt metric with the run's trading calendar pinned.
 
     ``year_freq`` is *not* a ``from_signals`` parameter in vectorbt 1.0.0 -- it is a per-call
     argument on the metric methods, defaulting to a 365-day year. Left alone it would inflate
     every annualised figure: Sharpe by a factor of sqrt(365/252), about 1.20 (audit finding A2).
     """
-    return getattr(portfolio, name)(year_freq=YEAR_FREQ, **kwargs)
+    return getattr(portfolio, name)(year_freq=calendar.year_freq, **kwargs)

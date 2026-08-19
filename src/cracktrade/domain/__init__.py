@@ -98,7 +98,19 @@ class RunSeries:
 
 @dataclass(frozen=True, slots=True)
 class Trade:
-    """One closed or still-open position."""
+    """One closed or still-open position.
+
+    ``entry_date`` and ``exit_date`` are a plain ``date`` on a daily run and a ``datetime`` on
+    an intraday one. The annotation covers both because ``datetime`` is a subclass of ``date``;
+    the distinction is not cosmetic, since two trades in one Xetra session would otherwise
+    report the same moment. It reaches a client through the serializer as ``2020-01-01`` or
+    ``2026-08-18T17:00:00`` respectively, and the daily shape is byte-identical to what it was.
+
+    ``holding_bars`` counts **bars**, and always did -- it is ``exit_idx - entry_idx``. It was
+    called ``holding_days`` while every bar was a day. Reading "avg holding: 5" as five days
+    when the bars are half-hours is exactly the authoritative-looking falsehood this engine
+    exists to avoid, so the name now says what the number is.
+    """
 
     entry_date: date
     exit_date: date | None
@@ -108,7 +120,7 @@ class Trade:
     pnl: float
     return_pct: float
     fees: float
-    holding_days: int
+    holding_bars: int
     is_open: bool
 
     @property
@@ -152,7 +164,7 @@ class Metrics:
     sortino_ratio: float
     calmar_ratio: float
     exposure_pct: float
-    avg_holding_days: float
+    avg_holding_bars: float
     best_trade_pnl: float
     worst_trade_pnl: float
     bars: int
@@ -253,6 +265,14 @@ class BacktestResult:
     #: Per-bar chart series, present only when the caller asked for them. Captured while the
     #: run executed, never recomputed -- see :mod:`cracktrade.backtest.series`.
     series: RunSeries | None = None
+
+    #: Trades that were still open when their session ended, on an intraday run. Always 0 on a
+    #: daily one, where holding overnight is the point. Zero is the healthy intraday value; a
+    #: non-zero count means the venue closed earlier than the learned time -- a half-day, an
+    #: early close, or the first session of the history -- and the position genuinely carried.
+    #: Reported rather than suppressed: an engine that promises "never overnight" and quietly
+    #: does it anyway is worse than one that says when it happened (spec section 7.6).
+    overnight_carries: int = 0
 
 
 @dataclass(frozen=True, slots=True)

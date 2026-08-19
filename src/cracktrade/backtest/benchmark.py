@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from cracktrade.backtest.portfolio import YEAR_FREQ, simulate
+from cracktrade.backtest.calendar import DAILY, Calendar
+from cracktrade.backtest.portfolio import simulate
 from cracktrade.backtest.stops import StopConfiguration
 from cracktrade.domain import BenchmarkComparison, Metrics
 
@@ -34,6 +35,7 @@ def buy_and_hold_portfolio(
     sizing: PositionSizing | None,
     *,
     start_bar: int,
+    calendar: Calendar = DAILY,
     seed: int = 0,
 ) -> vbt.Portfolio:
     """Simulate buying at ``start_bar`` and holding to the end of the history.
@@ -41,6 +43,11 @@ def buy_and_hold_portfolio(
     ``start_bar`` is the first bar on which the strategy could itself have traded -- the bar
     after warm-up ends. Starting the benchmark earlier would hand it return the strategy was
     structurally unable to capture, which flatters the strategy by comparison.
+
+    No session rules are applied. Buy-and-hold *is* an overnight position; forcing it flat each
+    afternoon would make it a different strategy, and a much worse benchmark. The comparison
+    stays honest because both sides run through the same simulation with the same costs -- and
+    the point of the hurdle is precisely that an intraday strategy has to earn its constraint.
     """
     index = data.index
     entries = pd.Series(False, index=index, dtype=bool)
@@ -60,6 +67,7 @@ def buy_and_hold_portfolio(
         ),
         execution=execution,
         sizing=sizing,
+        calendar=calendar,
         seed=seed,
     )
 
@@ -70,21 +78,24 @@ def compare(
     *,
     strategy_returns: pd.Series,
     benchmark_returns: pd.Series,
+    calendar: Calendar = DAILY,
 ) -> BenchmarkComparison:
     """Measure a strategy against the benchmark."""
     return BenchmarkComparison(
         benchmark=benchmark_metrics,
         excess_return_pct=strategy_metrics.total_return_pct - benchmark_metrics.total_return_pct,
         excess_cagr_pct=strategy_metrics.cagr_pct - benchmark_metrics.cagr_pct,
-        information_ratio=_information_ratio(strategy_returns, benchmark_returns),
+        information_ratio=_information_ratio(strategy_returns, benchmark_returns, calendar),
     )
 
 
-def _information_ratio(strategy: pd.Series, benchmark: pd.Series) -> float:
+def _information_ratio(strategy: pd.Series, benchmark: pd.Series, calendar: Calendar) -> float:
     """Mean active return over the standard deviation of active return, annualised.
 
-    Computed here rather than through vectorbt so that the annualisation uses the same 252-day
-    calendar as everything else, with no dependence on a global default.
+    Computed here rather than through vectorbt so that the annualisation uses the run's own
+    calendar, with no dependence on a global default. It previously read the period count by
+    splitting the ``"252 days"`` string apart, which stopped being a number of periods the
+    moment a period was not a day.
     """
     active = (strategy - benchmark).dropna()
     if active.empty:
@@ -92,5 +103,4 @@ def _information_ratio(strategy: pd.Series, benchmark: pd.Series) -> float:
     spread = float(active.std(ddof=1))
     if spread == 0.0 or np.isnan(spread):
         return 0.0
-    periods = float(YEAR_FREQ.split()[0])
-    return float(active.mean()) / spread * float(np.sqrt(periods))
+    return float(active.mean()) / spread * float(np.sqrt(calendar.periods_per_year))

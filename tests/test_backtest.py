@@ -21,7 +21,7 @@ from cracktrade.backtest import (
     ATR_WINDOW,
     atr_stop_series,
     build_stops,
-    require_daily_bars,
+    require_interval,
     run_simulation,
 )
 from cracktrade.backtest.portfolio import _resolve_size
@@ -418,25 +418,26 @@ def test_percentages_become_fractions() -> None:
     assert stops.tp_stop == pytest.approx(0.20)
 
 
-# --------------------------------------------------------------------- D14: daily bars only
+# ------------------------------------------------------- D14: bars must be what was declared
 
 
-def test_a_weekly_index_is_rejected() -> None:
+def test_a_weekly_index_is_rejected_for_a_daily_strategy() -> None:
     data = market(make_frame(np.linspace(100, 140, 40), freq="W"))
 
-    with pytest.raises(BacktestError, match="not daily"):
-        require_daily_bars(data)
+    with pytest.raises(BacktestError, match="median bar spacing"):
+        require_interval(data)
 
 
-def test_an_intraday_index_is_rejected() -> None:
+def test_an_intraday_index_is_rejected_for_a_daily_strategy() -> None:
+    """The failure this guards against is invisible in the output: only the scale is wrong."""
     data = market(make_frame(np.linspace(100, 140, 40), freq="h"))
 
-    with pytest.raises(BacktestError, match="intraday"):
-        require_daily_bars(data)
+    with pytest.raises(BacktestError, match="1d"):
+        require_interval(data)
 
 
 def test_business_days_with_weekend_gaps_are_accepted() -> None:
-    require_daily_bars(market(make_frame(np.linspace(100, 140, 40))))
+    require_interval(market(make_frame(np.linspace(100, 140, 40))))
 
 
 # ------------------------------------------------------------------ definedness carried through

@@ -14,7 +14,7 @@ import pandas as pd
 
 from cracktrade.backtest.benchmark import buy_and_hold_portfolio, compare
 from cracktrade.backtest.metrics import extract_metrics, extract_trades
-from cracktrade.backtest.runner import run_simulation
+from cracktrade.backtest.runner import overnight_carries, run_simulation
 from cracktrade.backtest.series import capture
 from cracktrade.domain import BacktestResult, DataVintage, Metrics
 from cracktrade.log import get_logger
@@ -39,14 +39,15 @@ def run_backtest(
     default: the CLI prints numbers and would only pay to build curves nobody asked for.
 
     Raises:
-        BacktestError: the history is not daily bars.
+        BacktestError: the bars are not the width the strategy declared.
         IndicatorError: an indicator could not be computed.
         SignalError: a signal expression could not be evaluated.
     """
     simulation = run_simulation(strategy, data, seed=seed)
     risk_free = strategy.execution.risk_free_rate
     warmup = simulation.warmup
-    metrics = extract_metrics(simulation.portfolio, risk_free_rate=risk_free)
+    calendar = simulation.calendar
+    metrics = extract_metrics(simulation.portfolio, risk_free_rate=risk_free, calendar=calendar)
 
     # The benchmark starts where the strategy could first have acted: one bar after warm-up, the
     # earliest a shifted signal can land. Starting it at bar zero would credit it with return the
@@ -56,16 +57,20 @@ def run_backtest(
         strategy.execution,
         strategy.position_sizing,
         start_bar=warmup + 1,
+        calendar=calendar,
         seed=seed,
     )
-    benchmark_metrics = extract_metrics(benchmark_portfolio, risk_free_rate=risk_free)
+    benchmark_metrics = extract_metrics(
+        benchmark_portfolio, risk_free_rate=risk_free, calendar=calendar
+    )
 
     result = BacktestResult(
         strategy_name=strategy.strategy.name,
         ticker=data.ticker,
         vintage=vintage_of(data),
         metrics=metrics,
-        trades=extract_trades(simulation.portfolio, data.index),
+        trades=extract_trades(simulation.portfolio, data.index, intraday=data.interval.is_intraday),
+        overnight_carries=overnight_carries(simulation, data),
         entry_defined_pct=simulation.entry_signal.defined_pct,
         exit_defined_pct=simulation.exit_signal.defined_pct if simulation.exit_signal else None,
         active_stop=simulation.stops.active_stop,
@@ -75,6 +80,7 @@ def run_backtest(
             benchmark_metrics,
             strategy_returns=simulation.portfolio.returns(),
             benchmark_returns=benchmark_portfolio.returns(),
+            calendar=calendar,
         ),
         risk_free_rate=risk_free,
         warmup_bars=warmup,

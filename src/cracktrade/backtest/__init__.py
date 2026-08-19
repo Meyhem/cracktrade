@@ -8,6 +8,7 @@ object. :func:`run_backtest` is the boundary.
 from __future__ import annotations
 
 from cracktrade.backtest.benchmark import buy_and_hold_portfolio, compare
+from cracktrade.backtest.calendar import DAILY, Calendar
 from cracktrade.backtest.holding import holding_bounds
 from cracktrade.backtest.metrics import (
     extract_metrics,
@@ -17,23 +18,23 @@ from cracktrade.backtest.metrics import (
     yearly_returns,
 )
 from cracktrade.backtest.portfolio import (
-    FREQ,
     STOP_ENTRY_PRICE,
     STOP_EXIT_PRICE,
-    YEAR_FREQ,
     metric,
-    require_daily_bars,
+    require_interval,
 )
 from cracktrade.backtest.results import frame_digest, run_backtest, vintage_of
-from cracktrade.backtest.runner import Simulation, run_simulation
+from cracktrade.backtest.runner import Simulation, overnight_carries, run_simulation
+from cracktrade.backtest.sessionclose import SessionRules, session_rules
 from cracktrade.backtest.stops import ATR_WINDOW, StopConfiguration, atr_stop_series, build_stops
 
 __all__ = [
     "ATR_WINDOW",
-    "FREQ",
+    "DAILY",
     "STOP_ENTRY_PRICE",
     "STOP_EXIT_PRICE",
-    "YEAR_FREQ",
+    "Calendar",
+    "SessionRules",
     "Simulation",
     "StopConfiguration",
     "atr_stop_series",
@@ -45,10 +46,12 @@ __all__ = [
     "frame_digest",
     "holding_bounds",
     "metric",
+    "overnight_carries",
     "per_period_risk_free",
-    "require_daily_bars",
+    "require_interval",
     "run_backtest",
     "run_simulation",
+    "session_rules",
     "vintage_of",
     "worst_rolling_12m",
     "yearly_returns",

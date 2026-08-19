@@ -76,6 +76,7 @@ BACKTEST_KEYS = frozenset(
         "risk_free_rate",
         "warmup_bars",
         "series",
+        "overnight_carries",
     }
 )
 

@@ -1064,10 +1064,15 @@ per bar i, given position_now:
     if flat:                      emit entry := entries[i];  forget the entry bar
     else:
         held := i - entry_bar
-        if max_holding and held >= max_holding:   emit exit          # forced
+        if forced_exits[i]:                       emit exit          # session close, §7.6
+        elif max_holding and held >= max_holding: emit exit          # forced
         elif held < min_holding:                  emit nothing       # suppressed
         else:                                     emit exit := exits[i]
 ```
+
+`forced_exits` is all-False on a daily run. It is checked **before** the minimum-holding gate
+deliberately: that gate works by suppressing exits, so a session close folded into `exits` would
+be swallowed by it. See §7.6.
 
 Stops are not consulted here: the simulation applies them independently and they always fire,
 including inside the minimum-holding window.
@@ -1149,7 +1154,7 @@ explicitly.
 | `upon_stop_exit` | `'close'` | **[FIX]** implicit |
 | `use_stops` | `True` | **[FIX]** implicit |
 | `signal_func_nb` | the holding-rule function, §7.2 | **[NEW]** |
-| `freq` | `'1D'` | **[PORT]** `portfolio.py:63` |
+| `freq` | the run's `Calendar.freq` — `'1D'`, `'30min'`, … | **[PORT]** `portfolio.py:63` |
 | `seed` | from settings | **[NEW]** |
 
 **[FIX] `year_freq` is not a `from_signals` parameter.** Verified against the installed vectorbt
@@ -1180,12 +1185,104 @@ default `year_freq` of 365 days when computing `annualized_return()`
 `year_freq='252 days'` everywhere — daily *trading* bars, not calendar days — and no metric computes
 its own annualisation factor.
 
-**[NEW]** Daily bars only. `freq` is not configurable; an index whose inferred frequency is not daily
-is rejected at the data contract check (§4.1) rather than silently mis-annualised.
-
 **[PORT]** Long-only. Legacy never stated this; it was a library default
 (`src/execution/portfolio.py:50-64` passes no `direction`). It is now explicit, and short signals are
 not expressible.
+
+#### The trading calendar **[NEW]**
+
+`freq` and `year_freq` were module constants — `'1D'` and `'252 days'` — while every history was
+daily. They are now a `Calendar` computed once per run, because those constants are not merely
+inadequate for intraday data, they are *silently* inadequate: a 30-minute Sharpe annualised on a
+252-bar year is overstated by √17, roughly a factor of four, printed to two decimal places with
+nothing to suggest it is anything but the truth.
+
+| Interval | `freq` | `periods_per_year` |
+| --- | --- | --- |
+| `1d` | `1D` | 252 |
+| intraday | `interval.pandas_freq` | 252 × `median_bars_per_session` |
+
+**`bars_per_session` is measured from the ticker's own history, never assumed.** It is a property
+of the *exchange*, not of the interval: a 30-minute Xetra session is 17 bars and a 30-minute New
+York session is 13. No constant satisfies both, and half-days, early closes and late opens
+disagree with any figure chosen — hence a median over completed sessions (§4.6).
+
+`year_freq` is a `Timedelta` giving the length of a trading year *in trading time*, since vectorbt
+derives its annualisation factor as `year_freq / freq`: 252 days at `1d`, and 4284 half-hours
+(≈89 calendar days) at 30-minute Xetra bars. Passing a calendar year is audit finding A2; passing
+a *daily* year on intraday bars is the same error one interval down.
+
+Everything derived from the old constants takes the calendar: the risk-free per-period conversion
+(exponent `1/periods_per_year`), the returns accessor, the worst-rolling-12-month window, and the
+information ratio in the benchmark — which previously recovered its period count by splitting the
+string `'252 days'` apart, and stopped being a number of periods the moment a period was not a day.
+`settings.TRADING_DAYS_PER_YEAR` remains the daily basis and is the *sessions* factor intraday.
+
+`DAILY` is the same object the constants were, so daily results are not merely equal to what they
+were — they are produced by identical values.
+
+**Interval agreement is checked, not assumed** (`require_interval`). A history whose median bar
+spacing disagrees with the declared interval by more than 25% is rejected, naming both and the
+factor by which the run's figures would have been scaled. Adjacent intervals differ by a factor of
+two, so the tolerance cannot confuse 15m with 30m while still absorbing an unusually chopped-up
+history. The median is used because real data has weekend, holiday and overnight gaps; on intraday
+data the median is the within-session spacing, since overnight gaps are a minority of the
+intervals.
+
+### 7.6 Intraday session semantics **[NEW]**
+
+> **An intraday strategy never holds a position overnight.** Exits are forced at the end of each
+> session; entries are suppressed on the bar the forced exit lands on, and in any session whose
+> close cannot yet be predicted.
+
+The trader executes manually through a retail broker. A position left open across a close carries
+gap risk the backtest cannot model and the trader did not agree to.
+
+**The causality trap.** "The last bar of the session" naively means "no later bar exists on this
+date" — a fact about the *future* of bar `t`. Implementing it that way is look-ahead, and §2.4's
+harness catches it at once: truncate mid-session and every truncation point becomes a phantom
+close, so a bar's decision depends on how much history follows it. The rule is therefore built
+from two layers, both pure functions of the past:
+
+1. **Learned close.** The expected close time for bar `t` is the **latest bar-open time observed
+   among the 5 most recent completed sessions** — completed meaning "whose date is strictly
+   earlier than `t`'s", knowable at `t`. A bar landing on that time is the session's close: the
+   position is exited and no entry is taken. Taking the *latest* close across the window rather
+   than the most recent is what makes a half-day inside the window harmless — it lowers no
+   expectation, so the next normal session is still recognised.
+2. **Safety net at the next open.** A position surviving a session boundary is closed on the first
+   bar of the new session; "the previous bar has a different date" is again a fact about the past.
+
+**The first session of a history is not traded at all.** It has no earlier session to learn from,
+so its close cannot be predicted, and opening a position the engine cannot promise to close would
+breach the constraint on bar one of every intraday run — and would pin `overnight_carries` at 1
+forever, making it useless as a signal. Refusing to enter costs one session of warm-up, of a kind
+the engine already has for indicators.
+
+**`overnight_carries` is reported, never suppressed.** Zero is the healthy value. A non-zero count
+means the venue closed earlier than the learned time — the learned close is *wrong* several times
+a year by construction, since a half-day never matches the latest recent close. Two years of Xetra
+hourly bars contain an early close, a late open and two five-bar December sessions; the LSE trades
+four-bar half-days on dates Xetra is shut outright. Saying "a position carried overnight" when one
+did is the honest outcome; guessing a shorter close to make the number nicer would be inventing an
+exchange calendar the engine does not have.
+
+**Interaction with the minimum holding period.** `min_holding_bars` works by *suppressing* exits,
+so the forced close is passed to the signal function as a separate argument checked **before** that
+gate rather than being OR-ed into the ordinary exit series. Folding it in would let the suppression
+swallow it — and only on strategies that asked to hold for a while, which is the worst possible
+population to break. A minimum at or above the measured session length is refused outright: no
+position could ever reach it, so the strategy simulated would not be the one written.
+
+**The forced exit fills at the closing bar's open**, like every other signal in the engine (§6.4).
+An intraday strategy is therefore flat from the last bar's open, forgoing that final bar's move.
+This is a real cost and is the conservative direction; introducing a close-fill convention for this
+one case would put two execution conventions in the engine.
+
+**The buy-and-hold benchmark is not session-constrained.** Buy-and-hold *is* an overnight position;
+forcing it flat each afternoon would make it a different and much weaker hurdle. Both sides still
+run through the same simulation with the same costs, and the point of the comparison is precisely
+that an intraday strategy has to earn its constraint.
 
 ---
 

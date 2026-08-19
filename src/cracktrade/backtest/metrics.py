@@ -20,36 +20,43 @@ overstatement, silently.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
-from cracktrade.backtest.portfolio import FREQ, YEAR_FREQ
+from cracktrade.backtest.calendar import DAILY, Calendar
 from cracktrade.domain import Metrics, Trade, YearReturn
-from cracktrade.settings import TRADING_DAYS_PER_YEAR
 
 if TYPE_CHECKING:
     import vectorbt as vbt
-
-#: Bars in a rolling one-year window, for the worst-12-month statistic.
-_ROLLING_YEAR = TRADING_DAYS_PER_YEAR
 
 #: vectorbt's trade status code for a closed position.
 _CLOSED = 1
 
 
-def per_period_risk_free(annual_rate: float) -> float:
+def per_period_risk_free(annual_rate: float, calendar: Calendar = DAILY) -> float:
     """Convert an annual risk-free rate to the per-period figure vectorbt expects.
 
-    ``(1 + r) ** (1 / 252) - 1``. Compounding the result over 252 periods returns the annual
-    rate, which is asserted by a test -- the conversion is the entire content of defect D4 and
-    getting its direction wrong is not detectable by eye.
+    ``(1 + r) ** (1 / periods_per_year) - 1``. Compounding the result over a year's worth of
+    periods returns the annual rate, which is asserted by a test -- the conversion is the
+    entire content of defect D4 and getting its direction wrong is not detectable by eye.
+
+    A "period" is one bar, so on 30-minute Xetra bars the exponent is 1/4284 rather than
+    1/252. Leaving it at 252 would charge a whole year of risk-free return against every
+    seventeen bars.
     """
-    return float((1.0 + annual_rate) ** (1.0 / TRADING_DAYS_PER_YEAR) - 1.0)
+    return float((1.0 + annual_rate) ** (1.0 / calendar.periods_per_year) - 1.0)
 
 
-def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float, offset: int = 0) -> Metrics:
+def extract_metrics(
+    portfolio: vbt.Portfolio,
+    *,
+    risk_free_rate: float,
+    offset: int = 0,
+    calendar: Calendar = DAILY,
+) -> Metrics:
     """Compute the full metric set for one simulated portfolio.
 
     ``offset`` discards the first ``offset`` bars from every statistic. It exists for the
@@ -62,7 +69,7 @@ def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float, offset: 
     and non-offset runs share one code path. At ``offset=0`` the two agree exactly, which is
     asserted by a test.
     """
-    rf = per_period_risk_free(risk_free_rate)
+    rf = per_period_risk_free(risk_free_rate, calendar)
     records = portfolio.trades.records
     if offset:
         records = records[records["entry_idx"] >= offset]
@@ -74,7 +81,7 @@ def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float, offset: 
     holding = (closed["exit_idx"] - closed["entry_idx"]).to_numpy() if not closed.empty else None
 
     returns = portfolio.returns().iloc[offset:]
-    accessor = returns.vbt.returns(freq=FREQ, year_freq=YEAR_FREQ)
+    accessor = returns.vbt.returns(freq=calendar.freq, year_freq=calendar.year_freq)
 
     return Metrics(
         total_trades=len(closed),
@@ -89,17 +96,25 @@ def extract_metrics(portfolio: vbt.Portfolio, *, risk_free_rate: float, offset: 
         sortino_ratio=_scalar(accessor.sortino_ratio(required_return=rf)),
         calmar_ratio=_scalar(accessor.calmar_ratio()),
         exposure_pct=100.0 * float(portfolio.position_mask().to_numpy()[offset:].mean()),
-        avg_holding_days=float(holding.mean()) if holding is not None and holding.size else 0.0,
+        avg_holding_bars=float(holding.mean()) if holding is not None and holding.size else 0.0,
         best_trade_pnl=float(pnl.max()) if pnl.size else 0.0,
         worst_trade_pnl=float(pnl.min()) if pnl.size else 0.0,
         bars=len(returns),
         yearly_returns=yearly_returns(returns),
-        worst_rolling_12m_pct=worst_rolling_12m(returns),
+        worst_rolling_12m_pct=worst_rolling_12m(returns, calendar),
     )
 
 
-def extract_trades(portfolio: vbt.Portfolio, index: pd.DatetimeIndex) -> tuple[Trade, ...]:
-    """Convert vectorbt's trade records into domain :class:`Trade` objects."""
+def extract_trades(
+    portfolio: vbt.Portfolio, index: pd.DatetimeIndex, *, intraday: bool = False
+) -> tuple[Trade, ...]:
+    """Convert vectorbt's trade records into domain :class:`Trade` objects.
+
+    ``intraday`` decides whether a trade is stamped with a date or a datetime. Daily runs keep
+    emitting bare dates -- ``date``, not a midnight ``datetime`` -- so that stored results and
+    the client's date parsing are byte-identical to what they were. An intraday trade needs the
+    time or two trades in one session would report the same moment.
+    """
     records = portfolio.trades.records
     if records.empty:
         return ()
@@ -128,21 +143,37 @@ def extract_trades(portfolio: vbt.Portfolio, index: pd.DatetimeIndex) -> tuple[T
         # "False", which is truthy in JavaScript. Every closed trade would read as open.
         is_open = bool(status[position] != _CLOSED)
         closed_at = min(exit_idx[position], bars - 1)
+        stamp = _stamp_intraday if intraday else _stamp_daily
         trades.append(
             Trade(
-                entry_date=index[entry_idx[position]].date(),
-                exit_date=None if is_open else index[closed_at].date(),
+                entry_date=stamp(index[entry_idx[position]]),
+                exit_date=None if is_open else stamp(index[closed_at]),
                 entry_price=float(entry_price[position]),
                 exit_price=None if is_open else float(exit_price[position]),
                 size=float(size[position]),
                 pnl=float(pnl[position]),
                 return_pct=100.0 * float(returns[position]),
                 fees=float(fees[position]),
-                holding_days=int(exit_idx[position] - entry_idx[position]),
+                holding_bars=int(exit_idx[position] - entry_idx[position]),
                 is_open=is_open,
             )
         )
     return tuple(trades)
+
+
+def _stamp_daily(timestamp: pd.Timestamp) -> date:
+    """A daily bar's identity is its date, and stays a ``date``.
+
+    Not a midnight ``datetime``: the serializer renders both through ``isoformat`` and a
+    ``datetime`` would start emitting ``2020-01-01T00:00:00`` where every stored result and
+    every client parser expects ``2020-01-01``.
+    """
+    return timestamp.date()
+
+
+def _stamp_intraday(timestamp: pd.Timestamp) -> datetime:
+    """An intraday bar's identity includes its time, in the exchange's local wall clock."""
+    return timestamp.to_pydatetime()
 
 
 def yearly_returns(returns: pd.Series) -> tuple[YearReturn, ...]:
@@ -158,14 +189,20 @@ def yearly_returns(returns: pd.Series) -> tuple[YearReturn, ...]:
     )
 
 
-def worst_rolling_12m(returns: pd.Series) -> float:
+def worst_rolling_12m(returns: pd.Series, calendar: Calendar = DAILY) -> float:
     """The worst any rolling one-year window did, as a percentage.
 
     A single aggregate figure cannot show that a strategy spent a year underwater. This can.
+
+    Returns ``0.0`` when the history is shorter than a year, which on a 15m or 30m strategy is
+    always: the provider serves at most 60 days at those intervals, and a year is 4284 bars.
+    That zero means "not measurable here", not "never lost money over a year", so the client
+    must present it as absent rather than plot it (spec section 13).
     """
-    if len(returns) < _ROLLING_YEAR:
+    window = round(calendar.periods_per_year)
+    if len(returns) < window:
         return 0.0
-    windows = (1.0 + returns).rolling(_ROLLING_YEAR).apply(np.prod, raw=True) - 1.0
+    windows = (1.0 + returns).rolling(window).apply(np.prod, raw=True) - 1.0
     worst = windows.min()
     return 0.0 if pd.isna(worst) else 100.0 * float(worst)
 

@@ -80,7 +80,7 @@ def metrics_with(**overrides: Any) -> Metrics:
         "sortino_ratio": 1.4,
         "calmar_ratio": 0.5,
         "exposure_pct": 40.0,
-        "avg_holding_days": 8.0,
+        "avg_holding_bars": 8.0,
         "best_trade_pnl": 500.0,
         "worst_trade_pnl": -300.0,
         "bars": 500,

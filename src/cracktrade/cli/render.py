@@ -121,7 +121,7 @@ def _render_metrics(strategy: Metrics, benchmark: Metrics, console: Console) -> 
         ("Trades", f"{strategy.total_trades}", f"{benchmark.total_trades}"),
         ("Win rate", f"{strategy.win_rate_pct:.1f}%", "—"),
         ("Profit factor", _ratio(strategy.profit_factor), "—"),
-        ("Avg holding days", f"{strategy.avg_holding_days:.1f}", "—"),
+        ("Avg holding bars", f"{strategy.avg_holding_bars:.1f}", "—"),
         (
             "Best / worst trade",
             f"{strategy.best_trade_pnl:+,.2f} / {strategy.worst_trade_pnl:+,.2f}",

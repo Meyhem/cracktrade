@@ -147,13 +147,13 @@ def test_the_risk_free_rate_is_reported_so_the_ratios_are_interpretable() -> Non
 
 def test_annualisation_uses_trading_days_not_calendar_days() -> None:
     """``year_freq`` defaults to a 365-day year, overstating CAGR by roughly 47%."""
-    from cracktrade.backtest.portfolio import YEAR_FREQ
+    from cracktrade.backtest.calendar import DAILY
 
     data = trending_market()
     result = run_backtest(strategy_with(), data)
     simulation_cagr = result.metrics.cagr_pct
 
-    assert YEAR_FREQ == "252 days"
+    assert DAILY.year_freq == pd.Timedelta("252 days")
 
     # Recompute the same figure on the calendar year vectorbt would have used by default.
     from cracktrade.backtest.runner import run_simulation
@@ -186,7 +186,7 @@ def test_every_metric_is_populated() -> None:
     assert 0.0 <= metrics.win_rate_pct <= 100.0
     assert 0.0 <= metrics.exposure_pct <= 100.0
     assert metrics.max_drawdown_pct <= 0.0
-    assert metrics.avg_holding_days > 0
+    assert metrics.avg_holding_bars > 0
     assert metrics.worst_trade_pnl <= metrics.best_trade_pnl
 
 
@@ -369,7 +369,7 @@ def test_trades_are_domain_objects_without_vectorbt_column_names() -> None:
     assert trades
     first = trades[0]
     assert isinstance(first.entry_date, date)
-    assert first.holding_days >= 0
+    assert first.holding_bars >= 0
     assert first.is_winner == (first.pnl > 0)
 
 

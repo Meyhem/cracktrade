@@ -164,7 +164,7 @@ describe('StrategyListPage', () => {
     expect(posted[0]).toMatchObject({ ticker: 'SAP.DE', interval: '30m' })
   })
 
-  it('offers only the evolvable intervals when composing from scratch', async () => {
+  it('offers every evolvable interval when composing, and sizes the range to it', async () => {
     const user = userEvent.setup()
     renderWithProviders(<StrategyListPage />)
 
@@ -172,10 +172,21 @@ describe('StrategyListPage', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('combobox', { name: 'Bar interval' }))
 
-    // 15m and 30m reach back 55 days, which cannot be cut into the segments an evolution
-    // selects on. Offering them would mean a long form filled in for a run refused at launch.
     const offered = (await screen.findAllByRole('option')).map((option) => option.textContent)
-    expect(offered).toEqual(['1 hour', 'Daily'])
+    expect(offered).toEqual(['15 minutes', '30 minutes', '1 hour', 'Daily'])
+
+    // Picking 30m replaces the twelve-year daily default with the seven weeks the provider
+    // actually serves — the whole reach, because an evolution wants every bar it can get. The
+    // range ends yesterday and reaches back the interval's 55 days less the 2-day margin.
+    await user.click(await screen.findByRole('option', { name: '30 minutes' }))
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('Start date')).toHaveValue(
+        dayjs().subtract(54, 'day').format('YYYY-MM-DD'),
+      ),
+    )
+    expect(within(dialog).getByLabelText('End date')).toHaveValue(
+      dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
+    )
   })
 
   it('refuses to submit a date range that runs backwards, and says why', async () => {

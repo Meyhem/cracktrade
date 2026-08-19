@@ -275,13 +275,14 @@ def test_an_evolution_runs_on_hourly_bars() -> None:
     assert parse_strategy(yaml.safe_load(result.strategy_yaml)).universe.interval is Interval.H1
 
 
-def test_evolution_on_half_hourly_bars_is_refused_rather_than_answered() -> None:
-    """Eight weeks cannot be cut into four segments a search may select on.
+def test_evolution_on_half_hourly_bars_runs_and_says_how_thin_it_is() -> None:
+    """Eight weeks is all 30m will ever serve, and the run is allowed on exactly that.
 
-    Left at the daily floor it *runs*: 60 bars is three and a half Xetra sessions, so the
-    division passes and returns a composed strategy chosen between thousands of structures on a
-    fortnight of market. That is precisely the authoritative-looking-and-wrong number the engine
-    exists not to produce, so the floor is counted in sessions and this is refused instead.
+    It divides into four segments of about four Xetra sessions each. Nothing about that is
+    comfortable, and the protection is not a refusal but the honesty either side of it: the
+    result carries the thin-history flag naming the sessions it covers, and the winner still
+    faces the holdout and the robustness checks like any other. A user who asks for a search on
+    seven weeks of market, having been told that is what it is, gets it.
     """
     chassis = Chassis(
         name="evolved_thin",
@@ -290,8 +291,47 @@ def test_evolution_on_half_hourly_bars_is_refused_rather_than_answered() -> None
         end_date=date(2026, 8, 18),
         interval=Interval.M30,
     )
-    with pytest.raises(EvolutionError, match="widen the date range"):
-        evolve(chassis, half_hourly(), settings=GaSettings(population=8, generations=2), seed=0)
+    result = evolve(
+        chassis, half_hourly(), settings=GaSettings(population=8, generations=2), seed=0
+    )
+
+    assert "interval: 30m" in result.strategy_yaml
+    assert result.history is not None
+    assert result.history.limited
+    assert result.history.note is not None
+    assert "37 sessions of 30m bars" in result.history.note
+
+
+def test_a_fortnight_of_hourly_bars_is_still_refused_with_the_arithmetic_named() -> None:
+    """The floor bends for the shortest intervals; it does not disappear.
+
+    Nine bars to a Xetra hour means eight weeks is 333 bars, and the block library's warm-up
+    takes 200 of them before a single bar is scored. There is no honest division here, so the
+    run is refused and the message says what was short and by how much.
+    """
+    chassis = Chassis(
+        name="evolved_hourly_thin",
+        ticker="SAP.DE",
+        start_date=date(2026, 6, 29),
+        end_date=date(2026, 8, 18),
+        interval=Interval.H1,
+    )
+    thin = market(interval="1h", start="2026-06-29", end="2026-08-18")
+    with pytest.raises(EvolutionError, match="after the 200-bar warm-up"):
+        evolve(chassis, thin, settings=GaSettings(population=8, generations=2), seed=0)
+
+
+def test_the_daily_bar_floor_does_not_decide_an_intraday_division() -> None:
+    """Sixty bars is a quarter of a year daily and under four sessions at 30 minutes.
+
+    Maxing the two floors let that daily number refuse a New York 30-minute run whose own
+    session floor was thirty-nine, for a reason that had nothing to do with the history in hand.
+    """
+    data = half_hourly()
+    assert effective_min_segment_bars(data, DEFAULT_MIN_SEGMENT_BARS) < DEFAULT_MIN_SEGMENT_BARS * 2
+    assert effective_min_segment_bars(data, 10_000) == effective_min_segment_bars(
+        data, DEFAULT_MIN_SEGMENT_BARS
+    )
 
 
 def test_the_segment_floor_is_counted_in_sessions_intraday() -> None:

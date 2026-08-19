@@ -72,25 +72,38 @@ DEFAULT_HOLDOUT_FRACTION = 0.2
 #: episode within one.
 DEFAULT_MIN_SEGMENT_BARS = 60
 
-#: The same quarter, counted in sessions, on intraday data. Sixty *bars* of 30-minute history is
-#: three and a half Xetra sessions, and four segments of that would have the search choose
-#: between thousands of composed structures on a fortnight of market. Carrying the daily floor
-#: over arithmetically rather than in meaning is what makes an intraday evolution look like a
-#: daily one while resting on a fiftieth of the evidence.
-MIN_SEGMENT_SESSIONS = 60
+#: Sessions a segment or the holdout must cover on intraday data, where
+#: :data:`DEFAULT_MIN_SEGMENT_BARS` means something else entirely -- sixty *bars* of 30-minute
+#: history is three and a half Xetra sessions.
+#:
+#: Three is not a comfortable number and is not meant to look like one. It is the largest floor
+#: the shortest-reach intervals can actually meet, measured rather than chosen: the provider
+#: serves 15m and 30m for sixty calendar days, and by the time the block library's two-hundred-bar
+#: warm-up and a twenty-percent holdout are taken out of thirty-seven New York sessions of
+#: 30-minute bars, four segments have about three and a half sessions each to be scored on.
+#:
+#: Set to sixty, this floor refused those intervals outright, which was the right default and the
+#: wrong *only* option: an evolution the user asked for with full knowledge of how thin it is
+#: should run. What protects the result now is not the floor but the honesty around it -- every
+#: such run is well under :data:`~cracktrade.history.MULTI_WINDOW_SESSIONS`, so it carries the
+#: thin-history flag, and the verdict machinery judges it on the holdout like any other.
+MIN_SEGMENT_SESSIONS = 3
 
 
 def effective_min_segment_bars(data: MarketData, requested: int) -> int:
-    """Raise a bar-denominated segment floor to a session-aware one on intraday data.
+    """Translate a bar-denominated segment floor into a session-aware one on intraday data.
 
-    The caller's figure is kept as a lower bound rather than replaced, so a caller asking for
-    more still gets more. Mirrors
-    :func:`~cracktrade.optimize.windows.effective_min_test_bars`, which does the same job for
-    the optimizer's test window.
+    The bar figure is *replaced* rather than raised, which is the one place this parts company
+    with :func:`~cracktrade.optimize.windows.effective_min_test_bars`. Taking the larger of the
+    two let the daily default decide intraday runs by itself: sixty bars is under four New York
+    sessions of 30-minute history, so a run whose session floor said thirty-nine was refused for
+    needing sixty -- a number carried over from daily bars, where it meant a quarter of a year.
+    Every caller passes :data:`DEFAULT_MIN_SEGMENT_BARS` and none exposes it as an option, so
+    there is no caller whose deliberately larger request is being discarded here.
     """
     if not data.interval.is_intraday:
         return requested
-    return max(requested, MIN_SEGMENT_SESSIONS * median_bars_per_session(data.index))
+    return MIN_SEGMENT_SESSIONS * median_bars_per_session(data.index)
 
 
 @dataclass(frozen=True, slots=True)

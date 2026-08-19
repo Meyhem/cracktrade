@@ -35,10 +35,16 @@ import { useCreateStrategy } from './queries'
  * first scored one, and four segments plus a holdout have to fit after that, so the three years
  * that suit a hand-written strategy would be refused before the search started.
  *
- * Only the intervals `/meta` marks `evolvable` are offered. That is the engine's own arithmetic
- * on whether an interval's deepest reach can be cut into the segments an evolution selects on,
- * and it excludes 15m and 30m by a wide margin. Offering them would mean a long form filled in
- * for a run that is refused the moment it starts.
+ * Only the intervals `/meta` marks `evolvable` are offered — the engine's own arithmetic on
+ * whether an interval's deepest reach can be cut into the segments an evolution selects on.
+ * Every interval currently clears it, so nothing is filtered out today; the filter stays because
+ * the floor it reflects is a number, not a promise, and a client should not be the thing that
+ * offers a run the engine refuses the moment it starts.
+ *
+ * On an intraday interval the range is the interval's whole reach rather than a span chosen for
+ * readability. An evolution wants every bar it can get, and 15m and 30m have about seven weeks
+ * to give — enough to divide, nowhere near enough to be confident about, which is what the
+ * thin-history banner on the result then says.
  */
 
 /** Years of history requested by default. Matches the CLI's own default for the same reason. */

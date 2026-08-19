@@ -113,7 +113,10 @@ def test_meta_says_which_intervals_an_evolution_can_be_divided_at(client: TestCl
     intervals = client.get(f"{BASE}/meta").json()["intervals"]
 
     evolvable = {option["value"]: option["evolvable"] for option in intervals}
-    assert evolvable == {"15m": False, "30m": False, "1h": True, "1d": True}
+    # Every interval divides against the floor of three sessions. The field stays on the wire
+    # because it is computed, not listed: raise the floor and the short intervals drop out here
+    # rather than in a client that has no way to know.
+    assert evolvable == {"15m": True, "30m": True, "1h": True, "1d": True}
 
 
 def test_meta_orders_the_stop_priority_chain(client: TestClient) -> None:

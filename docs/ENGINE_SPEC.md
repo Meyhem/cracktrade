@@ -2189,15 +2189,38 @@ unchanged.
 | --- | --- | --- |
 | optimizer test window (`effective_min_test_bars`) | 30 bars | at least 5 sessions |
 | walk-forward fold test window | 30 bars | at least 5 sessions |
-| evolution segment and holdout (`effective_min_segment_bars`) | 60 bars | at least 60 sessions |
+| evolution segment and holdout (`effective_min_segment_bars`) | 60 bars | 3 sessions (replaces, see below) |
 
-The evolution floor keeps its *meaning* rather than its number — sixty trading days is about a
-quarter, so the intraday equivalent is sixty sessions — because a segment is a window a search
-selects on. Left at 60 bars, an evolution over eight weeks of 30-minute history divides
-successfully and returns a strategy chosen between thousands of composed structures on a
-fortnight of market. The division is refused instead. In practice this means evolution is
-available at 1h and 1d and not at 15m or 30m, which is the honest consequence of a 55-day
-provider reach rather than a policy.
+**[AMENDED — 2026-08-19.]** The evolution floor was first set to sixty *sessions*, keeping the
+daily floor's meaning — a quarter of a year — rather than its number. That is the right figure
+for what a segment is asked to do, and it made evolution unavailable at 15m and 30m, whose
+provider reach is 55 days. It was changed on the explicit instruction of the user, who asked for
+the shorter intervals to be evolvable on whatever window they can serve, having been told what
+that window is.
+
+The floor is now **three sessions**, and that number is measured rather than chosen: it is the
+largest floor the shortest-reach intervals can meet. Thirty-seven New York sessions of 30-minute
+bars is 468 bars; the block library's 200-bar warm-up and a 20% holdout leave 175 scorable, and
+four segments of that are about three and a half sessions each.
+
+Two consequences follow, and both are deliberate:
+
+- **Intraday now *replaces* the bar figure instead of raising it.** Taking the larger of the two
+  let the daily default decide intraday runs by itself — 60 bars is under four New York sessions
+  at 30m, so a run whose own session floor said 39 was refused for needing 60, a number that
+  meant a quarter of a year on the bars it came from and nothing at all on these. No caller
+  passes anything but `DEFAULT_MIN_SEGMENT_BARS` and no interface exposes it, so no deliberate
+  request is being discarded. This is the one place the evolution floor parts company with
+  `effective_min_test_bars`, which is still a lower bound.
+- **What protects the result is no longer the floor.** A search over four segments of three
+  sessions is not evidence of anything, and the engine no longer pretends otherwise by refusing
+  it. It says so instead: every such run is far below `MULTI_WINDOW_SESSIONS` and carries §12.11's
+  thin-history flag naming the sessions it covers, and the winner still faces the holdout, the
+  deflated Sharpe, the PBO estimate and the stability surface unchanged. A 30-minute evolution
+  over the full 55-day reach fails those checks comfortably, which is the correct answer.
+
+The floor still bites where no honest division exists at all: 1h over the same eight weeks is
+333 bars, of which 200 are warm-up, and is refused with the arithmetic named.
 
 The trade floor (§9.3) is rate-based and gets the same treatment differently: its per-year
 component is resolved against the calendar's `periods_per_year` (§7.2) rather than 252, so 680
@@ -2615,7 +2638,9 @@ one address and added at another, which reads as a rewrite of the strategy.
   an evolution that cannot start at 30m, is drift no test on either side would catch — the two
   definitions simply disagree, silently, until a user meets the gap. `evolvable` is computed
   from §12.12's own floors, so raising the segment count or the floor moves it rather than
-  leaving a stale list behind.
+  leaving a stale list behind. Against the floor of three it is `true` for every interval and no
+  client filters anything out; it is kept because that is a property of the current floor rather
+  than of the design.
 - **Optimistic concurrency on config saves.** A save states the version it was based on and is
   refused if the head has moved, because a silent last-write-wins on an append-only history
   loses an edit while appearing to succeed. A save that changes nothing creates no version.

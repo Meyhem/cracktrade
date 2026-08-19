@@ -60,13 +60,19 @@ def _evolvable(interval: Interval) -> bool:
 
     An evolution needs ``DEFAULT_SEGMENTS`` segments and a holdout, each at least
     ``MIN_SEGMENT_SESSIONS`` sessions (spec section 12.12), behind the block library's warm-up.
-    At 15m and 30m the provider serves about 55 days -- roughly forty sessions against the three
-    hundred the division needs -- so the run is refused, and a client that knows this can stop
-    offering the interval instead of letting the user fill in a long form for a run that cannot
-    start.
+    Against the floor of three this is true of every interval the engine offers, so the field is
+    currently ``True`` throughout and no client filters anything out.
 
-    Computed rather than listed, so raising the segment floor or the segment count moves this
-    with it instead of leaving a stale list of intervals behind.
+    It is kept, and kept computed rather than listed, precisely because that is a property of
+    today's floor and not of the design: raise the floor or the segment count and the shortest
+    intervals drop out again on their own, rather than leaving a stale list behind for a client
+    to offer a run that cannot start.
+
+    The warm-up is deliberately not subtracted here. Its size in *sessions* depends on the
+    exchange -- two hundred bars is twelve Xetra sessions at 30m and fifteen New York ones -- and
+    a client hint has no ticker to ask. A range too narrow once the warm-up is taken out is
+    refused by :func:`~cracktrade.evolution.protocol.split_for_evolution` with the arithmetic
+    named, which is the right place for a check that needs the data to be exact.
     """
     if interval.max_lookback is None:
         return True

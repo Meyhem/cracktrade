@@ -2222,6 +2222,16 @@ Two consequences follow, and both are deliberate:
 The floor still bites where no honest division exists at all: 1h over the same eight weeks is
 333 bars, of which 200 are warm-up, and is refused with the arithmetic named.
 
+**The launch dialog's pre-flight check is daily-only.** It compares the chassis's span in
+*trading days* against a floor counted in *bars*, which are the same quantity only when a bar is
+a day. On 30-minute bars seven weeks is about 37 trading days and 629 bars; measured in days it
+read as a twentieth of the requirement and disabled the launch button on a run the engine
+accepts. How many bars a session holds is the exchange's answer — 17 on Xetra at 30m, 13 in New
+York — and a client has no way to know it, so it no longer guesses. An intraday range too short
+to divide is refused by `split_for_evolution` seconds after the run starts, with the exact
+counts. This is the same rule as the client-side range check in §3.3: mirror only the part of an
+engine rule that is decidable from what the client actually has.
+
 The trade floor (§9.3) is rate-based and gets the same treatment differently: its per-year
 component is resolved against the calendar's `periods_per_year` (§7.2) rather than 252, so 680
 half-hour bars is read as forty sessions and not as 2.7 years.

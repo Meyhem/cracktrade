@@ -72,6 +72,13 @@ function estimate(
  * only closely enough to stop the user queueing a run that cannot start. Warm-up comes from
  * `/meta`, so the number is the engine's rather than one written here — and the segments and
  * holdout are the ones this form is currently asking for, not the defaults.
+ *
+ * **Daily bars only.** One daily bar is one trading day, which is the entire reason this
+ * comparison is meaningful; on any intraday interval a trading day is a *session* worth of
+ * bars, and how many that is belongs to the exchange. Seven weeks of 30-minute Xetra bars is
+ * about 37 trading days and 629 bars — compared against a floor counted in bars it looks like
+ * a twentieth of what it is, and the form blocks a run the engine would have accepted. See
+ * `isDaily` at the call site.
  */
 function requiredBars(warmup: number, segments: number, holdout: number): number {
   const MIN_SEGMENT_BARS = 60
@@ -143,11 +150,20 @@ export function LaunchRunModal({
 
   const budget = population * generations
   const universe = (
-    strategy.head.config as { universe?: { start_date?: string; end_date?: string } }
+    strategy.head.config as {
+      universe?: { start_date?: string; end_date?: string; interval?: string }
+    }
   ).universe
+  // Absent means `1d`: the field was added after these configs existed and the engine reads a
+  // missing interval the same way.
+  const isDaily = (universe?.interval ?? '1d') === '1d'
   const availableBars = tradingDaysBetween(universe?.start_date, universe?.end_date)
   const needed = requiredBars(meta.evolution_warmup_bars, segments, holdout)
-  const tooShort = evolves && availableBars !== null && availableBars < needed
+  // Intraday is left to the server, which knows the bars it actually fetched and refuses with
+  // the exact arithmetic. A client guess here has no way to know how many bars a session holds
+  // — 17 on Xetra at 30m, 13 in New York — and guessing wrong disables the button on a run
+  // that would have worked.
+  const tooShort = evolves && isDaily && availableBars !== null && availableBars < needed
 
   const submit = () => {
     const params: Record<string, unknown> =

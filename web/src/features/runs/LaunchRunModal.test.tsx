@@ -43,16 +43,27 @@ function openDialog(kind: RunKind = 'optimize', strategy = strategyDetail()) {
 
 /** A chassis whose date range is far too short for the block library's warm-up. */
 function shortHistory() {
+  return withUniverse({ ticker: 'NVDA', start_date: '2025-01-01', end_date: '2025-12-31' })
+}
+
+/**
+ * Seven weeks of 30-minute bars — the whole reach the provider serves at that interval, and
+ * about 629 Xetra bars, comfortably enough to divide.
+ */
+function halfHourly() {
+  return withUniverse({
+    ticker: 'SAP.DE',
+    start_date: '2026-06-29',
+    end_date: '2026-08-18',
+    interval: '30m',
+  })
+}
+
+function withUniverse(universe: Record<string, string>) {
   const base = strategyDetail()
   return {
     ...base,
-    head: {
-      ...base.head,
-      config: {
-        strategy: { name: 'rsi_pullback' },
-        universe: { ticker: 'NVDA', start_date: '2025-01-01', end_date: '2025-12-31' },
-      },
-    },
+    head: { ...base.head, config: { strategy: { name: 'rsi_pullback' }, universe } },
   }
 }
 
@@ -123,6 +134,20 @@ describe('the evolution branch', () => {
 
     expect(await screen.findByText(/date range is about/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Compose' })).toBeDisabled()
+  })
+
+  it('does not measure an intraday chassis in trading days', async () => {
+    // The guard compares a *day* count against a floor counted in *bars*, which is only the
+    // same thing on daily data. Seven weeks of 30-minute bars is 37 trading days and 629 bars;
+    // read as days it looked like a twentieth of what it is, and the dialog disabled Compose on
+    // a run the engine accepts. How many bars a session holds belongs to the exchange — 17 on
+    // Xetra, 13 in New York — so the client does not guess, and the server refuses with the
+    // exact arithmetic if the range really is too short.
+    server.use(validateWith(['indicators.rsi_ind.window']))
+    openDialog('evolve', halfHourly())
+
+    expect(await screen.findByRole('button', { name: 'Compose' })).toBeEnabled()
+    expect(screen.queryByText(/date range is about/i)).not.toBeInTheDocument()
   })
 
   it('offers no epoch count, which evolution does not have', async () => {

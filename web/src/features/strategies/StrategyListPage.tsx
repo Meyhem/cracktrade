@@ -14,7 +14,7 @@ import {
   Title,
   UnstyledButton,
 } from '@mantine/core'
-import { IconArrowsSort, IconSearch, IconSparkles, IconUpload } from '@tabler/icons-react'
+import { IconArrowsSort, IconSearch, IconSparkles, IconUpload, IconWand } from '@tabler/icons-react'
 import { Link, useSearchParams } from 'react-router'
 import { useDebouncedValue } from '@mantine/hooks'
 import { ProblemAlert } from '../../components/ProblemAlert'
@@ -28,6 +28,7 @@ import { useStrategies } from './queries'
 import { NewStrategyModal } from './NewStrategyModal'
 import { ImportStrategyModal } from './ImportStrategyModal'
 import { ComposeStrategyModal } from './ComposeStrategyModal'
+import { GenerateStrategyModal } from './GenerateStrategyModal'
 import type { StrategyRow, VerdictState } from '../../api/types'
 
 /**
@@ -141,6 +142,7 @@ export function StrategyListPage() {
   const [newOpen, setNewOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
+  const [writeOpen, setWriteOpen] = useState(false)
 
   // The server does the filtering, so the request is debounced rather than fired per
   // keystroke; the input itself stays uncontrolled-fast.
@@ -179,6 +181,13 @@ export function StrategyListPage() {
             variant="default"
           >
             Import
+          </Button>
+          <Button
+            leftSection={<IconWand size={16} />}
+            onClick={() => setWriteOpen(true)}
+            variant="light"
+          >
+            Write with Claude
           </Button>
           <Button
             leftSection={<IconSparkles size={16} />}
@@ -312,6 +321,7 @@ export function StrategyListPage() {
 
       <NewStrategyModal onClose={() => setNewOpen(false)} opened={newOpen} />
       <ComposeStrategyModal onClose={() => setComposeOpen(false)} opened={composeOpen} />
+      <GenerateStrategyModal onClose={() => setWriteOpen(false)} opened={writeOpen} />
       <ImportStrategyModal onClose={() => setImportOpen(false)} opened={importOpen} />
     </Stack>
   )

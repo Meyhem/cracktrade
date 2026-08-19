@@ -14,7 +14,7 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { useDebouncedValue } from '@mantine/hooks'
-import { IconAlertTriangle, IconInfoCircle } from '@tabler/icons-react'
+import { IconAlertTriangle, IconInfoCircle, IconWand } from '@tabler/icons-react'
 import { useValidatedYaml } from '../../api/config'
 import { useStrategyContext } from '../strategy/context'
 import { ConfigForm } from './ConfigForm'
@@ -24,6 +24,7 @@ import { readConfig } from './document'
 import { anchorId, type SectionProps } from './section'
 import { describe, saveBlockedBecause, unattached } from './issues'
 import { useDraft } from './draft'
+import { GenerateModal } from '../authoring/GenerateModal'
 import type { Issue } from '../../api/types'
 
 /** Long enough that a round trip is not fired per keystroke, short enough to feel live. */
@@ -47,6 +48,7 @@ export function ConfigTab() {
   const draft = useDraft(strategy.id, strategy.head)
   const [mode, setMode] = useState<'form' | 'yaml'>('form')
   const [saving, setSaving] = useState(false)
+  const [asking, setAsking] = useState(false)
 
   const [settled] = useDebouncedValue(draft.yaml, VALIDATE_AFTER_MS)
   const validation = useValidatedYaml(settled)
@@ -106,6 +108,18 @@ export function ConfigTab() {
               Discard changes
             </Button>
           )}
+          {/*
+            A proposal lands in this draft, never in a version. Whatever comes back is text in
+            the editor the user is already looking at: they read it, diff it through the save
+            dialog, and keep it or discard it with the same two controls as any other edit.
+          */}
+          <Button
+            leftSection={<IconWand size={16} />}
+            onClick={() => setAsking(true)}
+            variant="light"
+          >
+            Ask Claude
+          </Button>
           <Tooltip disabled={blocked === null} label={blocked ?? ''} withArrow>
             <div>
               <Button disabled={blocked !== null} onClick={() => setSaving(true)}>
@@ -166,6 +180,20 @@ export function ConfigTab() {
       ) : (
         parsed.parsed && <ConfigForm {...section} />
       )}
+
+      <GenerateModal
+        adoptLabel="Load into the editor"
+        allowInvalid
+        baseYaml={draft.yaml}
+        onAdopt={(yaml) => {
+          draft.edit(yaml)
+          setAsking(false)
+        }}
+        onClose={() => setAsking(false)}
+        opened={asking}
+        placeholder="Tighten the exit: use an ATR stop instead of the fixed one, and add a volume filter to the entry."
+        title="Ask Claude to change this strategy"
+      />
 
       <SaveVersionModal
         baseVersion={draft.baseVersion}

@@ -39,6 +39,17 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
+// jsdom implements no font-loading API. Mantine's autosizing textarea subscribes to
+// `document.fonts` on mount to re-measure once a webfont arrives, and an undefined property
+// there throws during the effect rather than being tolerated.
+Object.defineProperty(document, 'fonts', {
+  writable: true,
+  value: {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  },
+})
+
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

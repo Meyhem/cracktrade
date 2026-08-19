@@ -141,6 +141,24 @@ class EvolutionError(OptimizationError):
     """
 
 
+# --------------------------------------------------------------------------- authoring
+
+
+class AuthoringError(CracktradeError):
+    """A strategy file could not be drafted from a description."""
+
+
+class AuthoringUnavailableError(AuthoringError):
+    """The model that drafts strategy files could not be reached.
+
+    Distinct from a draft that came back wrong, which is not an error at all: an invalid draft
+    is returned to the user with the validator's complaints attached. This means nothing was
+    produced -- the CLI is missing, its credentials have expired, the request timed out. The
+    detail carries whatever the tool itself said, because "generation failed" tells a user
+    nothing they can act on and "OAuth session expired" tells them exactly what to do.
+    """
+
+
 # --------------------------------------------------------------------------- cancellation
 
 

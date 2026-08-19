@@ -67,6 +67,23 @@ class ImportStrategyRequest(Body):
     filename: str | None = None
 
 
+class GenerateConfigRequest(Body):
+    """A description of a strategy to write, or a change to make to one.
+
+    ``base_yaml`` is what separates writing from revising. Present, the draft is a change to
+    the file supplied and is shown to the user as a diff against it; absent, it is a new
+    configuration. The server holds no session between calls, so a refinement -- "now use ATR
+    stops" -- is this same request carrying the previous draft back.
+
+    The instruction is capped generously rather than tightly. It is prose from a person
+    describing a trading idea, and the failure this bound guards against is a client pasting a
+    file into the wrong field, not a user writing three careful paragraphs.
+    """
+
+    instruction: str = Field(min_length=1, max_length=8000)
+    base_yaml: str | None = Field(default=None, max_length=100_000)
+
+
 class ForkStrategyRequest(Body):
     """Copy an existing strategy at some version. ``version`` defaults to the head."""
 

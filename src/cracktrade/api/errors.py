@@ -88,6 +88,20 @@ class ValidationFailedError(ApiError):
         super().__init__(detail)
 
 
+class UpstreamUnavailableError(ApiError):
+    """Something the server depends on but does not run could not be reached.
+
+    Today that is the model that drafts strategy files: the CLI is missing, its credentials
+    have expired, the request timed out. A 503 rather than a 500 because nothing here is
+    broken and the request was not wrong -- the same call will work once the dependency does,
+    and the detail says which one it is waiting on.
+    """
+
+    status = HTTPStatus.SERVICE_UNAVAILABLE
+    slug = "upstream-unavailable"
+    title = "Service unavailable"
+
+
 class InvariantViolationError(ApiError):
     """The database refused a write that the service layer should have prevented.
 

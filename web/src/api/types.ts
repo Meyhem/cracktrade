@@ -38,6 +38,7 @@ export type SeriesCatalog = Schemas['SeriesCatalog']
 export type SeriesPoints = Schemas['SeriesPoints']
 
 export type ValidateResponse = Schemas['ValidateResponse']
+export type GenerateConfigResponse = Schemas['GenerateConfigResponse']
 export type ConfigDiffResponse = Schemas['ConfigDiffResponse']
 export type SearchableParameter = Schemas['SearchableParameterOut']
 

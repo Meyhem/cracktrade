@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from cracktrade.api.errors import FieldIssue
 from cracktrade.api.repos.rows import StrategyOverviewRow, VersionRow
+from cracktrade.api.services.authoring import Generated
 from cracktrade.api.services.config import ConfigComparison, ConfigReview
 from cracktrade.api.services.diff import Change, SectionDiff
 from cracktrade.api.services.health import Health
@@ -79,6 +80,38 @@ class ValidateResponse(BaseModel):
                 )
                 for parameter in review.searchable
             ],
+        )
+
+
+class GenerateConfigResponse(BaseModel):
+    """A drafted configuration, and nothing done with it.
+
+    Always 200 when a draft was produced, including when that draft is invalid: the same
+    reasoning as ``/config/validate``. The user is shown the file and what is wrong with it,
+    because a nearly-right strategy they can read and correct is worth more than an error page.
+    A 5xx here means no draft exists at all.
+
+    ``attempts`` is how many drafts it took. It is reported rather than hidden because it is
+    the honest cost of the request against the user's own subscription, and because a proposal
+    that took four tries and still does not validate is one to read more carefully than one
+    that validated first time.
+
+    ``review`` is the editor's own validation of ``yaml`` -- the same shape ``/config/validate``
+    returns, so a client can put the draft straight into the editor without asking again.
+    """
+
+    yaml: str
+    notes: str
+    attempts: int
+    review: ValidateResponse
+
+    @classmethod
+    def of(cls, generated: Generated) -> GenerateConfigResponse:
+        return cls(
+            yaml=generated.yaml,
+            notes=generated.notes,
+            attempts=generated.attempts,
+            review=ValidateResponse.of(generated.review),
         )
 
 

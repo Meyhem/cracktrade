@@ -16,6 +16,7 @@ from psycopg.rows import TupleRow
 from psycopg_pool import ConnectionPool
 
 from cracktrade.api.db.uow import UnitOfWork, unit_of_work
+from cracktrade.api.settings import ApiSettings
 
 
 def pool_of(request: Request) -> ConnectionPool[psycopg.Connection[TupleRow]]:
@@ -46,3 +47,18 @@ Pool = Annotated[ConnectionPool[psycopg.Connection[TupleRow]], Depends(pool_of)]
 #: declared layering honest: a route's transaction arrives from here rather than being
 #: something it reaches down to open.
 Work = Annotated[UnitOfWork, Depends(work_of)]
+
+
+def settings_of(request: Request) -> ApiSettings:
+    """The process's settings, resolved once at start-up."""
+    settings: ApiSettings = request.app.state.settings
+    return settings
+
+
+#: Process settings, as an annotation a route can declare.
+#:
+#: For the routes whose behaviour is configured rather than computed -- today the one that
+#: spawns a model to draft a strategy, which can be switched off, pointed at another model, or
+#: given a different budget. A route reading ``request.app.state`` itself would work and would
+#: also be untestable without an app.
+Settings = Annotated[ApiSettings, Depends(settings_of)]

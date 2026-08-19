@@ -12,6 +12,9 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from cracktrade.authoring.agent import DEFAULT_MODEL, DEFAULT_TIMEOUT_SECONDS
+from cracktrade.authoring.generate import DEFAULT_MAX_ATTEMPTS
+
 #: Default connection string. Matches the credentials in ``docker-compose.yml`` so that a
 #: freshly composed development database needs no configuration at all.
 DEFAULT_DATABASE_URL = "postgresql://cracktrade:cracktrade@localhost:5432/cracktrade"
@@ -55,6 +58,24 @@ class ApiSettings(BaseSettings):
 
     #: Idle sleep between queue polls when there is nothing to claim.
     worker_poll_seconds: float = Field(default=1.0, gt=0)
+
+    #: Whether ``POST /config/generate`` will draft a strategy from a description. On by
+    #: default because the machinery it needs -- the ``claude`` CLI, signed in -- is machinery
+    #: the user of this engine already has; off is for a deployment that does not want the
+    #: server spawning anything.
+    generate_enabled: bool = True
+
+    #: The model that drafts strategy files. Read from the engine's own default rather than
+    #: restated, so there is one place a model choice is made.
+    generate_model: str = DEFAULT_MODEL
+
+    #: How long one draft may take. See :data:`~cracktrade.authoring.agent.DEFAULT_TIMEOUT_SECONDS`.
+    generate_timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, gt=0)
+
+    #: How many drafts one request may cost. Every attempt is a paid model call against the
+    #: user's own subscription, so the ceiling is a setting rather than a constant they would
+    #: have to edit the source to change.
+    generate_max_attempts: int = Field(default=DEFAULT_MAX_ATTEMPTS, ge=1, le=10)
 
 
 def load_api_settings() -> ApiSettings:

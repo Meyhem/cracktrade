@@ -62,6 +62,17 @@ _EXPLANATIONS: Final[dict[type[ast.AST], str]] = {
 }
 
 
+def rejected_constructs() -> tuple[tuple[str, str], ...]:
+    """The constructs outside the grammar, each with the reason it is out.
+
+    The whitelist is the definition of what a signal may say, so anything that documents the
+    grammar to a user -- the CLI's help, the editor's hints, the brief an authoring model is
+    written against -- should read it here rather than keep a list of its own that stops being
+    true the day a node type moves.
+    """
+    return tuple((kind.__name__, reason) for kind, reason in _EXPLANATIONS.items())
+
+
 @dataclass(frozen=True, slots=True)
 class SignalExpression:
     """A parsed, whitelisted signal expression.

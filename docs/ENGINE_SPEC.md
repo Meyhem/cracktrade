@@ -3110,3 +3110,137 @@ strategies under one name.
 carry a banner. Not because its evidence is weak — the holdout is genuinely unseen — but because
 those curves describe a composition the strategy in the page header does not contain, drawn over
 the holdout rather than the full date range every other run charts.
+
+## 18. Assisted authoring
+
+Writing a strategy file means knowing an exact schema, a signal grammar deliberately narrower
+than Python, and a catalogue of sixty-odd indicators. This section is normative for the feature
+that writes one from a description instead — `cracktrade.authoring`, `POST /config/generate`, and
+the two places the web UI offers it.
+
+The feature exists because the schema is a barrier to describing an idea, not because a machine
+should be choosing strategies. Everything below follows from holding that line.
+
+### 18.1 A proposal is not a strategy
+
+Generation **creates nothing**. The endpoint returns a YAML document, notes, an attempt count and
+a validation review; it writes no row, allocates no id, and leaves no trace on the server. A
+generated configuration becomes a strategy only by being adopted — through `POST
+/strategies/import` or `POST /strategies/{id}/versions`, the same two paths a hand-written file
+takes, with the same validation and the same version history.
+
+There is deliberately no third creation path and no marker recording that a file was generated.
+Once adopted it has been through exactly the checks a typed one has, and a flag saying "a machine
+wrote this" would either be ignored or become a licence to trust the ones without it.
+
+The corollary is that a **user must see the file before it exists.** No interface may adopt a
+proposal without showing it.
+
+### 18.2 The brief is rendered from the engine, never restated
+
+The system prompt (`authoring/brief.py`) is assembled at call time from the objects that define
+the things it describes: section fields from each config model's `model_json_schema()`, the
+indicator catalogue from `describe_catalogue()`, the rejected constructs from the signal grammar's
+own `rejected_constructs()`, the bar intervals and their provider reach from `Interval`.
+
+This is a hard rule, not an optimisation. A prompt that restates a schema does not fail loudly
+when the schema moves; it produces a confident, plausible, wrong file. The parts that genuinely
+are prose — how to think about a strategy, what not to claim about one — are the only hand-written
+parts, and the two facts that could still drift (`STOP_CHAIN`, `WITHHELD`) are pinned by tests
+that read the model.
+
+Two further requirements on the brief:
+
+- **The examples in it are validated by the test suite.** An example the engine would reject
+  teaches the wrong schema and teaches it silently.
+- **It carries today's date.** An intraday range is judged against a rolling provider window
+  (§4.2), and a model with no idea what day it is writes ranges that parse and cannot be fetched.
+
+### 18.3 The engine is the judge, and the budget is ours
+
+Every draft is validated by `review_yaml` — the same call the editor makes on every keystroke —
+and a draft that fails is sent back with the validator's own error text to be fixed. At most
+`generate_max_attempts` drafts (default 4) are produced.
+
+Three properties are normative:
+
+- **The retry budget is enforced in code, not described to the model.** A limit a model is only
+  told about is a limit it can talk itself out of.
+- **Exhausting the budget returns the last draft, not an error.** A near-miss the user can read,
+  correct and adopt is worth more than a failure that shows them nothing. `review.valid` is false
+  and the errors are attached.
+- **Warnings never cause a retry.** A shadowed stop is the engine's advice on a valid file (§3.7);
+  spending the budget rewriting a correct file would be a misreading of what a warning is.
+
+The reviewer is *injected*, so `cracktrade.authoring` does not import `cracktrade.api`. The
+adapter lives in `api/services/authoring.py` and flattens each `FieldIssue` to `path: message` —
+the granularity a model can act on. Line numbers are dropped: they address the draft being
+replaced.
+
+### 18.4 Where the model runs
+
+Drafting goes through the Claude Agent SDK, which spawns the user's own `claude` CLI. The engine
+therefore holds no API key and reads no credential: a user who already pays for Claude Code
+already has everything the feature needs.
+
+The session is minimised, and the settings that do it are load-bearing:
+
+- `allowed_tools=[]` and `max_turns=1` — this call writes a YAML document and must not be able to
+  read a file or run a command.
+- `setting_sources=[]` and `skills=[]` — **not** the defaults. `setting_sources=None` loads *every*
+  source, so leaving it unset would let a `CLAUDE.md` in whatever directory the server was started
+  from reach the drafting session.
+- Structured output against a `{yaml, notes}` schema with `additionalProperties: false`, so there
+  is no fenced block to parse and no way for commentary to land inside the strategy file.
+
+A failure to reach the model is `AuthoringUnavailableError`, rendered as **503** with the CLI's own
+message in the detail. "Generation failed" is unactionable; "OAuth session expired and could not be
+refreshed" tells the user to run `claude` once.
+
+### 18.5 The HTTP surface
+
+`POST /config/generate` sits under `/config` and not `/strategies`, for the reason `/config/validate`
+does: what comes back is a configuration, and a configuration is not a strategy until someone
+stores it.
+
+- **200 whenever a draft exists**, including an invalid one — the same reasoning as
+  `/config/validate`. A 5xx means no draft was produced at all.
+- The response embeds a full `ValidateResponse` for the drafted YAML, so a client can open its
+  editor on the proposal without a second round trip, and cannot be told two different things
+  about one file.
+- `attempts` is reported rather than hidden. It is the honest cost of the request against the
+  user's own subscription, and a proposal that took every attempt is one to read more carefully.
+- `base_yaml` separates revising from writing. There is **no server-side session**: a refinement is
+  this same request carrying the previous draft back, which is why a refinement works unchanged
+  weeks later.
+- The route is `async def`, a documented exception to §15.4 D-13. It touches no database and waits
+  minutes on a subprocess; a threadpool worker blocked that long is one fewer worker for every
+  request that does need the database.
+
+`generate_enabled` switches the endpoint off (503) for a deployment that does not want the server
+spawning anything.
+
+### 18.6 What the web UI must keep separate
+
+Two entry points, one dialog (`features/authoring/GenerateModal.tsx`), and the difference between
+them is normative:
+
+- **From the strategy list**, a proposal may be adopted only if the engine accepted it. Import
+  would refuse an invalid file, and a button certain to fail is worse than one that says why it is
+  off.
+- **From the config editor**, an invalid proposal *may* be adopted, because it lands in the
+  editor's draft — text the user can finish, diff through the existing save dialog, and keep or
+  discard with the same two controls as any other edit. A proposal never becomes a version
+  directly.
+
+The dialog states the verdict as the engine's, never its own, and says plainly that nothing has
+been created and that the file is not a result. Generation produces a configuration; whether it is
+worth anything is what a backtest and a walk-forward are for, and this is the screen most likely
+to be read as though it had already answered that.
+
+### 18.7 Nothing here weakens §2
+
+The generated file goes through the same four enforcement layers as any other. In particular the
+signal grammar rejects `Call`, `Attribute` and `Subscript`, so a look-ahead expression is not
+something a model could emit and have accepted — it is a string that is not a strategy. The brief
+says so explicitly, but the guarantee does not rest on the brief saying it.

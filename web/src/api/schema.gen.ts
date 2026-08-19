@@ -198,6 +198,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Generate
+         * @description Draft a strategy file from a description, or revise one that already exists.
+         *
+         *     Under ``/config`` rather than ``/strategies`` for the same reason ``/config/validate`` is:
+         *     what comes back is a configuration, and a configuration is not a strategy until someone
+         *     stores it.
+         *
+         *     The draft is checked against the engine's validator and sent back to be fixed if it fails,
+         *     up to ``generate_max_attempts`` times. A draft that never validates is still returned --
+         *     with ``review.valid`` false and the errors attached -- because the user can see it, edit
+         *     it, and adopt it, and none of that is possible if the server keeps it.
+         *
+         *     ``503`` when generation is switched off, or when the model could not be reached at all: the
+         *     ``claude`` CLI is missing from the server's PATH, its sign-in has expired, or the request
+         *     timed out. The detail carries what the tool itself said, which is the only version of that
+         *     message a user can act on.
+         */
+        post: operations["post_generate_api_v1_config_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/strategies/{strategy_id}/versions": {
         parameters: {
             query?: never;
@@ -615,6 +649,51 @@ export interface components {
             name: string;
             /** Version */
             version?: number | null;
+        };
+        /**
+         * GenerateConfigRequest
+         * @description A description of a strategy to write, or a change to make to one.
+         *
+         *     ``base_yaml`` is what separates writing from revising. Present, the draft is a change to
+         *     the file supplied and is shown to the user as a diff against it; absent, it is a new
+         *     configuration. The server holds no session between calls, so a refinement -- "now use ATR
+         *     stops" -- is this same request carrying the previous draft back.
+         *
+         *     The instruction is capped generously rather than tightly. It is prose from a person
+         *     describing a trading idea, and the failure this bound guards against is a client pasting a
+         *     file into the wrong field, not a user writing three careful paragraphs.
+         */
+        GenerateConfigRequest: {
+            /** Instruction */
+            instruction: string;
+            /** Base Yaml */
+            base_yaml?: string | null;
+        };
+        /**
+         * GenerateConfigResponse
+         * @description A drafted configuration, and nothing done with it.
+         *
+         *     Always 200 when a draft was produced, including when that draft is invalid: the same
+         *     reasoning as ``/config/validate``. The user is shown the file and what is wrong with it,
+         *     because a nearly-right strategy they can read and correct is worth more than an error page.
+         *     A 5xx here means no draft exists at all.
+         *
+         *     ``attempts`` is how many drafts it took. It is reported rather than hidden because it is
+         *     the honest cost of the request against the user's own subscription, and because a proposal
+         *     that took four tries and still does not validate is one to read more carefully than one
+         *     that validated first time.
+         *
+         *     ``review`` is the editor's own validation of ``yaml`` -- the same shape ``/config/validate``
+         *     returns, so a client can put the draft straight into the editor without asking again.
+         */
+        GenerateConfigResponse: {
+            /** Yaml */
+            yaml: string;
+            /** Notes */
+            notes: string;
+            /** Attempts */
+            attempts: number;
+            review: components["schemas"]["ValidateResponse"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1550,6 +1629,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreatedStrategy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_generate_api_v1_config_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateConfigResponse"];
                 };
             };
             /** @description Validation Error */

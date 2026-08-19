@@ -115,13 +115,14 @@ def test_the_rolling_window_is_trailing(market: MarketData) -> None:
     The first year of bars has no twelve-month history behind it, so a trailing window leaves
     them at zero. A centred one would have filled them from bars that had not happened.
     """
-    from cracktrade.backtest.series import ROLLING_WINDOW
+    from cracktrade.backtest.calendar import DAILY
 
+    window = round(DAILY.periods_per_year)
     result = run_backtest(strategy_with(), market, capture_series=True)
     assert result.series is not None
     rolling = result.series.rolling_12m_return.values
-    assert all(value == 0.0 for value in rolling[:ROLLING_WINDOW])
-    assert any(value != 0.0 for value in rolling[ROLLING_WINDOW:])
+    assert all(value == 0.0 for value in rolling[:window])
+    assert any(value != 0.0 for value in rolling[window:])
 
 
 # --------------------------------------------------------------------------- filled bars

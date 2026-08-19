@@ -97,7 +97,11 @@ def _score(
         candidate = build_strategy(inject(strategy, parameters, values))
         risk_free = candidate.execution.risk_free_rate
         simulation = run_simulation(candidate, train.data)
-        score = objective(extract_metrics(simulation.portfolio, risk_free_rate=risk_free))
+        score = objective(
+            extract_metrics(
+                simulation.portfolio, risk_free_rate=risk_free, calendar=simulation.calendar
+            )
+        )
     except CracktradeError:
         return INFEASIBLE
     return score

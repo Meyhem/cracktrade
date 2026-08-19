@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from cracktrade.backtest.calendar import DAILY, Calendar
+from cracktrade.backtest.calendar import Calendar
 from cracktrade.domain import Metrics, Trade, YearReturn
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 _CLOSED = 1
 
 
-def per_period_risk_free(annual_rate: float, calendar: Calendar = DAILY) -> float:
+def per_period_risk_free(annual_rate: float, calendar: Calendar) -> float:
     """Convert an annual risk-free rate to the per-period figure vectorbt expects.
 
     ``(1 + r) ** (1 / periods_per_year) - 1``. Compounding the result over a year's worth of
@@ -54,8 +54,8 @@ def extract_metrics(
     portfolio: vbt.Portfolio,
     *,
     risk_free_rate: float,
+    calendar: Calendar,
     offset: int = 0,
-    calendar: Calendar = DAILY,
 ) -> Metrics:
     """Compute the full metric set for one simulated portfolio.
 
@@ -190,7 +190,7 @@ def yearly_returns(returns: pd.Series) -> tuple[YearReturn, ...]:
     )
 
 
-def worst_rolling_12m(returns: pd.Series, calendar: Calendar = DAILY) -> float:
+def worst_rolling_12m(returns: pd.Series, calendar: Calendar) -> float:
     """The worst any rolling one-year window did, as a percentage.
 
     A single aggregate figure cannot show that a strategy spent a year underwater. This can.

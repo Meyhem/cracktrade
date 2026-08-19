@@ -210,11 +210,13 @@ def optimize_split(
     # simulations of the same hold would agree today and are free to diverge later, and a
     # benchmark curve that disagrees with the benchmark number printed under it is worse than
     # either alone.
+    calendar = Calendar.of(division.test.data)
     hold = buy_and_hold_portfolio(
         division.test.data,
         optimized.execution,
         optimized.position_sizing,
         start_bar=division.test.offset,
+        calendar=calendar,
     )
 
     result = OptimizationResult(
@@ -242,7 +244,9 @@ def optimize_split(
         elapsed_seconds=diagnostics.elapsed_seconds,
         convergence_message=diagnostics.message,
         most_common_failure=diagnostics.most_common_failure,
-        benchmark=_hold_comparison(optimized, division.test, test_metrics, test_returns, hold),
+        benchmark=_hold_comparison(
+            optimized, division.test, test_metrics, test_returns, hold, calendar
+        ),
         series=_capture_test_series(optimized, division.test, hold) if capture_series else None,
     )
 
@@ -341,8 +345,9 @@ def _train_score(
     PnL, so the parameters could be fitted for one pair and the config promoted for another.
     """
     risk_free = strategy.execution.risk_free_rate
+    simulation = run_simulation(strategy, train.data)
     metrics = extract_metrics(
-        run_simulation(strategy, train.data).portfolio, risk_free_rate=risk_free
+        simulation.portfolio, risk_free_rate=risk_free, calendar=simulation.calendar
     )
     return objective(metrics), metrics.sharpe_ratio
 
@@ -358,6 +363,7 @@ def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, pd.Series]
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
+        calendar=simulation.calendar,
         offset=test.offset,
     )
     return metrics, simulation.portfolio.returns().iloc[test.offset :]
@@ -369,6 +375,7 @@ def _hold_comparison(
     metrics: Metrics,
     returns: pd.Series,
     hold: vbt.Portfolio,
+    calendar: Calendar,
 ) -> BenchmarkComparison:
     """Measure the optimized strategy against buying and holding the same test window.
 
@@ -377,16 +384,26 @@ def _hold_comparison(
     """
     return compare(
         metrics,
-        extract_metrics(hold, risk_free_rate=strategy.execution.risk_free_rate, offset=test.offset),
+        extract_metrics(
+            hold,
+            risk_free_rate=strategy.execution.risk_free_rate,
+            calendar=calendar,
+            offset=test.offset,
+        ),
         strategy_returns=returns,
         benchmark_returns=hold.returns().iloc[test.offset :],
+        calendar=calendar,
     )
 
 
 def _evaluate_train(strategy: Strategy, train: TrainWindow) -> Metrics:
     """Score a strategy on the train window, for the overfitting gap."""
     simulation = run_simulation(strategy, train.data)
-    return extract_metrics(simulation.portfolio, risk_free_rate=strategy.execution.risk_free_rate)
+    return extract_metrics(
+        simulation.portfolio,
+        risk_free_rate=strategy.execution.risk_free_rate,
+        calendar=simulation.calendar,
+    )
 
 
 def _test_trades(strategy: Strategy, test: TestWindow) -> tuple[Trade, ...]:
@@ -460,5 +477,6 @@ def _capture_test_series(strategy: Strategy, test: TestWindow, hold: vbt.Portfol
         portfolio=simulation.portfolio,
         benchmark=hold,
         data=test.data,
+        calendar=simulation.calendar,
         offset=test.offset,
     )

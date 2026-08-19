@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 
 from cracktrade.backtest import (
+    DAILY,
     extract_metrics,
     extract_trades,
     per_period_risk_free,
@@ -96,7 +97,7 @@ def result_for(**kwargs: Any) -> BacktestResult:
 
 def test_an_annual_rate_compounds_back_to_itself_over_252_periods() -> None:
     """The whole content of defect D4, and its direction is not detectable by eye."""
-    per_period = per_period_risk_free(0.04)
+    per_period = per_period_risk_free(0.04, DAILY)
 
     compounded = (1.0 + per_period) ** TRADING_DAYS_PER_YEAR - 1.0
 
@@ -105,18 +106,17 @@ def test_an_annual_rate_compounds_back_to_itself_over_252_periods() -> None:
 
 @pytest.mark.parametrize("annual", [0.0, 0.01, 0.04, 0.10, 0.25])
 def test_the_conversion_round_trips_for_any_rate(annual: float) -> None:
-    assert (1.0 + per_period_risk_free(annual)) ** TRADING_DAYS_PER_YEAR - 1.0 == pytest.approx(
-        annual, rel=1e-12
-    )
+    compounded = (1.0 + per_period_risk_free(annual, DAILY)) ** TRADING_DAYS_PER_YEAR - 1.0
+    assert compounded == pytest.approx(annual, rel=1e-12)
 
 
 def test_a_zero_rate_converts_to_zero() -> None:
-    assert per_period_risk_free(0.0) == 0.0
+    assert per_period_risk_free(0.0, DAILY) == 0.0
 
 
 def test_the_per_period_rate_is_far_smaller_than_the_annual_one() -> None:
     """Guards the direction: 4% a year is about 0.0155% a day, not 4% a day."""
-    assert per_period_risk_free(0.04) < 0.04 / 200
+    assert per_period_risk_free(0.04, DAILY) < 0.04 / 200
 
 
 # ---------------------------------------------------------------- D3: the rate is honoured
@@ -254,7 +254,7 @@ def test_the_worst_rolling_twelve_months_is_reported() -> None:
     index = pd.DatetimeIndex(pd.date_range("2020-01-01", periods=bars, freq="B").to_numpy())
     returns = pd.Series(np.full(bars, -0.001), index=index)
 
-    worst = worst_rolling_12m(returns)
+    worst = worst_rolling_12m(returns, DAILY)
 
     assert worst < 0
     assert worst == pytest.approx(100.0 * ((1 - 0.001) ** TRADING_DAYS_PER_YEAR - 1), rel=1e-9)
@@ -263,7 +263,7 @@ def test_the_worst_rolling_twelve_months_is_reported() -> None:
 def test_a_short_history_reports_no_rolling_year() -> None:
     index = pd.DatetimeIndex(pd.date_range("2020-01-01", periods=50, freq="B").to_numpy())
 
-    assert worst_rolling_12m(pd.Series(np.zeros(50), index=index)) == 0.0
+    assert worst_rolling_12m(pd.Series(np.zeros(50), index=index), DAILY) == 0.0
 
 
 # ------------------------------------------------------------------ B1: the benchmark
@@ -466,7 +466,9 @@ def test_metrics_are_extractable_without_the_result_wrapper() -> None:
 
     simulation = run_simulation(strategy_with(), trending_market())
 
-    metrics = extract_metrics(simulation.portfolio, risk_free_rate=0.04)
+    metrics = extract_metrics(
+        simulation.portfolio, risk_free_rate=0.04, calendar=simulation.calendar
+    )
 
     assert metrics.total_trades > 0
 

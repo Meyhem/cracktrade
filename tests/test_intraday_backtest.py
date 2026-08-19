@@ -542,8 +542,11 @@ def test_a_captured_intraday_series_keeps_the_time_of_day() -> None:
     simulation = run_simulation(strategy(), data)
     series = capture(
         portfolio=simulation.portfolio,
-        benchmark=buy_and_hold_portfolio(data, strategy().execution, None, start_bar=0),
+        benchmark=buy_and_hold_portfolio(
+            data, strategy().execution, None, start_bar=0, calendar=simulation.calendar
+        ),
         data=data,
+        calendar=simulation.calendar,
     )
 
     stamps = series.close.dates
@@ -582,8 +585,80 @@ def test_a_captured_daily_series_is_still_dates() -> None:
     )
     series = capture(
         portfolio=run_simulation(daily, data).portfolio,
-        benchmark=buy_and_hold_portfolio(data, daily.execution, None, start_bar=0),
+        benchmark=buy_and_hold_portfolio(data, daily.execution, None, start_bar=0, calendar=DAILY),
         data=data,
+        calendar=DAILY,
     )
 
     assert all(not isinstance(stamp, datetime) for stamp in series.close.dates)
+
+
+# ------------------------------------------------- every annualised number, one calendar
+
+
+def test_no_metric_function_defaults_to_the_daily_calendar() -> None:
+    """The defect behind this section was a default.
+
+    ``extract_metrics`` accepted ``calendar=DAILY``, exactly one of twelve call sites passed
+    anything else, and every search-path Sharpe was annualised on 252 bars a year -- negative
+    on the hourly fixture, because a full year of risk-free return was charged against every
+    252 hours. A default cannot drift back in without failing here.
+    """
+    import inspect
+
+    from cracktrade.backtest import benchmark, metrics, portfolio, series
+
+    annualising = (
+        metrics.extract_metrics,
+        metrics.per_period_risk_free,
+        metrics.worst_rolling_12m,
+        benchmark.buy_and_hold_portfolio,
+        benchmark.compare,
+        portfolio.metric,
+        portfolio.simulate,
+        series.capture,
+    )
+    for function in annualising:
+        parameter = inspect.signature(function).parameters["calendar"]
+        assert parameter.default is inspect.Parameter.empty, (
+            f"{function.__qualname__} defaults its calendar, which is how eleven call "
+            f"sites silently scored intraday runs on a 252-bar year"
+        )
+
+    # Same rule, different spelling: the trade floor annualises through a period count.
+    from cracktrade.optimize.objective import TradeFloor
+
+    rate = inspect.signature(TradeFloor.required).parameters["periods_per_year"]
+    assert rate.default is inspect.Parameter.empty
+
+
+def test_the_rolling_chart_window_is_a_trading_year_of_this_runs_bars() -> None:
+    """One year is 2268 hourly Xetra bars, not 252.
+
+    Hardcoded at 252 this chart was a rolling 28-session return labelled "12-month", beside a
+    ``worst_rolling_12m_pct`` that used the real figure -- two lines with one label and two
+    meanings.
+    """
+    from cracktrade.backtest.series import capture
+
+    hourly = strategy("1h", start="2024-09-20", end="2026-08-18")
+    data = market("1h", start="2024-09-20", end="2026-08-18")
+    simulation = run_simulation(hourly, data)
+    window = round(simulation.calendar.periods_per_year)
+    assert window == 252 * 9
+    assert len(data) > window, "the fixture must outlast the window for this test to see both"
+
+    series = capture(
+        portfolio=simulation.portfolio,
+        benchmark=buy_and_hold_portfolio(
+            data, hourly.execution, None, start_bar=0, calendar=simulation.calendar
+        ),
+        data=data,
+        calendar=simulation.calendar,
+    )
+
+    rolling = series.rolling_12m_return.values
+    assert all(value == 0.0 for value in rolling[:window]), (
+        "a value before one trading year of bars means the window is shorter than the label"
+    )
+    assert any(value != 0.0 for value in rolling[window:])

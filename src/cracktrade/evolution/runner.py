@@ -206,6 +206,7 @@ def evolve(
         winner.execution,
         winner.position_sizing,
         start_bar=regions.holdout.offset,
+        calendar=calendar,
     )
 
     returns = np.asarray(holdout_returns.to_numpy(), dtype=np.float64)
@@ -224,10 +225,12 @@ def evolve(
             extract_metrics(
                 hold,
                 risk_free_rate=winner.execution.risk_free_rate,
+                calendar=calendar,
                 offset=regions.holdout.offset,
             ),
             strategy_returns=holdout_returns,
             benchmark_returns=hold.returns().iloc[regions.holdout.offset :],
+            calendar=calendar,
         ),
         segments=_segment_results(winner, regions.segments),
         trades=_holdout_trades(winner, regions.holdout),
@@ -272,6 +275,7 @@ def _evaluate(strategy: Strategy, holdout: TestWindow) -> tuple[Metrics, pd.Seri
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
+        calendar=simulation.calendar,
         offset=holdout.offset,
     )
     return metrics, simulation.portfolio.returns().iloc[holdout.offset :]
@@ -294,6 +298,7 @@ def _segment_results(
                 metrics=extract_metrics(
                     simulation.portfolio,
                     risk_free_rate=strategy.execution.risk_free_rate,
+                    calendar=simulation.calendar,
                     offset=window.offset,
                 ),
             )
@@ -387,6 +392,7 @@ def _capture_holdout_series(
         portfolio=simulation.portfolio,
         benchmark=hold,
         data=holdout.data,
+        calendar=simulation.calendar,
         offset=holdout.offset,
     )
 

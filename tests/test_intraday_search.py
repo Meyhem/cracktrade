@@ -163,7 +163,7 @@ def test_the_trade_floor_reads_intraday_bars_as_sessions_not_years() -> None:
     floor = TradeFloor(minimum=0, per_year=12.0)
     calendar = Calendar.of(half_hourly())
 
-    naive = floor.required(len(half_hourly()))
+    naive = floor.required(len(half_hourly()), periods_per_year=TRADING_DAYS_PER_YEAR)
     honest = floor.required(len(half_hourly()), periods_per_year=calendar.periods_per_year)
 
     assert naive > honest
@@ -172,7 +172,7 @@ def test_the_trade_floor_reads_intraday_bars_as_sessions_not_years() -> None:
 
 def test_the_daily_trade_floor_is_unchanged() -> None:
     floor = TradeFloor(minimum=0, per_year=12.0)
-    assert floor.required(TRADING_DAYS_PER_YEAR) == 12
+    assert floor.required(TRADING_DAYS_PER_YEAR, periods_per_year=TRADING_DAYS_PER_YEAR) == 12
     assert floor.required(TRADING_DAYS_PER_YEAR, periods_per_year=TRADING_DAYS_PER_YEAR) == 12
 
 
@@ -397,3 +397,67 @@ def test_a_walk_forward_on_half_hourly_bars_carries_the_flag() -> None:
     assert report.history is not None
     assert report.history.limited
     assert report.history.note is not None
+
+
+# ------------------------------------------------- the search scores what the report says
+
+
+def test_the_test_window_is_reported_on_the_run_calendar_not_a_daily_one() -> None:
+    """The number the optimizer prints is the number the calendar implies -- pinned by value.
+
+    Before this, exactly one of twelve ``extract_metrics`` call sites passed a calendar, so
+    the search paths annualised hourly bars on a 252-bar year: on this fixture the same
+    portfolio scored a *negative* Sharpe daily and a positive one honestly, because the daily
+    basis charges a year of risk-free return against every 252 hours.
+    """
+    from cracktrade.backtest.calendar import DAILY
+    from cracktrade.backtest.metrics import extract_metrics
+    from cracktrade.backtest.runner import run_simulation
+    from cracktrade.optimize.runner import _evaluate
+
+    data = hourly()
+    base = strategy()
+    division = split(data, train_fraction=0.8, warmup=25)
+
+    reported, _ = _evaluate(base, division.test)
+
+    simulation = run_simulation(base, division.test.data)
+    honest = extract_metrics(
+        simulation.portfolio,
+        risk_free_rate=base.execution.risk_free_rate,
+        calendar=simulation.calendar,
+        offset=division.test.offset,
+    )
+    daily = extract_metrics(
+        simulation.portfolio,
+        risk_free_rate=base.execution.risk_free_rate,
+        calendar=DAILY,
+        offset=division.test.offset,
+    )
+
+    assert simulation.calendar.periods_per_year == 252 * 9
+    assert reported.sharpe_ratio == honest.sharpe_ratio
+    assert reported.cagr_pct == honest.cagr_pct
+    # The distance the fix covers. If these ever agree the test has stopped testing anything.
+    assert reported.sharpe_ratio != daily.sharpe_ratio
+    assert reported.cagr_pct != daily.cagr_pct
+
+
+def test_trial_sharpes_deannualise_back_to_the_per_bar_footing_exactly() -> None:
+    """Section 12.3 mixes the Sharpe with the observation count, so both must be per-bar.
+
+    A trial Sharpe is annualised by ``sqrt(periods_per_year)`` on the calendar of the window
+    it was scored on, and ``_per_period`` divides by the same factor -- so the round trip must
+    be exact, not approximate. Before the fix the two factors came from different calendars:
+    annualised at sqrt(252), divided by sqrt(2268), leaving hourly trial Sharpes three times
+    too small and their variance nine times too small -- an *understated* luck threshold.
+    """
+    import numpy as np
+
+    from cracktrade.validate.runner import _per_period
+
+    calendar = Calendar.of(hourly())
+    per_bar = np.array([0.02, -0.01, 0.005])
+    annualised = per_bar * np.sqrt(calendar.periods_per_year)
+
+    assert _per_period(annualised, calendar) == pytest.approx(per_bar)

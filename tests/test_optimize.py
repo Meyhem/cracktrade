@@ -460,30 +460,33 @@ def test_the_floor_is_the_larger_of_the_absolute_count_and_the_rate() -> None:
     floor = TradeFloor(minimum=20, per_year=4.0)
 
     # One year: the rate asks for 4, the absolute floor for 20.
-    assert floor.required(TRADING_DAYS_PER_YEAR) == 20
+    assert floor.required(TRADING_DAYS_PER_YEAR, periods_per_year=TRADING_DAYS_PER_YEAR) == 20
     # Ten years: the rate asks for 40 and now binds. This is the whole point of having one --
     # a flat 20 over ten years is a candidate trading twice a year.
-    assert floor.required(10 * TRADING_DAYS_PER_YEAR) == 40
+    assert floor.required(10 * TRADING_DAYS_PER_YEAR, periods_per_year=TRADING_DAYS_PER_YEAR) == 40
 
 
 def test_the_rate_rounds_up() -> None:
     """A fractional trade is not a trade. 4/year over 15 months asks for 5, not 4."""
     floor = TradeFloor(minimum=0, per_year=4.0)
 
-    assert floor.required(int(1.25 * TRADING_DAYS_PER_YEAR)) == 5
+    assert (
+        floor.required(int(1.25 * TRADING_DAYS_PER_YEAR), periods_per_year=TRADING_DAYS_PER_YEAR)
+        == 5
+    )
 
 
 def test_the_rate_can_be_switched_off() -> None:
     """`per_year=0` restores the flat floor, which is what reproducing an old result needs."""
     floor = TradeFloor(minimum=20, per_year=0.0)
 
-    assert floor.required(50 * TRADING_DAYS_PER_YEAR) == 20
+    assert floor.required(50 * TRADING_DAYS_PER_YEAR, periods_per_year=TRADING_DAYS_PER_YEAR) == 20
 
 
 def test_a_zero_floor_admits_everything() -> None:
     floor = TradeFloor(minimum=0, per_year=0.0)
 
-    assert floor.required(10_000) == 0
+    assert floor.required(10_000, periods_per_year=TRADING_DAYS_PER_YEAR) == 0
     assert get_objective("calmar", min_trades=0)(metrics_with(total_trades=0)) < INFEASIBLE
 
 

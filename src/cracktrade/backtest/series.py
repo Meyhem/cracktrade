@@ -23,18 +23,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from cracktrade.backtest.calendar import Calendar
 from cracktrade.data.contract import OHLCV_COLUMNS
 from cracktrade.domain import MonthlyReturns, RunSeries, Series
-from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from cracktrade.signals import causal_shift
 
 if TYPE_CHECKING:
     import vectorbt as vbt
 
     from cracktrade.data import MarketData
-
-#: Bars in the trailing window for the rolling annual return.
-ROLLING_WINDOW = TRADING_DAYS_PER_YEAR
 
 #: The frame's close column. Taken from the data contract rather than spelled out, so a
 #: renamed column breaks at import rather than at the first chart.
@@ -95,8 +92,14 @@ def _monthly(equity: pd.Series, holdings: pd.Series) -> MonthlyReturns:
     )
 
 
-def _rolling_annual(equity: pd.Series) -> Series:
+def _rolling_annual(equity: pd.Series, calendar: Calendar) -> Series:
     """Trailing twelve-month return at each bar.
+
+    The window is a trading year *of this run's bars* -- ``periods_per_year`` from the
+    calendar, not 252. Hardcoding 252 made this chart a rolling 28-session return on hourly
+    data, drawn beside a ``worst_rolling_12m_pct`` that was computed correctly; two lines both
+    labelled "12-month" meaning different things is exactly the disagreement this module's
+    docstring exists to prevent.
 
     Shifted through :func:`~cracktrade.signals.causal_shift`, the engine's single alignment
     path, rather than calling ``.shift`` here. That helper raises on a negative period, so a
@@ -104,7 +107,7 @@ def _rolling_annual(equity: pd.Series) -> Series:
     unexpressible. A chart is exactly as capable of implying the future as a metric is, and the
     repo test that found this line was right to.
     """
-    ratio = equity / causal_shift(equity, ROLLING_WINDOW)
+    ratio = equity / causal_shift(equity, round(calendar.periods_per_year))
     return _series((100.0 * (ratio - 1.0)).fillna(0.0))
 
 
@@ -113,6 +116,7 @@ def capture(
     portfolio: vbt.Portfolio,
     benchmark: vbt.Portfolio,
     data: MarketData,
+    calendar: Calendar,
     offset: int = 0,
 ) -> RunSeries:
     """Project a simulated portfolio into the series a chart needs.
@@ -132,7 +136,7 @@ def capture(
         drawdown=_series(_drawdown(equity).fillna(0.0)),
         close=_series(close),
         monthly_returns=_monthly(equity, holdings),
-        rolling_12m_return=_rolling_annual(equity),
+        rolling_12m_return=_rolling_annual(equity, calendar),
         filled=_filled_dates(data, offset),
     )
 

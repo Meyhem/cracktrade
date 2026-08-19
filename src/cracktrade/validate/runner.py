@@ -135,13 +135,17 @@ def walk_forward(
 
     out_of_sample = np.concatenate([outcome.test_returns for outcome in outcomes])
     trials = sum(outcome.result.trials for outcome in outcomes)
-    calendar = Calendar.of(data)
-    trial_sharpes = _per_period(
-        np.array(
-            [sharpe for outcome in outcomes for sharpe in outcome.trial_sharpes],
-            dtype=np.float64,
-        ),
-        calendar,
+    # De-annualised fold by fold, under the calendar of the train window each Sharpe was
+    # scored on. The folds share a venue and an interval, so the calendars agree in practice;
+    # measuring per window is what makes that a property of the data rather than a hope.
+    trial_sharpes = np.concatenate(
+        [
+            _per_period(
+                np.array(outcome.trial_sharpes, dtype=np.float64),
+                Calendar.of(division.train.data),
+            )
+            for division, outcome in zip(splits, outcomes, strict=True)
+        ]
     )
 
     # The most recent fold is the one whose regime the user is about to trade in, so the
@@ -205,10 +209,13 @@ def _out_of_sample_benchmark(
     assert isinstance(first_test_bar, int)
 
     span = data.slice(first_test_bar, len(data))
+    calendar = Calendar.of(span)
     portfolio = buy_and_hold_portfolio(
-        span, strategy.execution, strategy.position_sizing, start_bar=0
+        span, strategy.execution, strategy.position_sizing, start_bar=0, calendar=calendar
     )
-    return extract_metrics(portfolio, risk_free_rate=strategy.execution.risk_free_rate)
+    return extract_metrics(
+        portfolio, risk_free_rate=strategy.execution.risk_free_rate, calendar=calendar
+    )
 
 
 def _per_period(annualised: npt.NDArray[np.float64], calendar: Calendar) -> npt.NDArray[np.float64]:
@@ -241,6 +248,7 @@ def _fold_performance_matrix(
             metrics = extract_metrics(
                 simulation.portfolio,
                 risk_free_rate=outcome.optimized.execution.risk_free_rate,
+                calendar=simulation.calendar,
                 offset=division.test.offset,
             )
             matrix[row, column] = metrics.sharpe_ratio

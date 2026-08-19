@@ -1167,7 +1167,7 @@ class EvolutionResult:
                 label="Confidence intervals",
                 passed=self.mean_return_interval.excludes_zero,
                 plain=(
-                    "Bootstrap interval for the holdout's mean daily return. One that straddles "
+                    "Bootstrap interval for the holdout's mean per-bar return. One that straddles "
                     "zero is not distinguishable from luck."
                 ),
                 stat=(
@@ -1175,7 +1175,7 @@ class EvolutionResult:
                     f"{100 * self.mean_return_interval.high:+.3f}%"
                 ),
                 detail=(
-                    f"the 95% interval on mean daily holdout return, "
+                    f"the 95% interval on mean per-bar holdout return, "
                     f"{100 * self.mean_return_interval.low:+.3f}% to "
                     f"{100 * self.mean_return_interval.high:+.3f}%, straddles zero"
                 ),

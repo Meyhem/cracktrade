@@ -1221,6 +1221,26 @@ string `'252 days'` apart, and stopped being a number of periods the moment a pe
 `DAILY` is the same object the constants were, so daily results are not merely equal to what they
 were — they are produced by identical values.
 
+**No annualising function has a default calendar. [NEW — decided 2026-08-19.]**
+`extract_metrics`, `per_period_risk_free`, `worst_rolling_12m`, `compare`,
+`buy_and_hold_portfolio`, `simulate`, `metric` and `capture` all *require* a `Calendar`; a call
+site that does not name its basis does not type-check. This is a defect recorded, not a style
+preference: `calendar` began life as `= DAILY`, exactly one of twelve call sites passed anything
+else, and every number the optimizer, the walk-forward and the evolution printed on intraday data
+was annualised on a 252-bar year. On the hourly fixture the same portfolio scored **+0.41 through
+`backtest` and −0.46 through the search paths** — not even a clean scale factor, because the
+per-period risk-free conversion at the daily basis charges a full year of risk-free return
+against every 252 hourly bars, pushing excess return negative before annualisation touches it. A
+signature test asserts the defaults stay gone.
+
+The calendar a metric uses is the one measured from the window it is computed over —
+`Simulation.calendar`, produced by `run_simulation` from the history it just simulated. The
+windows of one run share a venue and an interval, so their calendars agree; measuring per window
+keeps that a property of the data rather than an assumption. The chart's rolling "12-month"
+window is likewise `periods_per_year` bars of the run's calendar, never 252 (§8.1): hardcoded, it
+drew a rolling 28-session return on hourly data beside a correctly computed
+`worst_rolling_12m_pct`, two lines with one label and two meanings.
+
 **Interval agreement is checked, not assumed** (`require_interval`). A history whose median bar
 spacing disagrees with the declared interval by more than 25% is rejected, naming both and the
 factor by which the run's figures would have been scaled. Adjacent intervals differ by a factor of
@@ -2025,6 +2045,17 @@ zero.
 
 The trial count is the one recorded in §9.3 — `evaluations` —
 not the number of DE generations. Understating it understates the deflation.
+
+**Both inputs are on the per-bar footing. [NEW — decided 2026-08-19.]** The observed Sharpe is
+computed per-bar from the out-of-sample returns. The trial Sharpes arrive annualised — they are
+`Metrics.sharpe_ratio` — and are de-annualised by `sqrt(periods_per_year)` of the calendar of the
+window each was scored on: a fold's train window in the walk-forward, the segments in evolution.
+Annualising one input and not the other scales the statistic silently; de-annualising with a
+*different* calendar than the one that annualised is the same error at a smaller magnitude, and
+until this rule the two calendars did differ on intraday data — annualised at √252, divided by
+√2268 on hourly bars — leaving the trial variance nine times too small and the luck threshold
+understated. A deflation that under-deflates is the flattering direction, which is the wrong
+direction for a statistic whose whole job is to be the unflattering one.
 
 Motivation: the maximum Sharpe over `N` independent trials on **pure noise** is inflated by roughly
 `sqrt(2 * ln N)` standard errors. At `N = 5000` that is about 2.9σ. A search with no edge whatsoever

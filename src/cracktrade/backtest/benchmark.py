@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from cracktrade.backtest.calendar import DAILY, Calendar
+from cracktrade.backtest.calendar import Calendar
 from cracktrade.backtest.portfolio import simulate
 from cracktrade.backtest.stops import StopConfiguration
 from cracktrade.domain import BenchmarkComparison, Metrics
@@ -35,7 +35,7 @@ def buy_and_hold_portfolio(
     sizing: PositionSizing | None,
     *,
     start_bar: int,
-    calendar: Calendar = DAILY,
+    calendar: Calendar,
     seed: int = 0,
 ) -> vbt.Portfolio:
     """Simulate buying at ``start_bar`` and holding to the end of the history.
@@ -78,7 +78,7 @@ def compare(
     *,
     strategy_returns: pd.Series,
     benchmark_returns: pd.Series,
-    calendar: Calendar = DAILY,
+    calendar: Calendar,
 ) -> BenchmarkComparison:
     """Measure a strategy against the benchmark."""
     return BenchmarkComparison(

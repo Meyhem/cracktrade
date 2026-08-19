@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
-from cracktrade.backtest.calendar import DAILY, Calendar
+from cracktrade.backtest.calendar import Calendar
 from cracktrade.backtest.holding import (
     as_signal_column,
     holding_signal_nb,
@@ -123,7 +123,7 @@ def simulate(
     *,
     holding: tuple[int, int] = (0, 0),
     forced_exits: npt.NDArray[np.bool_] | None = None,
-    calendar: Calendar = DAILY,
+    calendar: Calendar,
     seed: int,
 ) -> vbt.Portfolio:
     """Run one simulation with every result-affecting parameter pinned.
@@ -205,9 +205,7 @@ def _resolve_size(sizing: PositionSizing | None) -> tuple[float, str]:
     return value, size_type
 
 
-def metric(
-    portfolio: vbt.Portfolio, name: str, *, calendar: Calendar = DAILY, **kwargs: Any
-) -> Any:
+def metric(portfolio: vbt.Portfolio, name: str, *, calendar: Calendar, **kwargs: Any) -> Any:
     """Call a vectorbt metric with the run's trading calendar pinned.
 
     ``year_freq`` is *not* a ``from_signals`` parameter in vectorbt 1.0.0 -- it is a per-call

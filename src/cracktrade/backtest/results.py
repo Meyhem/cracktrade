@@ -87,7 +87,12 @@ def run_backtest(
         risk_free_rate=risk_free,
         warmup_bars=warmup,
         series=(
-            capture(portfolio=simulation.portfolio, benchmark=benchmark_portfolio, data=data)
+            capture(
+                portfolio=simulation.portfolio,
+                benchmark=benchmark_portfolio,
+                data=data,
+                calendar=calendar,
+            )
             if capture_series
             else None
         ),

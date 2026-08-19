@@ -283,6 +283,7 @@ def score_strategy(
         metrics = extract_metrics(
             simulation.portfolio,
             risk_free_rate=strategy.execution.risk_free_rate,
+            calendar=simulation.calendar,
             offset=window.offset,
         )
         scores.append(objective(metrics))

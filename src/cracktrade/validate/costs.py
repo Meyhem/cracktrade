@@ -57,6 +57,7 @@ def cost_sensitivity(
                 metrics=extract_metrics(
                     simulation.portfolio,
                     risk_free_rate=candidate.execution.risk_free_rate,
+                    calendar=simulation.calendar,
                     offset=test.offset,
                 ),
             )

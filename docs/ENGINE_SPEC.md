@@ -3155,6 +3155,8 @@ Two further requirements on the brief:
   teaches the wrong schema and teaches it silently.
 - **It carries today's date.** An intraday range is judged against a rolling provider window
   (§4.2), and a model with no idea what day it is writes ranges that parse and cannot be fetched.
+- **It states what the web is and is not for** (§18.4.1). That section is normative prose, not
+  advice: it is the only thing standing between research and a strategy pre-fitted off-engine.
 
 ### 18.3 The engine is the judge, and the budget is ours
 
@@ -3177,25 +3179,57 @@ adapter lives in `api/services/authoring.py` and flattens each `FieldIssue` to `
 the granularity a model can act on. Line numbers are dropped: they address the draft being
 replaced.
 
-### 18.4 Where the model runs
+### 18.4 Where the model runs, and what it may reach
 
 Drafting goes through the Claude Agent SDK, which spawns the user's own `claude` CLI. The engine
 therefore holds no API key and reads no credential: a user who already pays for Claude Code
 already has everything the feature needs.
 
-The session is minimised, and the settings that do it are load-bearing:
+The session may **read the web and nothing else**. `build_options` is the single place that is
+decided, and it is separated from the drafter precisely so a test can assert on it:
 
-- `allowed_tools=[]` and `max_turns=1` — this call writes a YAML document and must not be able to
-  read a file or run a command.
-- `setting_sources=[]` and `skills=[]` — **not** the defaults. `setting_sources=None` loads *every*
-  source, so leaving it unset would let a `CLAUDE.md` in whatever directory the server was started
-  from reach the drafting session.
+- `allowed_tools=RESEARCH_TOOLS` — `WebSearch` and `WebFetch`, and nothing more. A description of
+  a trading idea names a company at least as often as a symbol, and whether a ticker existed
+  across the requested range is a fact that can be checked rather than guessed.
+- `disallowed_tools=DENIED_TOOLS` — the write, execute and filesystem surface, denied by name as
+  well as by omission. Omission alone relies on the permission gate's defaults; a named deny is a
+  property of this feature and fails a test if it is removed.
+- `setting_sources=[]` and `skills=[]` — **not** the defaults. Both default to `None`, which loads
+  *every* source, so leaving either unset would let a `CLAUDE.md` in whatever directory the server
+  was started from reach the drafting session.
+- `max_turns=DEFAULT_MAX_TURNS` (12), because research is a loop and one turn no longer suffices;
+  and a ceiling on a session that has started chasing links instead of writing a file.
 - Structured output against a `{yaml, notes}` schema with `additionalProperties: false`, so there
   is no fenced block to parse and no way for commentary to land inside the strategy file.
 
 A failure to reach the model is `AuthoringUnavailableError`, rendered as **503** with the CLI's own
 message in the detail. "Generation failed" is unactionable; "OAuth session expired and could not be
 refreshed" tells the user to run `claude` once.
+
+#### 18.4.1 What web access costs, and what contains it
+
+Two risks arrive with the web tools, and neither is closed by the model behaving well.
+
+**Research that tunes is selection bias the engine cannot see.** If a draft's thresholds come
+from reading which settings performed well on this symbol, the file is fitted to the very history
+it is about to be tested over — and §12's deflation divides by the trials *this engine* ran, so it
+cannot discount a search someone else already did. The result would look credible with nothing on
+screen to say otherwise. The brief therefore forbids looking up performance and confines research
+to facts about the instrument: identity, listing, currency, exchange, splits, halts, and when its
+history begins. This is a residual limitation in the sense of §2.7 — it is instructed, not
+enforced — and the mitigation is disclosure: the model is required to state in its notes what it
+looked up and what it took from it, and the notes are shown beside the file before adoption.
+
+**A fetched page is untrusted text entering a session that then writes a configuration.** Three
+things contain that, none of which depends on the model: the output schema fixes the response
+shape, the engine's validator judges the file whatever a page said, and no proposal reaches
+storage without a person reading it. The brief additionally instructs that page contents are
+information and never instruction, and that a page attempting otherwise be reported in the notes.
+
+**Facts are anchored to the strategy's window, not to today.** A file is measured from
+`start_date` to `end_date`; something true now and untrue across that span is worse than nothing.
+The brief says so, and says the opposite for intraday intervals, where the provider serves only a
+recent window (§4.2) and current data is the relevant kind.
 
 ### 18.5 The HTTP surface
 

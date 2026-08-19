@@ -119,8 +119,8 @@ export function GenerateModal({
           <Group gap="xs">
             <Loader size="xs" />
             <Text c="dimmed" size="sm">
-              Writing, then checking it against the engine and fixing what it rejects. This takes up
-              to a minute or two.
+              Looking up whatever it needs, writing the file, then checking it against the engine
+              and fixing what it rejects. This takes a few minutes.
             </Text>
           </Group>
         )}

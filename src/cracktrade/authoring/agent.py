@@ -5,11 +5,24 @@ Code, and the Agent SDK reaches that subscription by spawning the ``claude`` bin
 already have logged in -- so generation costs them nothing beyond what they have, and no
 credential is read, stored, or passed by this codebase.
 
-The session it opens is as small as the SDK allows. No tools, one turn, no filesystem settings
-and no skills: this call writes a YAML document from a description and must not be able to read
-a file, run a command, or pick up instructions from whatever directory the server happens to
-have been started in. ``setting_sources=[]`` is load-bearing for that -- the field's default of
-``None`` loads *every* source, which is the opposite of what its name suggests.
+The session it opens is narrow, and narrow in a specific direction: it may **read the web and
+nothing else**. Search and fetch are allowed because a description of a trading idea routinely
+names a company rather than a symbol, and because whether a ticker existed across the requested
+date range is a fact that can be checked rather than guessed. Everything that writes, executes,
+or reads this machine is denied -- by omission from ``allowed_tools`` and again by name in
+``disallowed_tools``, because a deny that names the tool survives a change in what the default
+permission gate does.
+
+``setting_sources=[]`` and ``skills=[]`` are load-bearing rather than tidy. Both fields default
+to ``None``, which loads *every* source -- so leaving them unset would let a ``CLAUDE.md`` in
+whatever directory the server was started from reach the drafting session.
+
+The web tools bring untrusted text into a session that then writes a configuration, which is a
+prompt-injection surface and is treated as one. Three things contain it, none of which relies on
+the model behaving: the structured output schema fixes the response shape, the engine's validator
+judges the file regardless of what any page said, and no proposal reaches storage without a
+person reading it. The brief additionally tells the model to treat page contents as information
+and never as instruction.
 
 Structured output does the rest. The model returns ``{yaml, notes}`` against a schema rather
 than prose with a fenced block in it, so there is no parsing step to get wrong and no way for a
@@ -37,10 +50,45 @@ from cracktrade.errors import AuthoringUnavailableError
 #: someone deciding where to put money.
 DEFAULT_MODEL: Final = "claude-opus-5"
 
+#: Read-only web access, and the whole of the drafting session's reach beyond its own prompt.
+#:
+#: ``WebSearch`` resolves what a person said into what a provider serves -- a company name into
+#: a symbol, a symbol into the exchange-suffixed listing that actually has the currency and the
+#: hours the user meant. ``WebFetch`` reads the page that search found. Neither can change
+#: anything, which is why they are the two that are here.
+RESEARCH_TOOLS: Final[tuple[str, ...]] = ("WebSearch", "WebFetch")
+
+#: Denied by name as well as by omission.
+#:
+#: Omitting a tool from ``allowed_tools`` already means it is not auto-approved, and a
+#: non-interactive session has nobody to approve it. That is a property of today's permission
+#: gate, though, and this list is a property of the feature: drafting a YAML document has no
+#: business touching a filesystem, a shell, or a subagent, and saying so explicitly means a
+#: change in the gate's defaults cannot quietly widen what this session can do.
+DENIED_TOOLS: Final[tuple[str, ...]] = (
+    "Bash",
+    "BashOutput",
+    "Edit",
+    "Glob",
+    "Grep",
+    "KillShell",
+    "NotebookEdit",
+    "Read",
+    "Skill",
+    "Task",
+    "TodoWrite",
+    "Write",
+)
+
+#: How many exchanges one draft may take. Research is a loop -- search, read, search again --
+#: so a single turn is no longer enough; a dozen is room to check two or three facts and then
+#: answer, and a ceiling on a session that has started chasing links instead of writing a file.
+DEFAULT_MAX_TURNS: Final = 12
+
 #: How long one draft may take before the request is abandoned. Generous, because the brief is
-#: long and a retry re-reads it; finite, because an HTTP request nobody is waiting on any more
-#: still holds a connection.
-DEFAULT_TIMEOUT_SECONDS: Final = 180.0
+#: long, a retry re-reads it, and research adds round trips of its own; finite, because an HTTP
+#: request nobody is waiting on any more still holds a connection.
+DEFAULT_TIMEOUT_SECONDS: Final = 300.0
 
 #: The shape of a draft. ``additionalProperties: false`` so a model that decides to explain
 #: itself in an extra key fails the schema rather than smuggling prose into the response.
@@ -57,9 +105,10 @@ OUTPUT_SCHEMA: Final[dict[str, Any]] = {
         "notes": {
             "type": "string",
             "description": (
-                "A few sentences for the user: what the strategy does, what you had to assume "
-                "because they did not say, and anything you could not express. Never a claim "
-                "or a prediction about how it will perform."
+                "A few sentences for the user: what the strategy does, what you had to "
+                "assume because they did not say, anything you looked up and what you took "
+                "from it, and anything you could not express. Never a claim or a prediction "
+                "about how it will perform."
             ),
         },
     },
@@ -80,6 +129,27 @@ def _draft_from(structured: dict[str, Any] | None) -> Draft:
     return Draft(yaml=text, notes=notes if isinstance(notes, str) else "")
 
 
+def build_options(*, brief: str, model: str = DEFAULT_MODEL) -> ClaudeAgentOptions:
+    """The drafting session's shape, in one place so a test can assert on it.
+
+    Separated from :func:`agent_drafter` because what this session is *allowed to do* is the
+    security-relevant part of the feature, and a property that only exists inside a closure is
+    a property nothing can check.
+    """
+    return ClaudeAgentOptions(
+        system_prompt=brief,
+        model=model,
+        output_format={"type": "json_schema", "schema": OUTPUT_SCHEMA},
+        max_turns=DEFAULT_MAX_TURNS,
+        allowed_tools=list(RESEARCH_TOOLS),
+        disallowed_tools=list(DENIED_TOOLS),
+        # Not tidiness: both default to None, which loads every filesystem source. Unset, a
+        # CLAUDE.md beside the server's working directory would be read into this session.
+        setting_sources=[],
+        skills=[],
+    )
+
+
 def agent_drafter(
     *,
     brief: str,
@@ -96,17 +166,7 @@ def agent_drafter(
         AuthoringUnavailableError: at call time, if the CLI is absent, cannot authenticate, or
             does not answer within ``timeout_seconds``.
     """
-    options = ClaudeAgentOptions(
-        system_prompt=brief,
-        model=model,
-        output_format={"type": "json_schema", "schema": OUTPUT_SCHEMA},
-        # One turn, nothing to call, nothing on disk to read. A drafting session that could
-        # use a tool is a drafting session that can be talked into using one.
-        max_turns=1,
-        allowed_tools=[],
-        setting_sources=[],
-        skills=[],
-    )
+    options = build_options(brief=brief, model=model)
 
     async def draft(prompt: str) -> Draft:
         structured: dict[str, Any] | None = None

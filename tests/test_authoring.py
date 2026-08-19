@@ -30,7 +30,12 @@ from cracktrade.authoring import (
     build_brief,
     propose,
 )
-from cracktrade.authoring.agent import OUTPUT_SCHEMA
+from cracktrade.authoring.agent import (
+    DENIED_TOOLS,
+    OUTPUT_SCHEMA,
+    RESEARCH_TOOLS,
+    build_options,
+)
 from cracktrade.authoring.brief import _SECTIONS, EXAMPLES, STOP_CHAIN, WITHHELD
 from cracktrade.authoring.generate import first_prompt, retry_prompt
 from cracktrade.config import Strategy
@@ -141,6 +146,41 @@ def test_the_output_schema_matches_a_draft() -> None:
     assert set(OUTPUT_SCHEMA["required"]) == {"yaml", "notes"}
     assert set(OUTPUT_SCHEMA["properties"]) == set(Draft.__dataclass_fields__)
     assert OUTPUT_SCHEMA["additionalProperties"] is False
+
+
+def test_the_drafting_session_can_read_the_web_and_nothing_else() -> None:
+    """What this session is allowed to do is the security-relevant part of the feature.
+
+    Search and fetch are in because a description of a trading idea names a company at least as
+    often as a symbol. Everything that writes, executes, or reads this machine is out -- twice:
+    absent from the allow-list, and named in the deny-list, so a change in what the permission
+    gate does by default cannot widen this session without failing here first.
+    """
+    options = build_options(brief="irrelevant")
+
+    assert options.allowed_tools == list(RESEARCH_TOOLS)
+    assert set(RESEARCH_TOOLS) == {"WebSearch", "WebFetch"}
+    assert set(DENIED_TOOLS) <= set(options.disallowed_tools)
+    assert {"Bash", "Write", "Edit", "Read", "Task"} <= set(options.disallowed_tools)
+    assert not set(options.allowed_tools) & set(options.disallowed_tools)
+
+
+def test_the_drafting_session_reads_no_settings_from_disk() -> None:
+    """Both fields default to ``None``, which loads *every* source -- see the module docstring."""
+    options = build_options(brief="irrelevant")
+
+    assert options.setting_sources == []
+    assert options.skills == []
+
+
+def test_the_brief_says_what_the_web_is_and_is_not_for(brief: str) -> None:
+    """Research that tunes parameters is a search the deflated Sharpe cannot see (spec 18.2)."""
+    assert "# Research" in brief
+    # Anchored to the strategy's own window rather than to whenever the page was written.
+    assert "start_date" in brief and "end_date" in brief
+    assert "Do not look up what has performed well." in brief
+    # Fetched pages are untrusted text arriving in a session that then writes a config.
+    assert "never as instruction" in brief
 
 
 # --------------------------------------------------------------------------- the loop

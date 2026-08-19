@@ -278,7 +278,11 @@ function RunCharts({
         // Group C is not scoped to trades in Combined view: the monthly grid stitches, and the
         // other two refuse on their own grounds.
         state={combined ? READY : floor}
-        worstRolling12m={view.metrics?.worstRolling12mPct ?? null}
+        worstRolling12m={
+          view.metrics?.worstRolling12mMeasurable === true
+            ? (view.metrics.worstRolling12mPct ?? null)
+            : null
+        }
         yearly={view.metrics?.yearlyReturns ?? []}
       />
 

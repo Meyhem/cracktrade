@@ -167,6 +167,50 @@ def test_worst_rolling_twelve_months_is_absent_rather_than_zero_on_thin_history(
     result = run_backtest(strategy("30m"), market("30m"))
     assert result.metrics.worst_rolling_12m_pct == 0.0
     assert result.metrics.bars < 252 * 17
+    # The flag is what makes the two zeros tellable apart. Without it the CLI printed
+    # "+0.00%" -- "never lost money over any twelve months", off seven weeks of history.
+    assert result.metrics.worst_rolling_12m_measurable is False
+
+
+def test_a_renderer_shows_an_unmeasurable_rolling_year_as_absent() -> None:
+    """The CLI is a client and was breaking the rule the engine states for clients."""
+    from cracktrade.cli.render import _rolling_year
+
+    metrics = run_backtest(strategy("30m"), market("30m")).metrics
+    assert _rolling_year(metrics) == "—"
+
+
+def test_a_measurable_rolling_year_is_still_printed() -> None:
+    from cracktrade.cli.render import _rolling_year
+    from cracktrade.data import prepare_frame
+    from tests.factories import make_ohlcv
+
+    data = MarketData(
+        ticker="TEST",
+        frame=prepare_frame(make_ohlcv(600), ticker="TEST", now=date(2100, 1, 1)),
+        requested_start=date(2020, 1, 1),
+        requested_end=date(2030, 1, 1),
+    )
+    daily = parse_strategy(
+        {
+            "strategy": {"name": "d"},
+            "universe": {
+                "ticker": "TEST",
+                "start_date": "2020-01-01",
+                "end_date": "2030-01-01",
+            },
+            "execution": {
+                "initial_capital": 10000.0,
+                "slippage_pct": 0.0,
+                "commission_pct": 0.0,
+            },
+            "entry": {"signal": "close > open"},
+            "exit": {"max_holding_days": 5},
+        }
+    )
+    metrics = run_backtest(daily, data).metrics
+    assert metrics.worst_rolling_12m_measurable is True
+    assert _rolling_year(metrics).endswith("%")
 
 
 # ------------------------------------------------------------- the interval gate

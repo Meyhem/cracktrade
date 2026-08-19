@@ -82,6 +82,9 @@ exit:
   max_holding_days: 15
 ```
 
+`universe.interval` chooses the bar width — `15m`, `30m`, `1h` or `1d`, defaulting to `1d`. See
+[Intraday strategies](#intraday-strategies) for what changes when it is not daily.
+
 One entry rule and one exit rule per strategy, so a run is one simulation and one set of
 numbers. To compare two entry conditions, write two strategies and run both — the engine used to
 cross `E` entries with `X` exits and report the best of `E×X` measured on the same data, which is
@@ -90,6 +93,38 @@ indicator types and the names each one contributes to the signal namespace.
 
 Signals are expressions over price series and indicator outputs. Comparisons must be
 parenthesised, because `&` binds tighter than `<`; the parser says so when you forget.
+
+## Intraday strategies
+
+```bash
+uv run cracktrade backtest examples/sap_intraday.yaml
+```
+
+Set `universe.interval` to `15m`, `30m` or `1h` and three things change.
+
+**Nothing is held overnight.** Whatever is open is sold on the session's last bar, and no
+position is opened there. The close time is *learned* from recent completed sessions rather than
+read from a hard-coded calendar, so an early close before a holiday is handled by the same
+mechanism as an ordinary day — and a session whose close cannot yet be predicted is not traded
+at all. Every result reports how many positions were nonetheless carried overnight; on a healthy
+run it is zero, and it is reported rather than suppressed.
+
+**Bars stop being days.** `min_holding_days` and `max_holding_days` are refused outright on an
+intraday strategy; use `min_holding_bars` and `max_holding_bars`, which mean what they say.
+Every window and floor in the engine is counted in *sessions* rather than bars, because 30 bars
+is a reasonable test window when a bar is a day and under two Xetra sessions when it is half an
+hour.
+
+**History runs out fast.** Yahoo serves 15-minute and 30-minute bars for about 55 days and
+hourly bars for about two years. A date range wider than that is refused with the limit named,
+rather than quietly truncated. Every result carries how many sessions it actually covered and
+says so plainly when that is too few to conclude anything — which, at 15m and 30m, is most of
+the time. Evolution is unavailable below `1h` for the same reason: four segments and a holdout
+do not fit in eight weeks.
+
+Timestamps are the exchange's own local wall clock, with no timezone attached. A Xetra bar
+reads 09:00 whether you are in Frankfurt or Chicago, and EU daylight-saving switches — which
+fall on different dates from the US ones — never move a session boundary.
 
 ## What it refuses to do
 
@@ -112,8 +147,11 @@ by design (`supertrend_supertl` on 90% of them). Evaluation tracks definedness a
 so undefined collapses to "no signal" under every operator, and the report says what fraction of
 bars a condition could actually be evaluated on.
 
-**Nothing is annualized on the wrong calendar.** 252 trading days, passed explicitly at every
-call site.
+**Nothing is annualized on the wrong calendar.** The annualisation factor is measured from the
+history rather than assumed: 252 sessions for daily bars, and for intraday bars the sessions
+times however many bars one session of that venue actually holds — 17 on a 30-minute Xetra day,
+13 on a New York one. A frame whose spacing contradicts the declared `interval` is refused,
+because that is exactly the mix-up the measurement exists to prevent.
 
 ## What it tells you that you did not ask for
 
@@ -147,6 +185,10 @@ Documented rather than hidden:
   reachable by the search. Move it into an indicator to tune it.
 - **One ticker per configuration.** No portfolios, no cross-sectional strategies.
 - **Long only.**
+- **Intraday history is short and cannot be lengthened.** 55 days at 15m and 30m is a limit of
+  the data source, not a setting. Results over it are real and are flagged as thin, every time.
+- **Intraday analysis is historical only.** There is no live evaluation and nothing sends alerts;
+  the engine tells you what a strategy would have done, not what to do now.
 
 ## Development
 

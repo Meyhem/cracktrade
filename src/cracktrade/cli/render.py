@@ -94,6 +94,18 @@ def _render_warnings(result: BacktestResult, console: Console) -> None:
         )
 
 
+def _rolling_year(metrics: Metrics) -> str:
+    """The worst rolling year, or a dash when the history is shorter than one.
+
+    Never "+0.00%". That reads as "never lost money over any twelve months", which is the most
+    flattering possible reading of a window nobody had the data to compute -- and on 15m or 30m
+    bars nobody ever will, since the provider serves eight weeks.
+    """
+    if not metrics.worst_rolling_12m_measurable:
+        return "—"
+    return f"{metrics.worst_rolling_12m_pct:+.2f}%"
+
+
 def _render_metrics(strategy: Metrics, benchmark: Metrics, console: Console) -> None:
     table = Table(title="Performance", title_justify="left", header_style="bold")
     table.add_column("")
@@ -110,8 +122,8 @@ def _render_metrics(strategy: Metrics, benchmark: Metrics, console: Console) -> 
         ("Max drawdown", f"{strategy.max_drawdown_pct:.2f}%", f"{benchmark.max_drawdown_pct:.2f}%"),
         (
             "Worst 12 months",
-            f"{strategy.worst_rolling_12m_pct:+.2f}%",
-            f"{benchmark.worst_rolling_12m_pct:+.2f}%",
+            _rolling_year(strategy),
+            _rolling_year(benchmark),
         ),
         ("Sharpe", f"{strategy.sharpe_ratio:.2f}", f"{benchmark.sharpe_ratio:.2f}"),
         ("Sortino", f"{strategy.sortino_ratio:.2f}", f"{benchmark.sortino_ratio:.2f}"),

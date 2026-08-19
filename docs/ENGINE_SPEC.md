@@ -1325,6 +1325,18 @@ convention is stated in the output.
 return. "All the profit came from one quarter" is the most common way a backtest misleads, and no
 aggregate figure can reveal it.
 
+**[NEW — decided 2026-08-19.]** `worst_rolling_12m_pct` is `0.0` when no twelve-month window fits
+in the history, and `worst_rolling_12m_measurable` says which of the two zeros it is. Without the
+flag a renderer cannot tell "never lost money over a year" from "there was no year", and both the
+CLI and the charts were printing the first. Every interface must present the unmeasurable case as
+**absent** — a dash, not a figure, and no plotted line. At 15m and 30m it is always the
+unmeasurable case: a trading year is 4284 half-hour bars and the provider serves about eight
+weeks (§4.2).
+
+The value stays `0.0` rather than becoming null because daily results are a frozen regression
+surface and it has been `0.0` on short daily histories since the figure existed. The new field is
+additive; nothing that read the old one changed meaning.
+
 **[NEW] Data vintage.** The fetch date, first and last bar, and a hash of the price frame are
 recorded in every result. `auto_adjust=True` retro-adjusts the entire series on each dividend and
 split, so the same backtest run a quarter apart uses different prices; recording the vintage makes a
@@ -1785,8 +1797,14 @@ lattice cells, degrading DE's differential signal.
 `float32` prices (`src/data/market.py:38`); `freq='d'` hardcoded (`portfolio.py:63`); long-only never
 stated; `indicators` accepted as a dict in `tests/test_optimizer.py:11-14` versus the list the schema
 requires.
-**Target:** `float64` (§4.1); daily-only made explicit and validated (§7.5); long-only pinned
-explicitly (§7.5); list shape normative with the dict shape rejected (§3.5).
+**Target:** `float64` (§4.1); the bar width declared and validated rather than assumed (§7.5);
+long-only pinned explicitly (§7.5); list shape normative with the dict shape rejected (§3.5).
+
+**Amended 2026-08-19.** The original target was "daily-only", and that is no longer what the
+engine promises: `universe.interval` admits 15m, 30m, 1h and 1d (§3.3.1). The *defect* is
+unchanged and so is the fix — a hardcoded `freq` is wrong whatever it is hardcoded to, and the
+`Calendar` (§7.5) now derives it from the data and checks it against the declaration. Refusing
+every non-daily index was one way to make the frequency honest; measuring it is a better one.
 
 **D15 — Undefined indicator values reach trading decisions.** **[NEW — found in this engine, not
 legacy, by audit on 2026-08-16; see `docs/AUDIT.md` §A1.]**
@@ -1962,7 +1980,9 @@ Derived from the three legacy test files plus one regression test per defect.
     higher: `workers=1` and `workers=2` agree on the trial count and the failure tallies too, not
     only on the winner (§16.4).
 28. D13 — integer parameters take only integer values across the search.
-29. D14 — non-daily index rejected; dict-shaped `indicators` rejected; dtype is `float64`.
+29. D14 — an index whose spacing contradicts `universe.interval` is rejected (§7.5), so a
+    30-minute frame cannot be annualised as daily and a daily frame cannot be annualised as
+    30-minute; dict-shaped `indicators` rejected; dtype is `float64`.
 30. D17 — every declared indicator parameter is a keyword its pandas_ta function accepts (§5.6),
     and `bbands` at 3.0 sigma produces a strictly wider envelope than at 1.0 sigma with an
     unchanged midline.
@@ -2582,7 +2602,20 @@ one address and added at another, which reads as a rewrite of the strategy.
   declines to hand a screen the metrics at all rather than handing them over with a flag asking
   politely that they not be shown. Trade *counts* stay visible on both sides of the line: a
   count is the evidence for the suppression, not a claim about performance.
-- **Staleness and verdict travel with every run and strategy rendered**, derived per §14.4.
+- **Staleness, verdict and bar interval travel with every run and strategy rendered**, derived
+  per §14.4.
+- **Engine facts are served, never restated by a client.** `GET /meta` carries the constants a
+  client would otherwise hard-code: the trade floor, the significance bar, the indicator
+  registry, the exit fields with their stop priority and whether each is daily-only, and the
+  bar intervals with each one's provider reach and whether an evolution can be divided at it.
+
+  **[NEW — decided 2026-08-19.]** The last two exist because the alternative is arithmetic
+  duplicated in TypeScript. A client offering an interval the engine refuses, offering
+  `min_holding_days` on an intraday strategy, or letting a user fill in a long compose form for
+  an evolution that cannot start at 30m, is drift no test on either side would catch — the two
+  definitions simply disagree, silently, until a user meets the gap. `evolvable` is computed
+  from §12.12's own floors, so raising the segment count or the floor moves it rather than
+  leaving a stale list behind.
 - **Optimistic concurrency on config saves.** A save states the version it was based on and is
   refused if the head has moved, because a silent last-write-wins on an append-only history
   loses an edit while appearing to succeed. A save that changes nothing creates no version.

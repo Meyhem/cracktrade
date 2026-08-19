@@ -102,6 +102,7 @@ def extract_metrics(
         bars=len(returns),
         yearly_returns=yearly_returns(returns),
         worst_rolling_12m_pct=worst_rolling_12m(returns, calendar),
+        worst_rolling_12m_measurable=len(returns) >= round(calendar.periods_per_year),
     )
 
 
@@ -196,8 +197,13 @@ def worst_rolling_12m(returns: pd.Series, calendar: Calendar = DAILY) -> float:
 
     Returns ``0.0`` when the history is shorter than a year, which on a 15m or 30m strategy is
     always: the provider serves at most 60 days at those intervals, and a year is 4284 bars.
-    That zero means "not measurable here", not "never lost money over a year", so the client
-    must present it as absent rather than plot it (spec section 13).
+    That zero means "not measurable here", not "never lost money over a year".
+
+    The value stays ``0.0`` rather than becoming ``None`` -- daily results are a frozen
+    regression surface and this figure has been ``0.0`` on short daily histories since it
+    existed. What is new is that the distinction is now *representable*:
+    :attr:`~cracktrade.domain.Metrics.worst_rolling_12m_measurable` says which of the two zeros
+    this is, so a renderer no longer has to re-derive it and, as the CLI did, get it wrong.
     """
     window = round(calendar.periods_per_year)
     if len(returns) < window:

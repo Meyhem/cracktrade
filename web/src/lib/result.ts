@@ -105,6 +105,9 @@ export type Metrics = {
   bars: number | null
   yearlyReturns: YearReturn[]
   worstRolling12mPct: number | null
+  /** False when the history is shorter than a trading year, where the figure above is a
+   *  placeholder zero rather than a measurement. Always false at 15m and 30m. */
+  worstRolling12mMeasurable: boolean
   hasEnoughTradesToJudge: boolean | null
 }
 
@@ -132,6 +135,9 @@ export function metricsOf(source: Json | null): Metrics | null {
       returnPct: number(entry, 'return_pct'),
     })),
     worstRolling12mPct: number(source, 'worst_rolling_12m_pct'),
+    // Defaults to *false* when the flag is unreadable: a run stored before the flag existed
+    // gets a dash rather than a "+0.00%" claiming the strategy never had a losing year.
+    worstRolling12mMeasurable: flag(source, 'worst_rolling_12m_measurable') ?? false,
     hasEnoughTradesToJudge: flag(source, 'has_enough_trades_to_judge'),
   }
 }

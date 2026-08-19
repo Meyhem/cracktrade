@@ -34,6 +34,7 @@ function metrics(overrides: Record<string, unknown> = {}) {
       { year: 2024, return_pct: 19 },
     ],
     worst_rolling_12m_pct: -8.2,
+    worst_rolling_12m_measurable: true,
     ...overrides,
   }
 }
@@ -48,7 +49,7 @@ function trades(count: number) {
     pnl: index === 0 ? 900 : -20,
     return_pct: index === 0 ? 90 : -2,
     fees: 1,
-    holding_days: 17,
+    holding_bars: 17,
     is_open: false,
     is_winner: index === 0,
   }))

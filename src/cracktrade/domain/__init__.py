@@ -207,6 +207,13 @@ class Metrics:
     bars: int
     yearly_returns: tuple[YearReturn, ...] = ()
     worst_rolling_12m_pct: float = 0.0
+    #: Whether the history was long enough for :attr:`worst_rolling_12m_pct` to mean anything.
+    #: False when it is shorter than a trading year, which on a 15m or 30m strategy is always:
+    #: the provider serves at most 60 days and a year is 4284 half-hour bars. The figure is
+    #: ``0.0`` in that case, and a renderer that prints "+0.00%" is claiming the strategy never
+    #: lost money over a year -- which is not what was measured, and is the most flattering
+    #: possible reading of a number nobody computed.
+    worst_rolling_12m_measurable: bool = True
 
     @property
     def has_enough_trades_to_judge(self) -> bool:

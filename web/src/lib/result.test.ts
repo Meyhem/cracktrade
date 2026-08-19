@@ -5,6 +5,8 @@ import {
   backtestResult,
   closedTrades,
   figuresOf,
+  historyOf,
+  isIntraday,
   metricsOf,
   optimizationResult,
   tradesOf,
@@ -155,5 +157,67 @@ describe('reading a whole result', () => {
 
   it('does not infer credibility when the engine did not state it', () => {
     expect(validationResult({}).isCredible).toBeNull()
+  })
+})
+
+describe('the history scope', () => {
+  it('reads what the engine measured', () => {
+    const scope = historyOf({
+      history: { interval: '30m', sessions: 37, bars: 625, limited: true, note: 'thin' },
+    })
+
+    expect(scope).toEqual({
+      interval: '30m',
+      sessions: 37,
+      bars: 625,
+      limited: true,
+      note: 'thin',
+    })
+  })
+
+  it('treats an unreadable flag as limited', () => {
+    // The opposite direction from `Trade.isOpen`, and for the same stated reason: fall towards
+    // the answer that is visible. A thin result shown as sound is the exact failure this
+    // project exists to prevent; a sound one shown as thin merely invites a second look.
+    expect(historyOf({ history: { interval: '1h', sessions: 400 } })?.limited).toBe(true)
+  })
+
+  it('is absent, not sound, when the run predates the scope', () => {
+    expect(historyOf({ metrics: {} })).toBeNull()
+  })
+})
+
+describe('isIntraday', () => {
+  it('is false for daily and for a result that never said', () => {
+    expect(isIntraday(historyOf({ history: { interval: '1d' } }))).toBe(false)
+    expect(isIntraday(null)).toBe(false)
+  })
+
+  it('is true for every sub-daily interval', () => {
+    for (const interval of ['15m', '30m', '1h']) {
+      expect(isIntraday(historyOf({ history: { interval } }))).toBe(true)
+    }
+  })
+})
+
+describe('the worst rolling year', () => {
+  it('is marked unmeasurable when the engine says so', () => {
+    // 0.0 with the flag down means "no twelve-month window existed", not "never lost money
+    // over one". Rendering it as +0.00% is the most flattering possible reading of a number
+    // nobody computed.
+    const thin = metricsOf({ worst_rolling_12m_pct: 0, worst_rolling_12m_measurable: false })
+
+    expect(thin?.worstRolling12mPct).toBe(0)
+    expect(thin?.worstRolling12mMeasurable).toBe(false)
+  })
+
+  it('defaults to unmeasurable on a result stored before the flag existed', () => {
+    expect(metricsOf({ worst_rolling_12m_pct: -8.2 })?.worstRolling12mMeasurable).toBe(false)
+  })
+
+  it('is measurable when the engine measured it', () => {
+    const full = metricsOf({ worst_rolling_12m_pct: -8.2, worst_rolling_12m_measurable: true })
+
+    expect(full?.worstRolling12mMeasurable).toBe(true)
   })
 })

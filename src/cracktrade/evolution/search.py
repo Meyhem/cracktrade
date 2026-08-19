@@ -170,6 +170,7 @@ def run_evolution(
     on_generation: Callable[[int, float], None] | None = None,
     control: RunControl = NO_CONTROL,
     evaluate_batch: Callable[[Sequence[Genome]], list[float]] | None = None,
+    session_bars: int | None = None,
 ) -> EvolutionOutcome:
     """Evolve a population under ``fitness``, lower being better.
 
@@ -183,6 +184,9 @@ def run_evolution(
             order. It must be observationally identical to mapping ``fitness`` over the batch;
             given that, the result of the search does not depend on how the work was
             distributed. Defaults to doing exactly that, one genome at a time.
+        session_bars: bars in one trading session, when the run is intraday. Bounds the minimum
+            holding period the search may propose; see
+            :func:`~cracktrade.evolution.genome.repair`.
 
     Raises:
         RunCancelled: the caller asked for the run to stop.
@@ -194,7 +198,7 @@ def run_evolution(
 
     evaluate = evaluate_batch if evaluate_batch is not None else serially
 
-    population = [random_genome(rng) for _ in range(settings.population)]
+    population = [random_genome(rng, session_bars=session_bars) for _ in range(settings.population)]
     scores = evaluate(population)
     history = [_trace(0, scores)]
 
@@ -210,7 +214,7 @@ def run_evolution(
         # that is part parent and part child, and nothing downstream could interpret it.
         control.raise_if_cancelled()
 
-        population, scores = _advance(population, scores, evaluate, settings, rng)
+        population, scores = _advance(population, scores, evaluate, settings, rng, session_bars)
         history.append(_trace(generation, scores))
 
         best = min(scores)
@@ -236,6 +240,7 @@ def _advance(
     evaluate: Callable[[Sequence[Genome]], list[float]],
     settings: GaSettings,
     rng: random.Random,
+    session_bars: int | None,
 ) -> tuple[list[Genome], list[float]]:
     """One generation: keep the elite, breed the rest, score what changed.
 
@@ -255,11 +260,11 @@ def _advance(
         parent_a = _tournament(population, scores, settings.tournament, rng)
         parent_b = _tournament(population, scores, settings.tournament, rng)
         child = (
-            crossover(parent_a, parent_b, rng)
+            crossover(parent_a, parent_b, rng, session_bars=session_bars)
             if rng.random() < settings.crossover_rate
             else parent_a
         )
-        children.append(mutate(child, rng, rate=settings.mutation_rate))
+        children.append(mutate(child, rng, rate=settings.mutation_rate, session_bars=session_bars))
 
     return survivors + children, survivor_scores + evaluate(children)
 
@@ -304,8 +309,14 @@ def _tournament(
 # --------------------------------------------------------------------------- operators
 
 
-def random_genome(rng: random.Random) -> Genome:
-    """Draw a genome uniformly from the reachable space."""
+def random_genome(rng: random.Random, *, session_bars: int | None = None) -> Genome:
+    """Draw a genome uniformly from the reachable space.
+
+    ``session_bars`` is forwarded to :func:`~cracktrade.evolution.genome.repair`, which clamps a
+    minimum holding period an intraday session could never satisfy. It is applied after the
+    draw rather than by narrowing the gene, so the sequence of random numbers a seed produces is
+    identical at every interval and a daily run is bit-for-bit what it was.
+    """
     entries, entry_ops = _random_chain(rng, minimum=MIN_ENTRY_CONDITIONS)
     exits, exit_ops = _random_chain(rng, minimum=MIN_EXIT_CONDITIONS)
     return repair(
@@ -318,13 +329,14 @@ def random_genome(rng: random.Random) -> Genome:
             take_profit_pct=(
                 _draw(TAKE_PROFIT_GENE, rng) if rng.random() < OPTIONAL_PRESENCE else None
             ),
-            max_holding_days=(
+            max_holding_bars=(
                 int(_draw(MAX_HOLDING_GENE, rng)) if rng.random() < OPTIONAL_PRESENCE else None
             ),
-            min_holding_days=(
+            min_holding_bars=(
                 int(_draw(MIN_HOLDING_GENE, rng)) if rng.random() < OPTIONAL_PRESENCE else None
             ),
-        )
+        ),
+        session_bars=session_bars,
     )
 
 
@@ -357,7 +369,9 @@ def random_stop(rng: random.Random) -> Stop:
     return Stop(kind=kind, value=_draw(STOP_GENES[kind], rng))
 
 
-def crossover(first: Genome, second: Genome, rng: random.Random) -> Genome:
+def crossover(
+    first: Genome, second: Genome, rng: random.Random, *, session_bars: int | None = None
+) -> Genome:
     """Uniform crossover, per position within each variable-length chain.
 
     See :func:`_crossover_chain` for the chain algorithm. The exit mechanisms are still
@@ -380,9 +394,10 @@ def crossover(first: Genome, second: Genome, rng: random.Random) -> Genome:
             exit_ops=exit_ops,
             stop=_pick(first.stop, second.stop, rng),
             take_profit_pct=_pick(first.take_profit_pct, second.take_profit_pct, rng),
-            max_holding_days=_pick(first.max_holding_days, second.max_holding_days, rng),
-            min_holding_days=_pick(first.min_holding_days, second.min_holding_days, rng),
-        )
+            max_holding_bars=_pick(first.max_holding_bars, second.max_holding_bars, rng),
+            min_holding_bars=_pick(first.min_holding_bars, second.min_holding_bars, rng),
+        ),
+        session_bars=session_bars,
     )
 
 
@@ -423,7 +438,9 @@ def _crossover_chain(
     return slots, ops
 
 
-def mutate(genome: Genome, rng: random.Random, *, rate: float) -> Genome:
+def mutate(
+    genome: Genome, rng: random.Random, *, rate: float, session_bars: int | None = None
+) -> Genome:
     """Perturb a genome, chain by chain, then field by field.
 
     Each chain independently mutates the content of every slot it already has, redraws each
@@ -448,13 +465,14 @@ def mutate(genome: Genome, rng: random.Random, *, rate: float) -> Genome:
             take_profit_pct=_mutate_optional_gene(
                 genome.take_profit_pct, TAKE_PROFIT_GENE, rng, rate=rate
             ),
-            max_holding_days=_mutate_optional_int(
-                genome.max_holding_days, MAX_HOLDING_GENE, rng, rate=rate
+            max_holding_bars=_mutate_optional_int(
+                genome.max_holding_bars, MAX_HOLDING_GENE, rng, rate=rate
             ),
-            min_holding_days=_mutate_optional_int(
-                genome.min_holding_days, MIN_HOLDING_GENE, rng, rate=rate
+            min_holding_bars=_mutate_optional_int(
+                genome.min_holding_bars, MIN_HOLDING_GENE, rng, rate=rate
             ),
-        )
+        ),
+        session_bars=session_bars,
     )
 
 

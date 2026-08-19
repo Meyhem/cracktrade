@@ -2122,6 +2122,58 @@ there is no single equity curve to measure. Averaging folds, or borrowing `Defla
 — which is a *per-period* Sharpe where `Metrics.sharpe_ratio` is annualised — would produce a
 number that looked exactly like the backtest column beside it and meant something else.
 
+### 12.11 Thin history, said out loud
+
+**[NEW — decided 2026-08-19.]** Every result carries a `history` scope
+(`HistoryScope`: `interval`, `sessions`, `bars`, `limited`, `note`) measuring how much evidence
+it rests on. It is a flag, never a block: the user asked for the run and gets it.
+
+**It is counted in sessions, not bars.** Forty Xetra sessions of 30-minute bars is about 680
+bars, which reads next to a 680-day daily backtest as the same quantity of evidence and is
+nothing like it — it is forty independent days, most of the trades drawn from a handful of
+weeks, and every regime the strategy will meet absent from the sample. "40 sessions of 30m bars"
+tells a trader what "680 bars" hides. On daily data a session is a bar and the two agree.
+
+**Two thresholds**, because splitting thin history into folds makes each fold thinner still:
+
+| Run kind | Sessions below which `limited` is set |
+| --- | --- |
+| backtest, optimization | 60 — a quarter's trading, enough that a monthly pattern appears more than once |
+| walk-forward, evolution | 120 — twice that; six folds of 120 sessions is twenty sessions a fold, already marginal |
+
+**The note names the way out.** Where the interval's own provider reach is the binding
+constraint (15m and 30m are served for about 55 days, §4.2), the note says so and points at the
+interval that does reach further, rather than advising a wider date range that cannot be
+fetched. At 15m and 30m the flag is therefore on for effectively every walk-forward. That is not
+a calibration failure; it is true.
+
+### 12.12 Window floors are counted in sessions
+
+**[NEW — decided 2026-08-19.]** Three floors in the search machinery were bar counts chosen when
+a bar was a day. Carried over arithmetically they keep their number and lose their meaning, so
+each is raised to a session-aware equivalent on intraday data — always as a lower bound, so a
+caller asking for more still gets more, and always leaving daily behaviour bit-for-bit
+unchanged.
+
+| Floor | Daily | Intraday |
+| --- | --- | --- |
+| optimizer test window (`effective_min_test_bars`) | 30 bars | at least 5 sessions |
+| walk-forward fold test window | 30 bars | at least 5 sessions |
+| evolution segment and holdout (`effective_min_segment_bars`) | 60 bars | at least 60 sessions |
+
+The evolution floor keeps its *meaning* rather than its number — sixty trading days is about a
+quarter, so the intraday equivalent is sixty sessions — because a segment is a window a search
+selects on. Left at 60 bars, an evolution over eight weeks of 30-minute history divides
+successfully and returns a strategy chosen between thousands of composed structures on a
+fortnight of market. The division is refused instead. In practice this means evolution is
+available at 1h and 1d and not at 15m or 30m, which is the honest consequence of a 55-day
+provider reach rather than a policy.
+
+The trade floor (§9.3) is rate-based and gets the same treatment differently: its per-year
+component is resolved against the calendar's `periods_per_year` (§7.2) rather than 252, so 680
+half-hour bars is read as forty sessions and not as 2.7 years.
+
+
 ---
 
 ## 13. Interface surface
@@ -2600,7 +2652,10 @@ deflation to be readable; a search that also chooses *which conditions the strat
 reaches a far larger space, and the maximum of enough draws is impressive on a random walk. So
 the specification below is mostly about evidence, and the search itself is the short part.
 
-Implemented in `src/cracktrade/evolution/`, exposed as `cracktrade evolve TICKER`.
+Implemented in `src/cracktrade/evolution/`, exposed as `cracktrade evolve TICKER`. Its
+`--start` default is resolved from `--interval` rather than fixed at twelve years: twelve years
+is right for daily bars and unaskable at 30 minutes (§4.2), so a fixed default would refuse
+every intraday run that did not also pass `--start`.
 
 ### 16.1 What is evolved, and what is not
 
@@ -2662,6 +2717,10 @@ independently-drawn combinator (`&` or `|`), plus an optional stop (one kind out
 fixed/trailing/ATR, so §3.7's priority chain can never shadow a gene the search paid for), an
 optional take-profit, and optional holding bounds.
 
+The **chassis** — everything evolution does not get to choose — carries the bar interval
+alongside the ticker, the date range and the execution costs, for the reason §16.1 gives for the
+ticker: it is part of the question, not the answer.
+
 A slot holds a block choice **together with** its gene values, and the slot is still the unit of
 crossover — exchanging a block index without its genes would hand the child an arity that does
 not match its block and numbers that mean something else. What is new relative to the genome's
@@ -2676,10 +2735,25 @@ structural and semantic validation, and `tests/test_evolution.py` asserts it ove
 space. This is not cosmetic: an unrenderable genome would score `INFEASIBLE` and steer the
 search away from a region of the library rather than reporting the bug in it.
 
-Totality is maintained by `repair`, which fixes the two schema rules that are not expressible as
+Totality is maintained by `repair`, which fixes the schema rules that are not expressible as
 independent gene bounds — an exit with no mechanism at all gets a holding cap, and a holding
-floor at or above the cap yields to it. Both repairs are deterministic; one that consulted the
+floor at or above the cap yields to it. Every repair is deterministic; one that consulted the
 random number generator would make reproducibility depend on how often it was needed.
+
+**[NEW — decided 2026-08-19.]** The holding genes are bar counts and are named as such
+(`min_holding_bars`, `max_holding_bars`, on the genome as well as in the rendered YAML). They
+always render to the `_bars` spelling, never `_days`: §3.3 refuses `min_holding_days` outright on
+an intraday strategy, so emitting it would make every genome invalid the moment the chassis was
+not daily.
+
+On an **intraday** chassis `repair` takes a third job: the holding floor is clamped to one bar
+below the measured session length (§7.6). A minimum at or above it is unsatisfiable — the forced
+session close overrides the minimum, so no position could ever reach it, and the engine refuses
+such a strategy outright. Unclamped, a `1h` search would lose most of the genomes that drew a
+floor at all, against a nine-bar Xetra session and a gene drawn to twenty, and would report the
+losses as a defect in the block library rather than as its own overreach. The clamp is applied
+**after** the draw rather than by narrowing the gene, so the sequence of random numbers a seed
+produces is identical at every interval and a daily search is bit-for-bit what it was.
 
 **Thresholds inside expressions are searchable here, and are not searchable afterwards.** §9.1's
 known limitation — numeric literals in a `signal:` string are unreachable to the optimizer —

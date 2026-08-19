@@ -20,15 +20,20 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from cracktrade.backtest import buy_and_hold_portfolio, extract_metrics, run_simulation
+from cracktrade.backtest import (
+    Calendar,
+    buy_and_hold_portfolio,
+    extract_metrics,
+    run_simulation,
+)
 from cracktrade.config import dump_strategy
 from cracktrade.control import NO_CONTROL, RunControl
 from cracktrade.domain import FoldResult, Metrics, ValidationReport
+from cracktrade.history import scope_of
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import discover_parameters
 from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, TradeFloor
 from cracktrade.optimize.runner import SplitOutcome, optimize_split, worst_case_warmup
-from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from cracktrade.validate.costs import cost_sensitivity
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme, walk_forward_splits
 from cracktrade.validate.stability import stability_surface
@@ -130,11 +135,13 @@ def walk_forward(
 
     out_of_sample = np.concatenate([outcome.test_returns for outcome in outcomes])
     trials = sum(outcome.result.trials for outcome in outcomes)
+    calendar = Calendar.of(data)
     trial_sharpes = _per_period(
         np.array(
             [sharpe for outcome in outcomes for sharpe in outcome.trial_sharpes],
             dtype=np.float64,
-        )
+        ),
+        calendar,
     )
 
     # The most recent fold is the one whose regime the user is about to trade in, so the
@@ -144,6 +151,7 @@ def walk_forward(
     benchmark = _out_of_sample_benchmark(strategy, data, splits)
 
     report = ValidationReport(
+        history=scope_of(data, multi_window=True),
         strategy_name=strategy.strategy.name,
         ticker=data.ticker,
         objective=objective_name,
@@ -203,15 +211,16 @@ def _out_of_sample_benchmark(
     return extract_metrics(portfolio, risk_free_rate=strategy.execution.risk_free_rate)
 
 
-def _per_period(annualised: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def _per_period(annualised: npt.NDArray[np.float64], calendar: Calendar) -> npt.NDArray[np.float64]:
     """De-annualise Sharpe ratios for the deflation formula.
 
-    ``Metrics.sharpe_ratio`` is annualised on 252 trading days, but the deflated Sharpe mixes the
-    ratio with the *observation count*, so both have to be on the per-bar footing. Feeding it
-    annualised trial Sharpes inflates their variance by 252 and the luck threshold by about 16,
-    which fails every strategy regardless of merit.
+    ``Metrics.sharpe_ratio`` is annualised on the run's own calendar, but the deflated
+    Sharpe mixes the ratio with the *observation count*, so both have to be on the per-bar
+    footing. Feeding it annualised trial Sharpes inflates their variance by the periods
+    per year and the luck threshold by its square root, which fails every strategy
+    regardless of merit -- and the factor grows from 16 to 65 on 30-minute bars.
     """
-    return annualised / math.sqrt(TRADING_DAYS_PER_YEAR)
+    return annualised / math.sqrt(calendar.periods_per_year)
 
 
 def _fold_performance_matrix(

@@ -17,6 +17,7 @@ from cracktrade.backtest.metrics import extract_metrics, extract_trades
 from cracktrade.backtest.runner import overnight_carries, run_simulation
 from cracktrade.backtest.series import capture
 from cracktrade.domain import BacktestResult, DataVintage, Metrics
+from cracktrade.history import scope_of
 from cracktrade.log import get_logger
 
 if TYPE_CHECKING:
@@ -65,6 +66,7 @@ def run_backtest(
     )
 
     result = BacktestResult(
+        history=scope_of(data),
         strategy_name=strategy.strategy.name,
         ticker=data.ticker,
         vintage=vintage_of(data),

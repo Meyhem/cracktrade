@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+from cracktrade.config import Interval
 from cracktrade.evolution.blocks import BLOCKS, Gene, instantiate
 from cracktrade.strategy import build_strategy
 
@@ -72,8 +73,8 @@ STOP_FIELDS: Final[Mapping[str, str]] = {
 }
 
 TAKE_PROFIT_GENE: Final = Gene("take_profit_pct", 2.0, 50.0)
-MAX_HOLDING_GENE: Final = Gene("max_holding_days", 3, 120, integer=True)
-MIN_HOLDING_GENE: Final = Gene("min_holding_days", 1, 20, integer=True)
+MAX_HOLDING_GENE: Final = Gene("max_holding_bars", 3, 120, integer=True)
+MIN_HOLDING_GENE: Final = Gene("min_holding_bars", 1, 20, integer=True)
 
 #: Holding cap given to a genome that repair found had no way out of a position at all.
 FALLBACK_MAX_HOLDING: Final = 20
@@ -116,8 +117,8 @@ class Genome:
     exit_ops: tuple[str, ...]
     stop: Stop | None
     take_profit_pct: float | None
-    max_holding_days: int | None
-    min_holding_days: int | None
+    max_holding_bars: int | None
+    min_holding_bars: int | None
 
     def __post_init__(self) -> None:
         _validate_chain(self.entries, self.entry_ops, MIN_ENTRY_CONDITIONS, "entries")
@@ -165,6 +166,8 @@ class Chassis:
         slippage_pct: per-side slippage, in percent.
         commission_pct: per-side commission, in percent.
         risk_free_rate: annual rate, as a fraction.
+        interval: bar width. Evolution never searches over it for the same reason it never
+            searches over the ticker -- it is part of the question, not the answer.
         position_sizing: optional sizing rule, passed through unchanged.
     """
 
@@ -172,6 +175,7 @@ class Chassis:
     ticker: str
     start_date: date
     end_date: date
+    interval: Interval = Interval.D1
     initial_capital: float = 100_000.0
     slippage_pct: float = 0.1
     commission_pct: float = 0.1
@@ -193,6 +197,7 @@ class Chassis:
             "ticker": self.ticker,
             "start_date": self.start_date,
             "end_date": self.end_date,
+            "interval": self.interval,
         }
 
     def data_config(self) -> Strategy:
@@ -209,7 +214,7 @@ class Chassis:
                 "universe": self.universe(),
                 "execution": self.execution(),
                 "entry": {"signal": "close > open"},
-                "exit": {"max_holding_days": 1},
+                "exit": {"max_holding_bars": 1},
             }
         )
 
@@ -266,10 +271,13 @@ def mapping(genome: Genome, chassis: Chassis) -> dict[str, Any]:
         exit_rule[STOP_FIELDS[genome.stop.kind]] = round(genome.stop.value, 2)
     if genome.take_profit_pct is not None:
         exit_rule["take_profit_pct"] = round(genome.take_profit_pct, 2)
-    if genome.min_holding_days is not None:
-        exit_rule["min_holding_days"] = int(genome.min_holding_days)
-    if genome.max_holding_days is not None:
-        exit_rule["max_holding_days"] = int(genome.max_holding_days)
+    # Always the bar-denominated spelling. The genes were always bar counts, and the `_days`
+    # fields are refused outright on an intraday strategy -- so emitting them would make every
+    # genome invalid the moment the chassis was not daily.
+    if genome.min_holding_bars is not None:
+        exit_rule["min_holding_bars"] = int(genome.min_holding_bars)
+    if genome.max_holding_bars is not None:
+        exit_rule["max_holding_bars"] = int(genome.max_holding_bars)
 
     payload: dict[str, Any] = {
         "strategy": {"name": chassis.name},
@@ -284,7 +292,7 @@ def mapping(genome: Genome, chassis: Chassis) -> dict[str, Any]:
     return payload
 
 
-def repair(genome: Genome) -> Genome:
+def repair(genome: Genome, *, session_bars: int | None = None) -> Genome:
     """Bring a genome back inside the schema's constraints.
 
     Two of the schema's rules are not expressible as independent gene bounds, so the operators
@@ -295,21 +303,36 @@ def repair(genome: Genome) -> Genome:
 
     Both repairs are deterministic. A repair that consulted the random number generator would
     make a run's reproducibility depend on how often it was needed.
+
+    Args:
+        genome: the candidate to repair.
+        session_bars: bars in one trading session, when the run is intraday. A minimum holding
+            period at or above it is unsatisfiable -- the forced session close overrides it, so
+            no position could ever reach it -- and the engine refuses such a strategy outright
+            (spec section 7.6). Left unclamped, a third of the reachable space would be
+            unrenderable at ``1h``, where a Xetra session is nine bars against a gene drawn up
+            to twenty, and the search would report the losses as a defect in the block library.
     """
     exits = (
         bool(genome.exits)
         or genome.stop is not None
         or genome.take_profit_pct is not None
-        or genome.max_holding_days is not None
+        or genome.max_holding_bars is not None
     )
-    max_holding = genome.max_holding_days if exits else FALLBACK_MAX_HOLDING
+    max_holding = genome.max_holding_bars if exits else FALLBACK_MAX_HOLDING
 
-    min_holding = genome.min_holding_days
+    min_holding = genome.min_holding_bars
+    if min_holding is not None and session_bars is not None:
+        # Clamped, not dropped: a genome that asked to hold still asks to hold, for as long as
+        # a session allows. Below two bars the floor cannot be expressed at all.
+        ceiling = session_bars - 1
+        min_holding = min(min_holding, ceiling) if ceiling >= 1 else None
+
     if min_holding is not None and max_holding is not None and min_holding >= max_holding:
         # The cap is the binding statement about how long a trade may run, so the floor yields.
         min_holding = max_holding - 1 if max_holding > 1 else None
 
-    if max_holding == genome.max_holding_days and min_holding == genome.min_holding_days:
+    if max_holding == genome.max_holding_bars and min_holding == genome.min_holding_bars:
         return genome
 
     return Genome(
@@ -319,8 +342,8 @@ def repair(genome: Genome) -> Genome:
         exit_ops=genome.exit_ops,
         stop=genome.stop,
         take_profit_pct=genome.take_profit_pct,
-        max_holding_days=max_holding,
-        min_holding_days=min_holding,
+        max_holding_bars=max_holding,
+        min_holding_bars=min_holding,
     )
 
 
@@ -347,10 +370,12 @@ def describe(genome: Genome) -> str:
         exits.append(f"{genome.stop.kind} stop {genome.stop.value:.2f}")
     if genome.take_profit_pct is not None:
         exits.append(f"take profit {genome.take_profit_pct:.2f}%")
-    if genome.min_holding_days is not None:
-        exits.append(f"hold at least {genome.min_holding_days}d")
-    if genome.max_holding_days is not None:
-        exits.append(f"hold at most {genome.max_holding_days}d")
+    # Bars, never days. The genes were always bar counts, and a "10d" that meant ten half-hour
+    # bars would read as two calendar weeks to anyone glancing at an intraday report.
+    if genome.min_holding_bars is not None:
+        exits.append(f"hold at least {genome.min_holding_bars} bars")
+    if genome.max_holding_bars is not None:
+        exits.append(f"hold at most {genome.max_holding_bars} bars")
     parts.append(f"exit: {', '.join(exits)}")
     return "; ".join(parts)
 

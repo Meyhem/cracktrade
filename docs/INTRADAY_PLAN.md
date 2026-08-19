@@ -468,6 +468,36 @@ Files: `optimize/windows.py`, `optimize/runner.py`, `optimize/objective.py`,
 30m fixture carries `history_limited: true`; evolution deflation tests green; gates green;
 committed.
 
+### Phase 4 findings — DONE
+
+Six deviations from the plan above, all recorded in the spec.
+
+1. **`history_limited` / `history_note` became one object**, `HistoryScope(interval, sessions,
+   bars, limited, note)`, on every result as `history`. Two loose parallel fields would have let
+   a client render the note without the flag, or the flag without the interval it is about. Spec
+   §12.11.
+2. **Evolution was broken on intraday before this phase, in two ways neither of which the plan
+   anticipated.** `Chassis` had no `interval` at all, so every evolved strategy came back daily
+   whatever was asked for; and `mapping()` emitted `min/max_holding_days`, which Phase 1 refuses
+   outright on an intraday strategy, so the first genome to draw a holding cap would have failed
+   to parse. The genome's own fields are now named `min_holding_bars`/`max_holding_bars` too —
+   they were always bar counts.
+3. **`repair` gained a session-aware clamp on the minimum holding period.** A Xetra hour is nine
+   bars against a gene drawn to twenty, so most genomes drawing a floor rendered to a strategy
+   §7.6 refuses — and the search logged the losses as *a defect in the block library*. Clamped
+   after the draw rather than by narrowing the gene, so a daily search is bit-for-bit unchanged.
+4. **The evolution segment floor needed the same session treatment as the test window**, which
+   the plan did not list. Left at 60 bars, an evolution over eight weeks of 30-minute history
+   divides successfully and returns a strategy chosen between thousands of structures on a
+   fortnight of market. The floor is now 60 *sessions*, which refuses it. The practical
+   consequence: evolution is available at 1h and 1d, not at 15m or 30m.
+5. **`cracktrade evolve` gained `--interval`, and its `--start` default is derived from it.**
+   The plan treated the CLI as out of scope, but a fixed twelve-year default is wider than the
+   provider reach at every intraday interval, so the command would have been unusable without an
+   option the help text does not mark as mandatory.
+6. **`library_warmup()` verified sane at 30m** as the plan asked: 200 bars is ~12 Xetra sessions.
+   It is not the binding constraint at any interval — the segment floor in (4) is.
+
 ---
 
 ## Phase 5 — API and worker plumbing

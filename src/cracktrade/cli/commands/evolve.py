@@ -13,6 +13,7 @@ from cracktrade.cli.exit_codes import ExitCode
 from cracktrade.cli.output import OutputFormat, emit
 from cracktrade.cli.progress import search_progress
 from cracktrade.cli.render import render_evolution
+from cracktrade.config import Interval
 from cracktrade.data import FrameCache, YFinanceProvider, load_history
 from cracktrade.evolution import (
     DEFAULT_GENERATIONS,
@@ -38,6 +39,11 @@ err_console = Console(stderr=True)
 #: fail the division rather than produce a fast answer.
 DEFAULT_YEARS = 12
 
+#: Margin left below an interval's provider reach when defaulting the start date. Yahoo's
+#: intraday windows are measured from the moment of the request, so asking for exactly the limit
+#: races the clock and fails intermittently.
+LOOKBACK_MARGIN = timedelta(days=2)
+
 
 def evolve(
     ticker: Annotated[str, typer.Argument(help="The symbol to compose a strategy for, e.g. AAPL.")],
@@ -48,6 +54,17 @@ def evolve(
     end: Annotated[
         str | None, typer.Option("--end", help="Last bar, YYYY-MM-DD. Defaults to today.")
     ] = None,
+    interval: Annotated[
+        Interval,
+        typer.Option(
+            "--interval",
+            help=(
+                "Bar width. Intraday bars are forced flat at each session close, and the "
+                "provider serves 15m/30m for about 55 days only, so --start defaults to "
+                "whatever that interval can actually reach."
+            ),
+        ),
+    ] = Interval.D1,
     generations: Annotated[
         int, typer.Option("--generations", min=1, help="Generations to evolve.")
     ] = DEFAULT_GENERATIONS,
@@ -147,8 +164,9 @@ def evolve(
     chassis = Chassis(
         name=f"evolved_{ticker.strip().lower()}",
         ticker=ticker,
-        start_date=_parse_date(start, "--start", today - timedelta(days=365 * DEFAULT_YEARS)),
+        start_date=_parse_date(start, "--start", _default_start(interval, today)),
         end_date=_parse_date(end, "--end", today),
+        interval=interval,
         initial_capital=capital,
         slippage_pct=slippage,
         commission_pct=commission,
@@ -192,6 +210,19 @@ def evolve(
 
     if strict and not result.is_credible:
         raise typer.Exit(ExitCode.NOT_CREDIBLE)
+
+
+def _default_start(interval: Interval, today: date) -> date:
+    """How far back to reach when the user does not say.
+
+    Twelve years is right for daily bars and unaskable at 30 minutes: the provider serves those
+    for about 55 days, and a default that exceeds the reach would refuse every run that did not
+    also pass --start. So the default is the interval's own reach, less a margin.
+    """
+    limit = interval.max_lookback
+    if limit is None:
+        return today - timedelta(days=365 * DEFAULT_YEARS)
+    return today - (limit - LOOKBACK_MARGIN)
 
 
 def _parse_date(value: str | None, option: str, fallback: date) -> date:

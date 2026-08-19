@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from cracktrade.backtest import (
+    Calendar,
     buy_and_hold_portfolio,
     extract_metrics,
     extract_trades,
@@ -38,6 +39,7 @@ from cracktrade.domain import (
     RunSeries,
 )
 from cracktrade.errors import CracktradeError
+from cracktrade.history import scope_of
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import Parameter, discover_parameters, inject
 from cracktrade.optimize.objective import (
@@ -159,7 +161,10 @@ def optimize_split(
     # Resolved once, here, from the length of *this* split's train window. A walk-forward's
     # folds have different train lengths and therefore different floors, which is the point of
     # a rate: the constraint has to track the span it is a constraint about.
-    min_trades = trade_floor.required(len(division.train.data))
+    min_trades = trade_floor.required(
+        len(division.train.data),
+        periods_per_year=Calendar.of(division.train.data).periods_per_year,
+    )
     objective = get_objective(objective_name, min_trades=min_trades)
 
     diagnostics = SearchDiagnostics(
@@ -213,6 +218,8 @@ def optimize_split(
     )
 
     result = OptimizationResult(
+        # The test window, because that is the history the reported numbers cover.
+        history=scope_of(division.test.data),
         strategy_name=strategy.strategy.name,
         ticker=ticker,
         objective=objective_name,

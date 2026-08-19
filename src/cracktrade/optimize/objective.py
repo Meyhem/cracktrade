@@ -89,12 +89,16 @@ class TradeFloor:
             msg = f"min_trades_per_year must be a non-negative number, got {self.per_year}"
             raise ValueError(msg)
 
-    def required(self, train_bars: int) -> int:
-        """The floor in force for a train window of ``train_bars`` daily bars.
+    def required(self, train_bars: int, *, periods_per_year: float = TRADING_DAYS_PER_YEAR) -> int:
+        """The floor in force for a train window of ``train_bars`` bars.
 
         Rounded up: a rate of 4/year over a 15-month window asks for 5 trades, not 4.99 of one.
+
+        ``periods_per_year`` comes from the run's calendar. Leaving it at 252 on 30-minute bars
+        would read 680 bars as 2.7 years and demand a rate-based floor for a window that is
+        actually forty sessions long -- which would then be blamed on the strategy.
         """
-        years = train_bars / TRADING_DAYS_PER_YEAR
+        years = train_bars / periods_per_year
         return max(self.minimum, math.ceil(self.per_year * years))
 
 

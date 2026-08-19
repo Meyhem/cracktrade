@@ -181,6 +181,7 @@ def chassis_for(strategy: Strategy) -> Chassis:
         ticker=strategy.universe.ticker,
         start_date=strategy.universe.start_date,
         end_date=strategy.universe.end_date,
+        interval=strategy.universe.interval,
         initial_capital=strategy.execution.initial_capital,
         slippage_pct=strategy.execution.slippage_pct,
         commission_pct=strategy.execution.commission_pct,

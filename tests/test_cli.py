@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import yaml
 from cracktrade.cli.app import _exit_code_for, main
 from cracktrade.cli.exit_codes import ExitCode
 from cracktrade.cli.output import OutputFormat
+from cracktrade.config import Interval
 from cracktrade.domain import Metrics
 from cracktrade.errors import (
     BacktestError,
@@ -205,6 +207,29 @@ def test_result_commands_offer_every_output_format(
     printed = capsys.readouterr().out
     assert "--format" in printed
     assert "--output" in printed
+
+
+def test_evolve_offers_the_bar_interval(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["evolve", "--help"]) == 0
+    assert "--interval" in capsys.readouterr().out
+
+
+def test_the_evolve_start_default_is_reachable_at_every_interval() -> None:
+    """A fixed twelve-year default would refuse every intraday run that did not pass --start.
+
+    Not a cosmetic default: the parse-time width check (spec 3.3.1) rejects a range wider than
+    the interval's provider reach, so the default has to be inside it or the command is unusable
+    without an option the help text does not say is mandatory.
+    """
+    from cracktrade.cli.commands.evolve import DEFAULT_YEARS, _default_start
+
+    today = date(2026, 8, 19)
+    assert _default_start(Interval.D1, today) == today - timedelta(days=365 * DEFAULT_YEARS)
+
+    for interval in (Interval.M15, Interval.M30, Interval.H1):
+        reach = interval.max_lookback
+        assert reach is not None
+        assert today - _default_start(interval, today) < reach
 
 
 def test_validate_accepts_a_good_strategy(tmp_path: Path) -> None:

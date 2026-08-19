@@ -27,6 +27,7 @@ __all__ = [
     "DeflatedSharpe",
     "EvolutionResult",
     "FoldResult",
+    "HistoryScope",
     "Interval",
     "Metrics",
     "MonthlyReturns",
@@ -127,6 +128,37 @@ class Trade:
     def is_winner(self) -> bool:
         """Whether the trade made money after costs."""
         return self.pnl > 0
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryScope:
+    """How much history a result rests on, and whether that is enough to mean anything.
+
+    Built by :func:`cracktrade.history.scope_of`. Spec section 12.11.
+
+    Stated in **sessions**, not bars. Forty Xetra sessions of 30-minute data is about 680 bars,
+    which looks like plenty next to a daily backtest of 680 days and is nothing like it: forty
+    independent days, most of the trades drawn from a handful of weeks, and every regime the
+    strategy will actually meet absent from the sample. "40 sessions of 30m bars" tells a trader
+    that; "680 bars" hides it.
+
+    ``limited`` never blocks a run -- the user asked for it and gets it. It exists because a
+    number that looks authoritative and is not is the worst thing this engine can produce, and
+    nothing else in a result distinguishes forty sessions from four years.
+
+    Attributes:
+        interval: the bar width, as the YAML token.
+        sessions: distinct trading sessions spanned. Equals the bar count on a daily run.
+        bars: bars in the history.
+        limited: whether the history is below the threshold for this kind of run.
+        note: what is thin, why it matters, and the way out. ``None`` when not limited.
+    """
+
+    interval: str
+    sessions: int
+    bars: int
+    limited: bool
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +306,15 @@ class BacktestResult:
     #: does it anyway is worse than one that says when it happened (spec section 7.6).
     overnight_carries: int = 0
 
+    #: How much history this result rests on, and whether that is enough to mean anything.
+    #: Never blocks a run -- the user asked for it and gets it -- but a result computed from
+    #: forty Xetra sessions must not look like one computed from four years, and no other field
+    #: here distinguishes them (spec section 12.11).
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    history: HistoryScope | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ParameterChange:
@@ -354,6 +395,15 @@ class OptimizationResult:
 
     #: Test-window chart series, present only when the caller asked for them.
     series: RunSeries | None = None
+
+    #: How much history this result rests on, and whether that is enough to mean anything.
+    #: Never blocks a run -- the user asked for it and gets it -- but a result computed from
+    #: forty Xetra sessions must not look like one computed from four years, and no other field
+    #: here distinguishes them (spec section 12.11).
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    history: HistoryScope | None = None
 
     @property
     def improvement_pct(self) -> float:
@@ -465,6 +515,15 @@ class ValidationReport:
     #: deliberately no combined curve: each fold re-optimizes, so the folds are different
     #: strategies and splicing their equity curves would draw one that was never traded.
     fold_series: tuple[RunSeries, ...] = ()
+
+    #: How much history this result rests on, and whether that is enough to mean anything.
+    #: Never blocks a run -- the user asked for it and gets it -- but a result computed from
+    #: forty Xetra sessions must not look like one computed from four years, and no other field
+    #: here distinguishes them (spec section 12.11).
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    history: HistoryScope | None = None
 
     @property
     def combined_return_pct(self) -> float:
@@ -966,6 +1025,15 @@ class EvolutionResult:
 
     #: Holdout chart series, present only when the caller asked for them.
     series: RunSeries | None = None
+
+    #: How much history this result rests on, and whether that is enough to mean anything.
+    #: Never blocks a run -- the user asked for it and gets it -- but a result computed from
+    #: forty Xetra sessions must not look like one computed from four years, and no other field
+    #: here distinguishes them (spec section 12.11).
+    #:
+    #: Optional only so that results serialised before this field existed still load. A run
+    #: executed today always has one.
+    history: HistoryScope | None = None
 
     @property
     def profitable_segments(self) -> int:

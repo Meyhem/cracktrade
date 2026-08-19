@@ -17,7 +17,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from cracktrade.errors import OptimizationError
-from cracktrade.optimize.windows import Split, TestWindow, TrainWindow
+from cracktrade.optimize.windows import Split, TestWindow, TrainWindow, effective_min_test_bars
 
 if TYPE_CHECKING:
     from cracktrade.data import MarketData
@@ -71,12 +71,15 @@ def walk_forward_splits(
     initial_train = int(bars * train_fraction)
     remaining = bars - initial_train
     segment = remaining // folds
+    min_test_bars = effective_min_test_bars(data, min_test_bars)
 
     if segment < min_test_bars:
+        # Naming the interval matters here: "30 bars per fold" reads as adequate until the
+        # reader remembers a bar is half an hour, at which point it is under two sessions.
         msg = (
-            f"{bars} bars split into {folds} fold(s) leaves {segment} bars per test segment, "
-            f"below the {min_test_bars} required. Use fewer folds, widen the date range, or "
-            f"lower the train fraction"
+            f"{bars} {data.interval.value} bars split into {folds} fold(s) leaves {segment} "
+            f"bars per test segment, below the {min_test_bars} required. Use fewer folds, "
+            f"widen the date range, or lower the train fraction"
         )
         raise OptimizationError(msg)
 

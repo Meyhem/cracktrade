@@ -204,8 +204,8 @@ def test_a_genome_at_the_arity_ceiling_on_both_sides_renders() -> None:
             exit_ops=tuple(rng.choice(("&", "|")) for _ in range(MAX_CONDITIONS - 1)),
             stop=None,
             take_profit_pct=None,
-            max_holding_days=10,
-            min_holding_days=None,
+            max_holding_bars=10,
+            min_holding_bars=None,
         )
     )
     strategy = render(genome, a_chassis())
@@ -225,8 +225,8 @@ def test_crossover_child_length_always_traces_back_to_a_parent() -> None:
         exit_ops=(),
         stop=None,
         take_profit_pct=None,
-        max_holding_days=10,
-        min_holding_days=None,
+        max_holding_bars=10,
+        min_holding_bars=None,
     )
     long = Genome(
         entries=tuple(random_slot(rng) for _ in range(MAX_CONDITIONS)),
@@ -235,8 +235,8 @@ def test_crossover_child_length_always_traces_back_to_a_parent() -> None:
         exit_ops=(),
         stop=None,
         take_profit_pct=None,
-        max_holding_days=10,
-        min_holding_days=None,
+        max_holding_bars=10,
+        min_holding_bars=None,
     )
 
     for seed in range(200):
@@ -266,8 +266,8 @@ def test_a_two_condition_entry_parenthesises_both_sides() -> None:
             exit_ops=(),
             stop=None,
             take_profit_pct=None,
-            max_holding_days=10,
-            min_holding_days=None,
+            max_holding_bars=10,
+            min_holding_bars=None,
         )
     )
     signal = render(genome, a_chassis()).entry.signal
@@ -294,10 +294,10 @@ def test_repair_gives_a_genome_with_no_way_out_a_holding_cap() -> None:
         exit_ops=(),
         stop=None,
         take_profit_pct=None,
-        max_holding_days=None,
-        min_holding_days=None,
+        max_holding_bars=None,
+        min_holding_bars=None,
     )
-    assert repair(stranded).max_holding_days is not None
+    assert repair(stranded).max_holding_bars is not None
     render(repair(stranded), a_chassis())
 
 
@@ -309,12 +309,12 @@ def test_repair_yields_the_holding_floor_to_the_cap() -> None:
         exit_ops=(),
         stop=None,
         take_profit_pct=None,
-        max_holding_days=5,
-        min_holding_days=9,
+        max_holding_bars=5,
+        min_holding_bars=9,
     )
     repaired = repair(inverted)
-    assert repaired.max_holding_days == 5
-    assert repaired.min_holding_days == 4
+    assert repaired.max_holding_bars == 5
+    assert repaired.min_holding_bars == 4
 
 
 def test_repair_is_deterministic() -> None:
@@ -748,8 +748,8 @@ def test_a_stop_kind_maps_onto_the_field_the_schema_expects() -> None:
             exit_ops=(),
             stop=Stop(kind=kind, value=5.0),
             take_profit_pct=None,
-            max_holding_days=None,
-            min_holding_days=None,
+            max_holding_bars=None,
+            min_holding_bars=None,
         )
         strategy = render(repair(genome), a_chassis())
         assert getattr(strategy.exit, field) == 5.0

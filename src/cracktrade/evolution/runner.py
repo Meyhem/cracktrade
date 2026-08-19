@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from cracktrade.backtest import (
+    Calendar,
     buy_and_hold_portfolio,
     extract_metrics,
     extract_trades,
@@ -48,6 +49,7 @@ from cracktrade.evolution.protocol import (
     split_for_evolution,
 )
 from cracktrade.evolution.search import GaSettings, run_evolution
+from cracktrade.history import scope_of
 from cracktrade.log import get_logger
 from cracktrade.optimize.discovery import discover_parameters
 from cracktrade.optimize.objective import (
@@ -57,7 +59,6 @@ from cracktrade.optimize.objective import (
     TradeFloor,
     get_objective,
 )
-from cracktrade.settings import TRADING_DAYS_PER_YEAR
 from cracktrade.validate.costs import cost_sensitivity
 from cracktrade.validate.stability import stability_surface
 from cracktrade.validate.statistics import (
@@ -114,6 +115,7 @@ def evolve(
         RunCancelled: the caller asked for the run to stop.
     """
     ga = settings or GaSettings()
+    calendar = Calendar.of(data)
     warmup = library_warmup()
     regions = split_for_evolution(
         data,
@@ -126,7 +128,9 @@ def evolve(
     # Resolved once, from the whole evolution region rather than per segment. A segment is a
     # fraction of the region, and section 9.3's floor applied to each of them separately would
     # reject candidates for being short of trades in a window too small to have produced them.
-    min_trades = trade_floor.required(regions.evolution_bars)
+    min_trades = trade_floor.required(
+        regions.evolution_bars, periods_per_year=calendar.periods_per_year
+    )
 
     logger.info(
         "evolving on %s: %d segment(s) over %d bars, %d-bar holdout, requiring %d closed trades",
@@ -146,13 +150,23 @@ def evolve(
         min_trades=min_trades,
     )
 
+    # Only on an intraday run: the search must not propose a minimum holding period a session
+    # cannot satisfy, because the engine refuses such a strategy outright (spec section 7.6) and
+    # every genome drawing one would be lost as a rendering failure rather than scored.
+    session_bars = calendar.bars_per_session if data.interval.is_intraday else None
+
     started = time.perf_counter()
     # Resolved from the budget as well as the setting: a search short enough to finish before
     # its workers have imported vectorbt is faster without them.
     processes = plan_workers(workers, budget=ga.budget)
     if processes == 1:
         outcome = run_evolution(
-            fitness, settings=ga, seed=seed, on_generation=on_generation, control=control
+            fitness,
+            settings=ga,
+            seed=seed,
+            on_generation=on_generation,
+            control=control,
+            session_bars=session_bars,
         )
     else:
         # The pool lives only as long as the search. Everything after this -- the holdout, the
@@ -166,6 +180,7 @@ def evolve(
                 on_generation=on_generation,
                 control=control,
                 evaluate_batch=lambda batch: fitness.evaluate_batch(batch, score_many),
+                session_bars=session_bars,
             )
     elapsed = time.perf_counter() - started
 
@@ -196,6 +211,7 @@ def evolve(
     returns = np.asarray(holdout_returns.to_numpy(), dtype=np.float64)
 
     result = EvolutionResult(
+        history=scope_of(data, multi_window=True),
         strategy_name=winner.strategy.name,
         ticker=chassis.ticker,
         objective=objective_name,
@@ -218,7 +234,7 @@ def evolve(
         deflated=deflated_sharpe(
             returns,
             trials=fitness.trials,
-            trial_sharpes=_per_period(np.array(fitness.trial_sharpes, dtype=np.float64)),
+            trial_sharpes=_per_period(np.array(fitness.trial_sharpes, dtype=np.float64), calendar),
         ),
         overfitting=probability_of_backtest_overfitting(
             _finalist_performance_matrix(chassis, fitness, outcome.finalists)
@@ -346,15 +362,16 @@ def _stability(
     )
 
 
-def _per_period(annualised: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def _per_period(annualised: npt.NDArray[np.float64], calendar: Calendar) -> npt.NDArray[np.float64]:
     """De-annualise Sharpe ratios for the deflation formula.
 
-    ``Metrics.sharpe_ratio`` is annualised on 252 trading days, but the deflated Sharpe mixes the
-    ratio with the observation count, so both have to be on the per-bar footing. Feeding it
-    annualised trial Sharpes inflates the luck threshold by about sixteen, which fails every
-    strategy regardless of merit.
+    ``Metrics.sharpe_ratio`` is annualised on the run's own calendar, but the deflated
+    Sharpe mixes the ratio with the observation count, so both have to be on the per-bar
+    footing. Feeding it annualised trial Sharpes inflates the luck threshold by the square
+    root of the periods per year -- about sixteen daily, about sixty-five on 30-minute
+    bars -- which fails every strategy regardless of merit.
     """
-    return annualised / math.sqrt(TRADING_DAYS_PER_YEAR)
+    return annualised / math.sqrt(calendar.periods_per_year)
 
 
 def _capture_holdout_series(

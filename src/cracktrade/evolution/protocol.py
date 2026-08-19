@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING
 
 from cracktrade.backtest import extract_metrics, run_simulation
 from cracktrade.config import dump_strategy
+from cracktrade.data.sessions import median_bars_per_session
 from cracktrade.errors import CracktradeError, EvolutionError
 from cracktrade.evolution.genome import render
 from cracktrade.optimize.objective import INFEASIBLE
@@ -66,8 +67,30 @@ DEFAULT_SEGMENTS = 4
 #: Share of history reserved for the single final evaluation.
 DEFAULT_HOLDOUT_FRACTION = 0.2
 
-#: Bars a segment or the holdout must have before it can support any conclusion.
+#: Bars a segment or the holdout must have before it can support any conclusion. Sixty trading
+#: days is about a quarter -- long enough that the stretch is a period of market rather than an
+#: episode within one.
 DEFAULT_MIN_SEGMENT_BARS = 60
+
+#: The same quarter, counted in sessions, on intraday data. Sixty *bars* of 30-minute history is
+#: three and a half Xetra sessions, and four segments of that would have the search choose
+#: between thousands of composed structures on a fortnight of market. Carrying the daily floor
+#: over arithmetically rather than in meaning is what makes an intraday evolution look like a
+#: daily one while resting on a fiftieth of the evidence.
+MIN_SEGMENT_SESSIONS = 60
+
+
+def effective_min_segment_bars(data: MarketData, requested: int) -> int:
+    """Raise a bar-denominated segment floor to a session-aware one on intraday data.
+
+    The caller's figure is kept as a lower bound rather than replaced, so a caller asking for
+    more still gets more. Mirrors
+    :func:`~cracktrade.optimize.windows.effective_min_test_bars`, which does the same job for
+    the optimizer's test window.
+    """
+    if not data.interval.is_intraday:
+        return requested
+    return max(requested, MIN_SEGMENT_SESSIONS * median_bars_per_session(data.index))
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +168,7 @@ def split_for_evolution(
     if segments < 1:
         msg = f"segments must be at least 1, got {segments}"
         raise EvolutionError(msg)
+    min_segment_bars = effective_min_segment_bars(data, min_segment_bars)
     if not 0.0 < holdout_fraction < 1.0:
         msg = f"holdout_fraction must be between 0 and 1, got {holdout_fraction}"
         raise EvolutionError(msg)

@@ -77,6 +77,7 @@ BACKTEST_KEYS = frozenset(
         "warmup_bars",
         "series",
         "overnight_carries",
+        "history",
     }
 )
 
@@ -100,6 +101,7 @@ OPTIMIZE_KEYS = frozenset(
         "infeasible",
         "counts_exact",
         "min_trades_required",
+        "history",
         "trials",
         "budget",
         "seed",
@@ -145,6 +147,7 @@ WALK_FORWARD_KEYS = frozenset(
         "total_trades",
         "failures",
         "is_credible",
+        "history",
     }
 )
 

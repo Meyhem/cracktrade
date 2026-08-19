@@ -177,11 +177,11 @@ describe('StrategyListPage', () => {
 
     // Picking 30m replaces the twelve-year daily default with the seven weeks the provider
     // actually serves — the whole reach, because an evolution wants every bar it can get. The
-    // range ends yesterday and reaches back the interval's 55 days less the 2-day margin.
+    // range ends yesterday and reaches back the interval's 58 days less the 2-day margin.
     await user.click(await screen.findByRole('option', { name: '30 minutes' }))
     await waitFor(() =>
       expect(within(dialog).getByLabelText('Start date')).toHaveValue(
-        dayjs().subtract(54, 'day').format('YYYY-MM-DD'),
+        dayjs().subtract(57, 'day').format('YYYY-MM-DD'),
       ),
     )
     expect(within(dialog).getByLabelText('End date')).toHaveValue(

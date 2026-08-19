@@ -82,6 +82,24 @@ def test_only_daily_is_not_intraday() -> None:
     assert all(interval.is_intraday for interval in Interval if interval is not Interval.D1)
 
 
+def test_provider_reach_sits_just_inside_the_measured_cliffs() -> None:
+    """The reach figures are margins under a measured boundary, not round numbers.
+
+    Measured against live Yahoo on 2026-08-19 (``tests/fixtures/README.md``): a 15m request
+    starting 59 days back is served and 60 days back is not; at 1h the boundary is between
+    729 and 730. This test fails if someone rounds the constants up past what was measured --
+    which would not degrade gracefully, because the provider answers an over-wide request with
+    an empty frame rather than a shortened window.
+    """
+    fifteen = Interval.M15.max_lookback
+    hourly = Interval.H1.max_lookback
+    assert fifteen is not None
+    assert hourly is not None
+    # Strictly inside the cliff, and close enough to it to be worth having.
+    assert 55 < fifteen.days < 59
+    assert 700 < hourly.days < 729
+
+
 def test_thirty_minutes_inherits_the_fifteen_minute_limit() -> None:
     """The provider resamples 30m from 15m, so it gets the shorter window, not its own."""
     hourly, half_hourly = Interval.H1.max_lookback, Interval.M30.max_lookback
@@ -146,7 +164,7 @@ def test_a_multi_year_range_is_refused_at_thirty_minutes() -> None:
     """The mistake that actually happens: switching an existing daily strategy to intraday."""
     data = intraday("30m", start_date="2020-01-01", end_date="2024-01-01")
     issues = issues_from(data)
-    assert any("55 days" in issue and "1h" in issue for issue in issues)
+    assert any("58 days" in issue and "1h" in issue for issue in issues)
 
 
 def test_the_span_check_is_on_width_not_on_age() -> None:

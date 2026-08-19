@@ -333,9 +333,9 @@ provider serves it.
 
 | Token | pandas alias | Bar duration | Provider reach |
 | --- | --- | --- | --- |
-| `15m` | `15min` | 15 minutes | 55 days |
-| `30m` | `30min` | 30 minutes | 55 days |
-| `1h` | `1h` | 1 hour | 700 days |
+| `15m` | `15min` | 15 minutes | 58 days |
+| `30m` | `30min` | 30 minutes | 58 days |
+| `1h` | `1h` | 1 hour | 725 days |
 | `1d` | `1D` | 1 day | unlimited |
 
 The pandas alias is **not** the YAML token: pandas has no `30m` alias (`m` means month-end) and
@@ -348,11 +348,30 @@ and 30m, 730 for 1h), because the cutoff moves during the day and a strategy tha
 why it inherits the shorter window rather than getting one of its own. All of this was measured,
 not read from documentation; see `tests/fixtures/README.md`.
 
+**[AMENDED — 2026-08-19.]** The margins were 55 and 700 days, chosen conservatively without the
+cliff having been located. It has now been measured: at 15m a request starting 59 days ago is
+served and one starting 60 days ago returns nothing, and at 1h the same boundary sits between
+729 and 730. The figures are now one day inside the 15m cliff and four inside the 1h one, which
+returns three days to the shortest intervals and twenty-five to `1h`. The margin stays thin on
+purpose — the refusal is a **cliff, not a taper**: a request one day too wide returns an empty
+frame, not a shortened window, so there is nothing to be gained by asking for more than is
+served and nothing partial to fall back on.
+
+**Fetching in chunks does not extend any of this, and is not implemented for that reason.**
+Measured 2026-08-19: a 24-day request sitting 61–85 days back — comfortably narrower than the
+60-day window, merely older than it — returns zero bars, with `The requested range must be
+within the last 60 days`. The bound is on the *age* of the range, not on the size of one
+response, so splitting a two-year 15m request into thirty-six pieces yields thirty-six empty
+frames. Yahoo does not retain 15m or 30m bars beyond the rolling window; they are not
+withheld per request, they are gone. The only ways to a longer intraday history are a vendor
+that keeps one, or accumulating bars locally as calendar time passes — neither of which the
+provider can fake by asking more times.
+
 **Range validation is split in two, deliberately.** The *width* of the range is checked at parse
 time and a range wider than the interval's reach is refused. How far in the *past* the range
 sits is **not** checked at parse time: the provider's window slides forward every day, so a
 strategy that parsed yesterday would fail to parse today, and since the API re-parses stored
-YAML on every read, a saved 30m strategy would become unreadable 55 days after it was written —
+YAML on every read, a saved 30m strategy would become unreadable 58 days after it was written —
 taking the detail view of every run it ever produced with it. An out-of-reach range instead
 produces a `ConfigWarning` on `universe.start_date` and, if run anyway, a loud refusal from the
 data layer naming the limit (§4.2). Nothing produces numbers from data that was never fetched.
@@ -2203,7 +2222,7 @@ tells a trader what "680 bars" hides. On daily data a session is a bar and the t
 | walk-forward, evolution | 120 — twice that; six folds of 120 sessions is twenty sessions a fold, already marginal |
 
 **The note names the way out.** Where the interval's own provider reach is the binding
-constraint (15m and 30m are served for about 55 days, §4.2), the note says so and points at the
+constraint (15m and 30m are served for about 58 days, §4.2), the note says so and points at the
 interval that does reach further, rather than advising a wider date range that cannot be
 fetched. At 15m and 30m the flag is therefore on for effectively every walk-forward. That is not
 a calibration failure; it is true.
@@ -2225,7 +2244,7 @@ unchanged.
 **[AMENDED — 2026-08-19.]** The evolution floor was first set to sixty *sessions*, keeping the
 daily floor's meaning — a quarter of a year — rather than its number. That is the right figure
 for what a segment is asked to do, and it made evolution unavailable at 15m and 30m, whose
-provider reach is 55 days. It was changed on the explicit instruction of the user, who asked for
+provider reach was then 55 days. It was changed on the explicit instruction of the user, who asked for
 the shorter intervals to be evolvable on whatever window they can serve, having been told what
 that window is.
 
@@ -2233,6 +2252,12 @@ The floor is now **three sessions**, and that number is measured rather than cho
 largest floor the shortest-reach intervals can meet. Thirty-seven New York sessions of 30-minute
 bars is 468 bars; the block library's 200-bar warm-up and a 20% holdout leave 175 scorable, and
 four segments of that are about three and a half sessions each.
+
+**[AMENDED — 2026-08-19.]** The reach behind that measurement has since grown to 58 days
+(§4.2), so the shortest intervals could now meet a slightly larger floor. The floor is left at
+three sessions regardless: raising it would invalidate configurations that are valid today, to
+buy a segment length that is marginal either way. The number is a floor that has stopped being
+the binding constraint, not a fresh measurement.
 
 Two consequences follow, and both are deliberate:
 

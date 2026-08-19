@@ -60,7 +60,7 @@ def evolve(
             "--interval",
             help=(
                 "Bar width. Intraday bars are forced flat at each session close, and the "
-                "provider serves 15m/30m for about 55 days only, so --start defaults to "
+                "provider serves 15m/30m for about 58 days only, so --start defaults to "
                 "whatever that interval can actually reach."
             ),
         ),
@@ -216,7 +216,7 @@ def _default_start(interval: Interval, today: date) -> date:
     """How far back to reach when the user does not say.
 
     Twelve years is right for daily bars and unaskable at 30 minutes: the provider serves those
-    for about 55 days, and a default that exceeds the reach would refuse every run that did not
+    for about 58 days, and a default that exceeds the reach would refuse every run that did not
     also pass --start. So the default is the interval's own reach, less a margin.
     """
     limit = interval.max_lookback

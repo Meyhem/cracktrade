@@ -20,7 +20,7 @@ import { useCreateStrategy } from './queries'
  *
  * The bar interval is decided here and effectively only here. It is editable afterwards, but
  * changing it makes the existing date range meaningless — 15m and 30m data reaches back about
- * 55 days — so the choice belongs where the dates are being chosen anyway.
+ * 58 days — so the choice belongs where the dates are being chosen anyway.
  */
 export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
   const navigate = useNavigate()

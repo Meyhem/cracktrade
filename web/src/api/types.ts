@@ -223,7 +223,7 @@ export type BarInterval = (typeof BAR_INTERVALS)[number]
  * One interval offered by the New-strategy dialog.
  *
  * `max_lookback_days` is the provider's reach, not a preference: 15m and 30m bars are served
- * for about 55 days and no wider range can be fetched at all. The client mirrors that check in
+ * for about 58 days and no wider range can be fetched at all. The client mirrors that check in
  * the form, where the user can still fix it, rather than letting the run fail after launch.
  *
  * `evolvable` is the engine's own arithmetic on whether that reach can be cut into the segments

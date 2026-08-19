@@ -102,9 +102,9 @@ Static facts the UI needs before rendering anything; cacheable for the session.
     { "name": "max_holding_bars", "daily_only": false }
   ],
   "intervals": [                        // bar widths, and the provider reach that bounds each
-    { "value": "15m", "intraday": true,  "max_lookback_days": 55 },
-    { "value": "30m", "intraday": true,  "max_lookback_days": 55 },
-    { "value": "1h",  "intraday": true,  "max_lookback_days": 700 },
+    { "value": "15m", "intraday": true,  "max_lookback_days": 58 },
+    { "value": "30m", "intraday": true,  "max_lookback_days": 58 },
+    { "value": "1h",  "intraday": true,  "max_lookback_days": 725 },
     { "value": "1d",  "intraday": false, "max_lookback_days": null }
   ],
   "limits": [                           // the "What this cannot tell you" banner lines

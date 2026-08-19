@@ -101,9 +101,9 @@ export const testMeta: EngineMeta = {
     { name: 'max_holding_bars', stop_priority: null, daily_only: false },
   ],
   intervals: [
-    { value: '15m', intraday: true, max_lookback_days: 55, evolvable: true },
-    { value: '30m', intraday: true, max_lookback_days: 55, evolvable: true },
-    { value: '1h', intraday: true, max_lookback_days: 700, evolvable: true },
+    { value: '15m', intraday: true, max_lookback_days: 58, evolvable: true },
+    { value: '30m', intraday: true, max_lookback_days: 58, evolvable: true },
+    { value: '1h', intraday: true, max_lookback_days: 725, evolvable: true },
     { value: '1d', intraday: false, max_lookback_days: null, evolvable: true },
   ],
   limits: [

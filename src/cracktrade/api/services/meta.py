@@ -102,7 +102,7 @@ class IntervalOption:
     """One bar width the engine accepts, and the one fact that constrains choosing it.
 
     ``max_lookback_days`` is the provider's reach, not a preference: 15-minute and 30-minute
-    bars are served for about 55 days and no date range wider than that can be fetched at all
+    bars are served for about 58 days and no date range wider than that can be fetched at all
     (spec section 4.2). A client that has this can refuse the range in the form, where the user
     can still fix it, rather than letting the engine refuse it after the launch.
 

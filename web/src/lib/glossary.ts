@@ -294,8 +294,9 @@ export const GLOSSARY = {
       'How much time one bar covers. Every other number here is counted in bars, so this is ' +
       'what turns them into an amount of time.',
     catch:
-      '15m and 30m bars are only available for the last ~55 days, and 1h for about two years. ' +
-      'A longer history is not something you can ask for at those intervals — it does not exist.',
+      '15m and 30m bars are only available for the last ~58 days, and 1h for about two years. ' +
+      'A longer history is not something you can ask for at those intervals — it does not exist, ' +
+      'and no amount of re-fetching brings it back.',
     group: 'data',
   },
   session_close: {
@@ -317,7 +318,7 @@ export const GLOSSARY = {
     catch:
       'It is a warning, not a failure — the run is real. But every number in it was measured ' +
       'over a sample too small to carry a conclusion. Widening the date range is not always ' +
-      'possible: 15m and 30m data only goes back about 55 days.',
+      'possible: 15m and 30m data only goes back about 58 days.',
     group: 'validation',
   },
   overnight_carry: {

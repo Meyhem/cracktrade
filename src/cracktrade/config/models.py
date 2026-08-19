@@ -80,9 +80,13 @@ class Interval(StrEnum):
         """How far back the provider will serve this interval, or ``None`` for no limit.
 
         Yahoo serves 15m and 30m for the last 60 calendar days and 1h for the last 730; the
-        values here carry a safety margin because the cutoff moves during the day, and a
-        strategy that validated at 09:00 must not become invalid at 17:00. Measured, not read
+        values here carry a one-day safety margin because the cutoff moves during the day, and
+        a strategy that validated at 09:00 must not become invalid at 17:00. Measured, not read
         from documentation -- see ``tests/fixtures/README.md``.
+
+        The margin is deliberately thin, because the refusal is a cliff rather than a taper:
+        a request one day too wide returns *nothing*, not a truncated window, so there is no
+        partial credit to be had by asking for more than is served.
 
         Note that 30m is *resampled from 15m* by the provider, which is why it inherits the
         60-day limit rather than getting a longer one of its own.
@@ -109,9 +113,9 @@ _BAR_DURATION: dict[Interval, timedelta] = {
 
 #: Interval → how far back the provider reaches. See :attr:`Interval.max_lookback`.
 _MAX_LOOKBACK: dict[Interval, timedelta | None] = {
-    Interval.M15: timedelta(days=55),
-    Interval.M30: timedelta(days=55),
-    Interval.H1: timedelta(days=700),
+    Interval.M15: timedelta(days=58),
+    Interval.M30: timedelta(days=58),
+    Interval.H1: timedelta(days=725),
     Interval.D1: None,
 }
 
@@ -254,7 +258,7 @@ class Universe(_Base):
         provider's window is "the last N days from now", which moves: validating against it
         here would make a strategy that parsed yesterday fail to parse today, and the API
         re-parses stored YAML every time it reads a strategy -- so a saved 30m strategy would
-        become unreadable 55 days after it was written, taking its run history's detail view
+        become unreadable 58 days after it was written, taking its run history's detail view
         with it.
 
         The width check is time-independent and catches the mistake that actually happens:

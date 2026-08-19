@@ -12,13 +12,13 @@ const daily: IntervalOption = {
 const halfHourly: IntervalOption = {
   value: '30m',
   intraday: true,
-  max_lookback_days: 55,
+  max_lookback_days: 58,
   evolvable: false,
 }
 const hourly: IntervalOption = {
   value: '1h',
   intraday: true,
-  max_lookback_days: 700,
+  max_lookback_days: 725,
   evolvable: true,
 }
 
@@ -27,7 +27,7 @@ describe('defaultRange', () => {
     const { start_date, end_date } = defaultRange(halfHourly)
     const span = dayjs(end_date).diff(dayjs(start_date), 'day')
 
-    expect(span).toBeLessThanOrEqual(55)
+    expect(span).toBeLessThanOrEqual(58)
     expect(rangeTooWide(halfHourly, start_date, end_date)).toBeNull()
   })
 
@@ -50,7 +50,14 @@ describe('rangeTooWide', () => {
     const message = rangeTooWide(halfHourly, '2020-01-01', '2026-08-18')
 
     expect(message).not.toBeNull()
-    expect(message).toContain('2026-06-24')
+    // The end date less the interval's reach: a date the user can act on, rather than a span
+    // they would have to subtract themselves. Derived from the fixture so the reach can move
+    // without this becoming a puzzle.
+    const earliest = dayjs('2026-08-18')
+      .subtract(halfHourly.max_lookback_days ?? 0, 'day')
+      .format('YYYY-MM-DD')
+    expect(earliest).toBe('2026-06-21')
+    expect(message).toContain(earliest)
   })
 
   it('accepts a range exactly at the limit', () => {
@@ -71,7 +78,7 @@ describe('intervalHint', () => {
   })
 
   it('names the reach where there is one', () => {
-    expect(intervalHint(halfHourly)).toContain('55 days')
+    expect(intervalHint(halfHourly)).toContain('58 days')
     expect(intervalHint(daily)).not.toContain('days and no further')
   })
 })

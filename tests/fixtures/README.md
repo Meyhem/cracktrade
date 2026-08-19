@@ -39,7 +39,12 @@ rather than a backtest.
    *measured* and the close time must never be assumed constant.
 4. **Beyond the range limit, yfinance returns an empty frame — it does not raise.** The
    message ("The requested range must be within the last 60 days") is printed to stdout, not
-   attached to an exception. 15m and 30m are limited to 60 days, 1h to 730 days.
+   attached to an exception. 15m and 30m are limited to 60 days, 1h to 730 days. Measured
+   2026-08-19 against live Yahoo: at 15m a start 59 days back is served and 60 days back is
+   not; at 1h, 729 is served and 730 is not.
+   The limit is on the **age of the requested range, not the size of one response**: a 24-day
+   15m request sitting 61–85 days back returns zero bars. Chunking therefore cannot reach
+   further back than a single request can — see spec §4.2.
 5. **30m is resampled from 15m by yfinance**, so it inherits the 60-day limit rather than
    getting its own.
 6. **The still-forming bar of the current session is included** in the response.

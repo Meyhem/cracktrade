@@ -80,7 +80,7 @@ they want overnight exposure, they want `1d`. Say so rather than working around 
 minimum at or above one session's bar count is also rejected, because the forced close would
 override it: a Xetra session is 17 bars at `30m` and 9 at `1h`, a New York one 13 at `30m`.
 
-**History is short and cannot be lengthened.** `15m` and `30m` reach back about 55 days, `1h`
+**History is short and cannot be lengthened.** `15m` and `30m` reach back about 58 days, `1h`
 about two years, `1d` without limit. A wider range is refused at parse time with the limit named,
 so propose a range inside it — and tell the user the date range will need moving forward as it
 ages. Prefer `1h` whenever the idea does not specifically need finer bars: eight weeks is too

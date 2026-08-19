@@ -322,7 +322,7 @@ def test_an_empty_response_names_the_interval_limit() -> None:
     from cracktrade.data.provider import _empty_response_message
 
     message = _empty_response_message("SAP.DE", date(2021, 1, 1), date(2021, 2, 1), Interval.M30)
-    assert "55 days" in message
+    assert "58 days" in message
     assert "1h" in message and "1d" in message
 
 
@@ -413,7 +413,7 @@ def test_a_range_beyond_the_interval_limit_is_refused_before_any_fetch() -> None
     """Refused by the schema, so no download is attempted at all."""
     from cracktrade.errors import StrategyValidationError
 
-    with pytest.raises(StrategyValidationError, match="55 days"):
+    with pytest.raises(StrategyValidationError, match="58 days"):
         sap_strategy("30m", start="2020-01-01", end="2026-08-18")
 
 

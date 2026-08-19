@@ -26,7 +26,7 @@ function trade(pnl: number, overrides: Partial<Trade> = {}): Trade {
     pnl,
     returnPct: pnl / 10,
     fees: 1,
-    holdingDays: 28,
+    holdingBars: 28,
     isOpen: false,
     isWinner: pnl > 0,
     ...overrides,

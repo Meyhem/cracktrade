@@ -1,9 +1,21 @@
-import { Alert, Button, Group, Modal, NumberInput, Stack, Text, TextInput } from '@mantine/core'
+import {
+  Alert,
+  Button,
+  Group,
+  Modal,
+  NumberInput,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+} from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { useNavigate } from 'react-router'
 import { notifications } from '@mantine/notifications'
 import dayjs from 'dayjs'
+import type { BarInterval, IntervalOption } from '../../api/types'
 import { descriptionOf } from '../../lib/glossary'
+import { INTERVAL_LABELS, defaultRange, intervalHint, rangeTooWide } from '../../lib/intervals'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { useMeta } from '../../api/metaContext'
 import { useLaunchRun } from '../runs/queries'
@@ -22,6 +34,11 @@ import { useCreateStrategy } from './queries'
  * The date default is deliberately long. The block library reaches back 200 bars before the
  * first scored one, and four segments plus a holdout have to fit after that, so the three years
  * that suit a hand-written strategy would be refused before the search started.
+ *
+ * Only the intervals `/meta` marks `evolvable` are offered. That is the engine's own arithmetic
+ * on whether an interval's deepest reach can be cut into the segments an evolution selects on,
+ * and it excludes 15m and 30m by a wide margin. Offering them would mean a long form filled in
+ * for a run that is refused the moment it starts.
  */
 
 /** Years of history requested by default. Matches the CLI's own default for the same reason. */
@@ -40,25 +57,52 @@ export function ComposeStrategyModal({
   const launch = useLaunchRun()
   const defaults = defaultsFor('evolve')
 
+  const choices = meta.intervals.filter((option) => option.evolvable)
+  const optionFor = (value: string): IntervalOption | undefined =>
+    choices.find((option) => option.value === value)
+
   const form = useForm({
     initialValues: {
       name: '',
       ticker: '',
       start_date: dayjs().subtract(DEFAULT_YEARS, 'year').format('YYYY-MM-DD'),
       end_date: dayjs().format('YYYY-MM-DD'),
+      interval: '1d' as BarInterval,
       population: defaults.population ?? 40,
       generations: defaults.generations ?? 25,
     },
     validate: {
       name: (value) => (value.trim() ? null : 'A name is required.'),
       ticker: (value) => (value.trim() ? null : 'One ticker is required — no portfolios.'),
-      start_date: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? null : 'Use YYYY-MM-DD.'),
+      start_date: (value, values) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Use YYYY-MM-DD.'
+        const option = optionFor(values.interval)
+        return option ? rangeTooWide(option, value, values.end_date) : null
+      },
       end_date: (value, values) => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Use YYYY-MM-DD.'
         return value > values.start_date ? null : 'The end date must be after the start date.'
       },
     },
   })
+
+  const currentInterval = optionFor(form.values.interval)
+
+  // An hourly evolution wants every bar it can get, so the interval's full reach is the right
+  // default there; twelve years remains right for daily.
+  const chooseInterval = (value: string | null) => {
+    const option = value === null ? undefined : optionFor(value)
+    if (!option) return
+    form.setValues({
+      interval: option.value,
+      ...(option.intraday
+        ? defaultRange(option)
+        : {
+            start_date: dayjs().subtract(DEFAULT_YEARS, 'year').format('YYYY-MM-DD'),
+            end_date: dayjs().format('YYYY-MM-DD'),
+          }),
+    })
+  }
 
   const close = () => {
     form.reset()
@@ -74,10 +118,7 @@ export function ComposeStrategyModal({
         ticker: values.ticker.trim().toUpperCase(),
         start_date: values.start_date,
         end_date: values.end_date,
-        // Daily until this dialog offers a choice. Evolution needs sixty sessions per segment
-        // across four segments plus a holdout, which no 15m or 30m range can supply, so daily
-        // is the only interval every evolution launched from here can actually run at.
-        interval: '1d',
+        interval: values.interval,
         // The composed conditions replace whatever is here, so the seed is only ever a
         // placeholder. `minimal` rather than `empty` so the chassis is a strategy that can be
         // backtested on its own if evolution turns out not to be what the user wanted.
@@ -151,9 +192,23 @@ export function ComposeStrategyModal({
             placeholder="NVDA"
             {...form.getInputProps('ticker')}
           />
+          <Select
+            allowDeselect={false}
+            data={choices.map((option) => ({
+              label: INTERVAL_LABELS[option.value],
+              value: option.value,
+            }))}
+            description={
+              currentInterval ? intervalHint(currentInterval) : descriptionOf('bar_interval')
+            }
+            label="Bar interval"
+            onChange={chooseInterval}
+            value={form.values.interval}
+          />
+
           <Group grow>
             <TextInput
-              description={`At least ${meta.evolution_warmup_bars} trading days go to warm-up before anything is scored, so this wants years rather than months.`}
+              description={`At least ${meta.evolution_warmup_bars} bars go to warm-up before anything is scored, and four segments plus a holdout have to fit after that.`}
               label="Start date"
               {...form.getInputProps('start_date')}
             />

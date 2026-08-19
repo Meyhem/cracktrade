@@ -3,7 +3,7 @@ import { Badge, Group, SegmentedControl, Stack, Table, Text } from '@mantine/cor
 import type { Trade } from '../../../lib/result'
 import { ExplainedLabel } from '../../../components/Explain'
 import type { TermKey } from '../../../lib/glossary'
-import { dateOnly, integer, money, percent } from '../../../lib/format'
+import { barTime, integer, money, percent } from '../../../lib/format'
 
 /**
  * Every trade the run made.
@@ -24,7 +24,9 @@ const COLUMNS: { term: TermKey; label: string }[] = [
   { term: 'trade_pnl', label: 'PnL' },
   { term: 'trade_return', label: 'Return' },
   { term: 'trade_fees', label: 'Fees' },
-  { term: 'trade_duration', label: 'Days' },
+  // "Bars", never "Days". The engine's own figure is `holding_bars` and always was; it read as
+  // days only for as long as every bar was one.
+  { term: 'trade_duration', label: 'Bars' },
 ]
 
 /**
@@ -39,7 +41,7 @@ function keyOf(trade: Trade): string {
   return [trade.entryDate, trade.exitDate ?? 'open', trade.size, trade.pnl].join('|')
 }
 
-export function TradeList({ trades }: { trades: Trade[] }) {
+export function TradeList({ trades, intraday = false }: { trades: Trade[]; intraday?: boolean }) {
   const [filter, setFilter] = useState<Filter>('all')
 
   const rows = useMemo(() => {
@@ -102,14 +104,14 @@ export function TradeList({ trades }: { trades: Trade[] }) {
         <Table.Tbody>
           {rows.map((trade) => (
             <Table.Tr key={keyOf(trade)}>
-              <Table.Td>{dateOnly(trade.entryDate)}</Table.Td>
+              <Table.Td>{barTime(trade.entryDate, intraday)}</Table.Td>
               <Table.Td>
                 {trade.isOpen ? (
                   <Badge color="blue" size="xs" variant="light">
                     open
                   </Badge>
                 ) : (
-                  dateOnly(trade.exitDate)
+                  barTime(trade.exitDate, intraday)
                 )}
               </Table.Td>
               <Table.Td>{money(trade.entryPrice)}</Table.Td>
@@ -127,7 +129,7 @@ export function TradeList({ trades }: { trades: Trade[] }) {
               </Table.Td>
               <Table.Td>{percent(trade.returnPct, { signed: true })}</Table.Td>
               <Table.Td>{money(trade.fees)}</Table.Td>
-              <Table.Td>{integer(trade.holdingDays)}</Table.Td>
+              <Table.Td>{integer(trade.holdingBars)}</Table.Td>
             </Table.Tr>
           ))}
         </Table.Tbody>

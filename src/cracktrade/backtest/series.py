@@ -42,7 +42,21 @@ CLOSE = OHLCV_COLUMNS[3]
 
 
 def _dates_of(index: pd.DatetimeIndex) -> tuple[date, ...]:
-    return tuple(timestamp.date() for timestamp in index)
+    """Bar timestamps, at the precision the bars actually have.
+
+    A daily index is dates. An intraday one must keep its time, or every bar in a session lands
+    on the same x-value: seventeen Xetra half-hours drawn at midnight is not a curve, it is a
+    vertical line repeated thirty-five times, and the chart would silently disagree with the
+    trade list beside it.
+
+    Decided from the index rather than from a passed-in interval because it is exactly
+    checkable here: every timestamp of a daily index is midnight, so a nonzero time component
+    is proof the bars are intraday and nothing else. ``datetime`` is a subclass of ``date``, so
+    the declared type covers both and the serializer's ``isoformat`` widens with the value.
+    """
+    if index.normalize().equals(index):
+        return tuple(timestamp.date() for timestamp in index)
+    return tuple(timestamp.to_pydatetime() for timestamp in index)
 
 
 def _series(values: pd.Series) -> Series:

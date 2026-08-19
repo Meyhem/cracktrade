@@ -99,7 +99,7 @@ export type Metrics = {
   sortinoRatio: number | null
   calmarRatio: number | null
   exposurePct: number | null
-  avgHoldingDays: number | null
+  avgHoldingBars: number | null
   bestTradePnl: number | null
   worstTradePnl: number | null
   bars: number | null
@@ -123,7 +123,7 @@ export function metricsOf(source: Json | null): Metrics | null {
     sortinoRatio: number(source, 'sortino_ratio'),
     calmarRatio: number(source, 'calmar_ratio'),
     exposurePct: number(source, 'exposure_pct'),
-    avgHoldingDays: number(source, 'avg_holding_days'),
+    avgHoldingBars: number(source, 'avg_holding_bars'),
     bestTradePnl: number(source, 'best_trade_pnl'),
     worstTradePnl: number(source, 'worst_trade_pnl'),
     bars: number(source, 'bars'),
@@ -175,7 +175,7 @@ export type Trade = {
   pnl: number | null
   returnPct: number | null
   fees: number | null
-  holdingDays: number | null
+  holdingBars: number | null
   isOpen: boolean
   isWinner: boolean
 }
@@ -199,7 +199,7 @@ export function tradesOf(source: Json | null, key = 'trades'): Trade[] {
     pnl: number(entry, 'pnl'),
     returnPct: number(entry, 'return_pct'),
     fees: number(entry, 'fees'),
-    holdingDays: number(entry, 'holding_days'),
+    holdingBars: number(entry, 'holding_bars'),
     isOpen: flag(entry, 'is_open') ?? false,
     isWinner: flag(entry, 'is_winner') ?? false,
   }))
@@ -234,6 +234,55 @@ export function vintageOf(source: Json | null): DataVintage | null {
     fetchedOn: text(vintage, 'fetched_on'),
     frameDigest: text(vintage, 'frame_digest'),
   }
+}
+
+/**
+ * How much history a result rests on, and whether that is enough to mean anything.
+ *
+ * Counted in **sessions**, not bars, and that is the whole point of the type: forty Xetra
+ * sessions of 30-minute data is about 680 bars, which reads like plenty next to a 680-day
+ * daily backtest and is forty independent days. Engine spec §12.11.
+ */
+export type HistoryScope = {
+  interval: string | null
+  sessions: number | null
+  bars: number | null
+  limited: boolean
+  note: string | null
+}
+
+/**
+ * `limited` defaults to **true** when the flag is unreadable.
+ *
+ * The opposite direction of `Trade.isOpen`, and for the same reason it is stated there: fall
+ * towards the answer that is visible rather than the one that is silent. A result wrongly shown
+ * as thin invites a second look; a thin result wrongly shown as sound is exactly the
+ * authoritative-looking-and-wrong number this project exists not to produce.
+ *
+ * Returns null when the key is absent entirely — a run stored before the scope existed says
+ * nothing about its own history, which is different from claiming the history was fine.
+ */
+export function historyOf(source: Json | null, key = 'history'): HistoryScope | null {
+  const scope = record(source, key)
+  if (!scope) return null
+  return {
+    interval: text(scope, 'interval'),
+    sessions: number(scope, 'sessions'),
+    bars: number(scope, 'bars'),
+    limited: flag(scope, 'limited') ?? true,
+    note: text(scope, 'note'),
+  }
+}
+
+/**
+ * Whether a result's bars are intraday, from the result itself.
+ *
+ * Read off the history scope rather than the run row, because the two can be asked in different
+ * places and only this one travels inside the stored result — a run recorded before intervals
+ * existed has no scope, and it was daily.
+ */
+export function isIntraday(history: HistoryScope | null): boolean {
+  return history?.interval !== null && history?.interval !== undefined && history.interval !== '1d'
 }
 
 export type Benchmark = {
@@ -473,6 +522,10 @@ export type BacktestResult = {
   benchmark: Benchmark | null
   riskFreeRate: number | null
   warmupBars: number | null
+  history: HistoryScope | null
+  /** Trades still open when their session ended. Zero on a healthy intraday run, and on
+   *  every daily one — the engine reports it rather than suppressing it (spec §7.6). */
+  overnightCarries: number | null
 }
 
 export function backtestResult(source: Json | null): BacktestResult {
@@ -491,10 +544,13 @@ export function backtestResult(source: Json | null): BacktestResult {
     benchmark: benchmarkOf(source),
     riskFreeRate: number(source, 'risk_free_rate'),
     warmupBars: number(source, 'warmup_bars'),
+    history: historyOf(source),
+    overnightCarries: number(source, 'overnight_carries'),
   }
 }
 
 export type OptimizationResult = {
+  history: HistoryScope | null
   objective: string | null
   optimizedYaml: string | null
   testMetrics: Metrics | null
@@ -536,6 +592,7 @@ export type OptimizationResult = {
 
 export function optimizationResult(source: Json | null): OptimizationResult {
   return {
+    history: historyOf(source),
     objective: text(source, 'objective'),
     optimizedYaml: text(source, 'optimized_yaml'),
     testMetrics: metricsOf(record(source, 'test_metrics')),
@@ -583,6 +640,7 @@ function segmentsOf(source: Json | null): Segment[] {
 }
 
 export type EvolutionResult = {
+  history: HistoryScope | null
   strategyName: string | null
   ticker: string | null
   objective: string | null
@@ -627,6 +685,7 @@ export type EvolutionResult = {
  */
 export function evolutionResult(source: Json | null): EvolutionResult {
   return {
+    history: historyOf(source),
     strategyName: text(source, 'strategy_name'),
     ticker: text(source, 'ticker'),
     objective: text(source, 'objective'),
@@ -667,6 +726,7 @@ export function evolutionResult(source: Json | null): EvolutionResult {
 }
 
 export type ValidationResult = {
+  history: HistoryScope | null
   objective: string | null
   scheme: string | null
   folds: Fold[]
@@ -701,6 +761,7 @@ export type ValidationResult = {
  */
 export function validationResult(source: Json | null): ValidationResult {
   return {
+    history: historyOf(source),
     objective: text(source, 'objective'),
     scheme: text(source, 'scheme'),
     folds: foldsOf(source),

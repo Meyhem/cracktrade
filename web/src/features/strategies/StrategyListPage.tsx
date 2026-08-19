@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Anchor,
+  Badge,
   Button,
   Center,
   Chip,
@@ -276,6 +277,13 @@ export function StrategyListPage() {
                   <Text size="sm">
                     {dateOnly(row.start_date)} → {dateOnly(row.end_date)}
                   </Text>
+                  {/* Only when it is not daily. A badge on every row would be noise on the
+                      overwhelmingly common case and would stop being read before it mattered. */}
+                  {row.interval !== '1d' && (
+                    <Badge color="grape" size="xs" tt="none" variant="light">
+                      {row.interval}
+                    </Badge>
+                  )}
                 </Table.Td>
                 <Table.Td>
                   <LastRunCell row={row} />

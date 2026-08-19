@@ -16,7 +16,7 @@ import { Explain, ExplainedLabel } from '../../../components/Explain'
 import { Figure, MetricsTable, TooFewTrades } from './Figures'
 import { RangeTrack } from './RangeTrack'
 import { TradeList } from './TradeList'
-import { figuresOf, optimizationResult, type Json } from '../../../lib/result'
+import { figuresOf, isIntraday, optimizationResult, type Json } from '../../../lib/result'
 import { integer, percent, points, ratio } from '../../../lib/format'
 
 /**
@@ -284,7 +284,7 @@ export function OptimizationView({ result }: { result: Json | null }) {
           <Title order={4}>Out-of-sample trades</Title>
           <Explain term="out_of_sample" />
         </Group>
-        <TradeList trades={optimization.trades} />
+        <TradeList intraday={isIntraday(optimization.history)} trades={optimization.trades} />
       </Stack>
     </Stack>
   )

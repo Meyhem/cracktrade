@@ -588,6 +588,36 @@ Files: `web/src/features/strategies/ComposeStrategyModal.tsx` (+ `NewStrategyMod
 `SAP.DE` strategy, run a backtest, see intraday timestamps, the forced-close behaviour in
 trades, and the history-limited banner on a walk-forward; both gates green; committed.
 
+### Phase 6 findings — DONE
+
+Verified end to end against the dev stack with live yfinance data: a 30m `SAP.DE` backtest, all
+four trades opening and closing inside one session, `overnight_carries: 0`, timestamps rendering
+as `2026-07-31 09:00 → 2026-07-31 17:00`.
+
+Two defects the plan did not anticipate, both found by *looking at the served output* rather
+than by reading the code:
+
+1. **Captured series were date-only, so every intraday chart was wrong.** 591 bars collapsed onto
+   35 x-values — one vertical line per session. Fixed in the engine (`_dates_of` keeps the time
+   when the index has one), pinned by a test, recorded in spec §8.1. The plan's item 3 said
+   "datetimes work unchanged"; they would have, had any been sent.
+2. **The engine's own thin-history note read "37 session of 30m barss."** The plural fell on the
+   end of the phrase rather than on the counted noun. Visible on every intraday run.
+
+Also worth recording:
+
+- **`GET /meta` gained `evolvable` per interval**, computed from the segment floor. The compose
+  dialog needed to know that 15m and 30m cannot support an evolution, and the alternative was
+  restating the engine's arithmetic in TypeScript.
+- **The interval badge had to opt out of Mantine's uppercase.** "30M BARS" reads as months.
+- **`DataVintage` stays at date granularity** on an intraday run. It exists to identify *which
+  prices*, and `frame_digest` is what actually answers that; full precision is on the trades and
+  the series, where a reader needs it bar by bar.
+- **Charts show overnight and weekend gaps as flat stretches**, accepted for this pass as the
+  plan allowed. A session-collapsing category axis remains a cosmetic follow-up.
+- Programmatic clicks do not reach React's handlers in this browser harness, so the modals were
+  verified by unit test and the run views against a real run over HTTP.
+
 ---
 
 ## Phase 7 — Spec, examples, cleanup

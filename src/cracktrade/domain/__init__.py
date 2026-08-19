@@ -47,7 +47,12 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Series:
-    """One dated series. Columnar, because that is how a chart and a CSV both want it."""
+    """One dated series. Columnar, because that is how a chart and a CSV both want it.
+
+    ``dates`` holds ``date`` on a daily run and ``datetime`` on an intraday one -- the latter is
+    a subclass of the former, so one field covers both and each carries exactly the precision
+    its bars have. Dropping the time intraday would stack a whole session on one x-value.
+    """
 
     dates: tuple[date, ...]
     values: tuple[float, ...]
@@ -254,6 +259,11 @@ class DataVintage:
     ``auto_adjust`` retro-adjusts the whole series on every dividend and split, so the same
     backtest run a quarter apart uses different prices. Recording the vintage makes a divergence
     explainable rather than merely alarming (audit finding B10).
+
+    ``first_bar`` and ``last_bar`` stay dates on an intraday run, where the bars themselves carry
+    a time. Deliberate: this record exists to identify *which prices*, and ``frame_digest`` is
+    what actually answers that -- the dates are a human-readable label on it. The timestamps a
+    reader needs bar by bar are on the trades and the series, at full precision.
     """
 
     ticker: str

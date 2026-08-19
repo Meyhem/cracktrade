@@ -102,6 +102,20 @@ def test_meta_lists_every_bar_interval_with_its_provider_reach(client: TestClien
     assert 0 < by_value["30m"]["max_lookback_days"] < by_value["1h"]["max_lookback_days"]
 
 
+def test_meta_says_which_intervals_an_evolution_can_be_divided_at(client: TestClient) -> None:
+    """Four segments of sixty sessions plus a holdout does not fit in fifty-five days.
+
+    Computed from the engine's own floors rather than listed, so raising the segment count or
+    the floor moves this with it rather than leaving a stale list behind. Without it the client
+    would have to restate the arithmetic or let the user fill in a long form for a run that
+    cannot start.
+    """
+    intervals = client.get(f"{BASE}/meta").json()["intervals"]
+
+    evolvable = {option["value"]: option["evolvable"] for option in intervals}
+    assert evolvable == {"15m": False, "30m": False, "1h": True, "1d": True}
+
+
 def test_meta_orders_the_stop_priority_chain(client: TestClient) -> None:
     """The editor needs to say which stop shadows which without hard-coding the chain again."""
     fields = {

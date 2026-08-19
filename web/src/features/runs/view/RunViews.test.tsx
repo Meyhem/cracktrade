@@ -29,7 +29,7 @@ function metrics(overrides: Record<string, unknown> = {}) {
     win_rate_pct: 52,
     profit_factor: 1.6,
     exposure_pct: 61,
-    avg_holding_days: 9,
+    avg_holding_bars: 9,
     final_equity: 13140,
     has_enough_trades_to_judge: true,
     ...overrides,
@@ -88,6 +88,89 @@ describe('the backtest view', () => {
     )
 
     expect(screen.getByText(/trailing_stop_pct, stop_loss_pct/)).toBeInTheDocument()
+  })
+})
+
+describe('an intraday backtest', () => {
+  it('warns about positions that were carried overnight, and only when there were some', () => {
+    // Zero is the expected state on every daily run and every healthy intraday one. A permanent
+    // "0 carried overnight" would be read as decoration within a day, and then not read at all.
+    const result = (carries: number) => ({
+      metrics: metrics(),
+      benchmark: { benchmark: metrics(), excess_return_pct: 4, beats_buy_and_hold: true },
+      trades: [],
+      overnight_carries: carries,
+      history: { interval: '30m', sessions: 37, bars: 625, limited: true, note: 'thin' },
+    })
+
+    const { unmount } = renderWithProviders(<BacktestView result={result(0)} />)
+    expect(screen.queryByText(/carried overnight/i)).not.toBeInTheDocument()
+    unmount()
+
+    renderWithProviders(<BacktestView result={result(2)} />)
+    expect(screen.getByText(/2 position\(s\) carried overnight/i)).toBeInTheDocument()
+  })
+
+  it('shows the time of day on trades, which a daily run does not', () => {
+    // Two trades on one date are indistinguishable without it, and "held 3 bars" cannot be
+    // checked against a table that only prints days.
+    const trade = {
+      entry_date: '2026-06-30T14:00:00',
+      exit_date: '2026-06-30T15:30:00',
+      entry_price: 100,
+      exit_price: 101,
+      size: 10,
+      pnl: 10,
+      return_pct: 1,
+      fees: 0,
+      holding_bars: 3,
+      is_open: false,
+      is_winner: true,
+    }
+
+    renderWithProviders(
+      <BacktestView
+        result={{
+          metrics: metrics(),
+          benchmark: { benchmark: metrics(), excess_return_pct: 4, beats_buy_and_hold: true },
+          trades: [trade],
+          history: { interval: '30m', sessions: 37, bars: 625, limited: false, note: null },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('2026-06-30 14:00')).toBeInTheDocument()
+    expect(screen.getByText('2026-06-30 15:30')).toBeInTheDocument()
+  })
+
+  it('prints dates alone on a daily run, where the time is always midnight', () => {
+    const trade = {
+      entry_date: '2026-06-30T00:00:00',
+      exit_date: '2026-07-14T00:00:00',
+      entry_price: 100,
+      exit_price: 101,
+      size: 10,
+      pnl: 10,
+      return_pct: 1,
+      fees: 0,
+      holding_bars: 10,
+      is_open: false,
+      is_winner: true,
+    }
+
+    renderWithProviders(
+      <BacktestView
+        result={{
+          metrics: metrics(),
+          benchmark: { benchmark: metrics(), excess_return_pct: 4, beats_buy_and_hold: true },
+          trades: [trade],
+          history: { interval: '1d', sessions: 500, bars: 500, limited: false, note: null },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('2026-06-30')).toBeInTheDocument()
+    expect(screen.queryByText(/00:00/)).not.toBeInTheDocument()
   })
 })
 

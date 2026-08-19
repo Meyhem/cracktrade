@@ -128,9 +128,13 @@ export const GLOSSARY = {
       'off very few trades, not a missing number.',
     group: 'results',
   },
-  avg_holding_days: {
-    title: 'Avg holding days',
-    plain: 'How long the strategy stayed in a position on average, in days, before selling.',
+  avg_holding_bars: {
+    title: 'Avg holding bars',
+    plain:
+      'How long the strategy stayed in a position on average, counted in bars, before selling.',
+    catch:
+      'Bars, not days. On a 30-minute strategy "8 bars" is most of one trading session, not ' +
+      "eight days — check the strategy's bar interval before reading this as a span of time.",
     group: 'results',
   },
   trades: {
@@ -261,11 +265,69 @@ export const GLOSSARY = {
   min_holding_days: {
     title: 'Minimum holding days',
     plain: 'The shortest time a position must be held before the strategy is allowed to sell.',
+    catch: 'Daily strategies only. On an intraday one, use minimum holding bars instead.',
     group: 'risk',
   },
   max_holding_days: {
     title: 'Maximum holding days',
     plain: 'The longest a position may be held before it is sold regardless of the signals.',
+    catch: 'Daily strategies only. On an intraday one, use maximum holding bars instead.',
+    group: 'risk',
+  },
+  min_holding_bars: {
+    title: 'Minimum holding bars',
+    plain: 'The shortest a position must be held, counted in bars, before selling is allowed.',
+    catch:
+      'The session close overrides this. An intraday position is sold at the end of its ' +
+      'session whether or not the minimum has been reached, so a minimum longer than a ' +
+      'session is refused rather than quietly ignored.',
+    group: 'risk',
+  },
+  max_holding_bars: {
+    title: 'Maximum holding bars',
+    plain: 'The longest a position may be held, in bars, before it is sold regardless of signals.',
+    group: 'risk',
+  },
+  bar_interval: {
+    title: 'Bar interval',
+    plain:
+      'How much time one bar covers. Every other number here is counted in bars, so this is ' +
+      'what turns them into an amount of time.',
+    catch:
+      '15m and 30m bars are only available for the last ~55 days, and 1h for about two years. ' +
+      'A longer history is not something you can ask for at those intervals — it does not exist.',
+    group: 'data',
+  },
+  session_close: {
+    title: 'Session close',
+    plain:
+      'An intraday strategy never holds a position overnight: whatever is open is sold on the ' +
+      "session's last bar, and no new position is opened there.",
+    catch:
+      'The close time is learned from recent sessions rather than assumed, so an early close — ' +
+      'a half day before a holiday — is handled without a hard-coded calendar. A session the ' +
+      'engine cannot yet predict the close of is not traded at all.',
+    group: 'risk',
+  },
+  history_limited: {
+    title: 'Limited history',
+    plain:
+      'This run covered too few trading sessions for its figures to describe what the strategy ' +
+      'does, rather than what one short stretch of market did.',
+    catch:
+      'It is a warning, not a failure — the run is real. But every number in it was measured ' +
+      'over a sample too small to carry a conclusion. Widening the date range is not always ' +
+      'possible: 15m and 30m data only goes back about 55 days.',
+    group: 'validation',
+  },
+  overnight_carry: {
+    title: 'Overnight carry',
+    plain:
+      'A position that was still open when its trading session ended. On an intraday strategy ' +
+      'this should be zero.',
+    catch:
+      'Anything above zero means the forced session close did not catch a trade — worth reading ' +
+      'the trade list, because an overnight gap is risk the backtest never asked you to take.',
     group: 'risk',
   },
 

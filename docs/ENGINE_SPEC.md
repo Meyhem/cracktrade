@@ -1377,6 +1377,16 @@ Consequences that follow from that, and are tested:
   are different strategies, and a continuous line through them would depict a strategy nobody
   traded.
 
+**[NEW — decided 2026-08-19.]** A series index carries **the precision its bars have**: dates on
+a daily run, datetimes on an intraday one. Truncating to the date intraday puts every bar of a
+session on one x-value — seventeen Xetra half-hours drawn at midnight is a vertical line
+repeated once per session, on a chart sitting directly beneath a trade list that does show the
+times. `Series.dates` is typed `date`, which covers both, since `datetime` is a subclass of it.
+
+The precision is decided from the index rather than from the declared interval, which is exactly
+checkable: every timestamp of a daily index is midnight, so a nonzero time component is proof
+the bars are intraday and nothing else.
+
 Capture is opt-in because the CLI prints numbers. Turning it on must not change a result, which
 is asserted the same way the progress hooks are.
 

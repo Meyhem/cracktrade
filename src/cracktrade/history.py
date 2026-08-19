@@ -68,10 +68,16 @@ def _note(data: MarketData, sessions: int, threshold: int, *, multi_window: bool
     """One sentence: what is thin, why it matters here, and the way out."""
     interval = data.interval
     kind = "a walk-forward or evolution run" if multi_window else "a backtest or optimization"
-    unit = "trading day" if not interval.is_intraday else f"session of {interval.value} bars"
+
+    # The plural has to fall on the counted noun, not on the end of the phrase: "37 sessions of
+    # 30m bars", never "37 session of 30m barss".
+    if interval.is_intraday:
+        unit = f"{'session' if sessions == 1 else 'sessions'} of {interval.value} bars"
+    else:
+        unit = "trading day" if sessions == 1 else "trading days"
 
     note = (
-        f"This result covers {sessions} {unit}{'' if sessions == 1 else 's'} "
+        f"This result covers {sessions} {unit} "
         f"({len(data)} bars), below the {threshold} that {kind} needs before its numbers mean "
         f"much. Treat every figure here as a description of one short stretch of market, not "
         f"as an estimate of what the strategy does."

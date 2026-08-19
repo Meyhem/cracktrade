@@ -53,7 +53,7 @@ describe('in-position spans', () => {
     pnl: 0,
     returnPct: 0,
     fees: 0,
-    holdingDays: 10,
+    holdingBars: 10,
     isOpen: true,
     isWinner: false,
   }

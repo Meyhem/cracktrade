@@ -57,6 +57,23 @@ export function dateOnly(iso: string | null): string {
   return dayjs(iso).format('YYYY-MM-DD')
 }
 
+/**
+ * A bar's timestamp, at the precision the bar actually has.
+ *
+ * On a daily strategy the time is always midnight and printing it would be four characters of
+ * noise on every row. On an intraday one it is the entire point: two trades on the same date
+ * are indistinguishable without it, and "held 3 bars" cannot be checked against a table that
+ * only shows days.
+ *
+ * Intraday timestamps are exchange-local wall clock with no zone attached (engine spec §4.3), so
+ * they are formatted as written rather than converted — a Xetra bar reading 09:30 must not
+ * become 08:30 because the reader is in London.
+ */
+export function barTime(iso: string | null, intraday: boolean): string {
+  if (!iso) return '—'
+  return dayjs(iso).format(intraday ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD')
+}
+
 /** Elapsed run time. Runs range from a second to tens of minutes. */
 export function duration(seconds: number | null): string {
   if (seconds === null) return '—'

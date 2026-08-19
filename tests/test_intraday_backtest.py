@@ -16,7 +16,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cracktrade.backtest import Calendar, run_backtest, run_simulation, session_rules
+from cracktrade.backtest import (
+    Calendar,
+    buy_and_hold_portfolio,
+    run_backtest,
+    run_simulation,
+    session_rules,
+)
 from cracktrade.backtest.calendar import DAILY
 from cracktrade.backtest.metrics import per_period_risk_free
 from cracktrade.backtest.portfolio import require_interval
@@ -473,3 +479,67 @@ def test_holding_is_reported_in_bars() -> None:
     result = run_backtest(strategy("30m"), market("30m"))
     assert result.metrics.avg_holding_bars > 0
     assert all(trade.holding_bars >= 0 for trade in result.trades)
+
+
+# ------------------------------------------------------- captured series
+
+
+def test_a_captured_intraday_series_keeps_the_time_of_day() -> None:
+    """Dropping it would stack a whole session on one x-value.
+
+    Seventeen Xetra half-hours drawn at midnight is not a curve -- it is a vertical line
+    repeated once per session, on a chart sitting directly beneath a trade list that does show
+    the times. Found by looking at what the series endpoint actually served, not by reading the
+    capture code.
+    """
+    from cracktrade.backtest.series import capture
+
+    data = market()
+    simulation = run_simulation(strategy(), data)
+    series = capture(
+        portfolio=simulation.portfolio,
+        benchmark=buy_and_hold_portfolio(data, strategy().execution, None, start_bar=0),
+        data=data,
+    )
+
+    stamps = series.close.dates
+    assert any(isinstance(stamp, datetime) and stamp.hour != 0 for stamp in stamps)
+    assert len({str(stamp) for stamp in stamps}) == len(stamps), "no two bars share a timestamp"
+
+
+def test_a_captured_daily_series_is_still_dates() -> None:
+    """Unchanged, and a midnight suffix on every daily chart label would be pure noise."""
+    from cracktrade.backtest.series import capture
+    from cracktrade.data import prepare_frame
+    from tests.factories import make_ohlcv
+
+    data = MarketData(
+        ticker="TEST",
+        frame=prepare_frame(make_ohlcv(200), ticker="TEST", now=date(2100, 1, 1)),
+        requested_start=date(2020, 1, 1),
+        requested_end=date(2030, 1, 1),
+    )
+    daily = parse_strategy(
+        {
+            "strategy": {"name": "d"},
+            "universe": {
+                "ticker": "TEST",
+                "start_date": "2020-01-01",
+                "end_date": "2030-01-01",
+            },
+            "execution": {
+                "initial_capital": 10000.0,
+                "slippage_pct": 0.0,
+                "commission_pct": 0.0,
+            },
+            "entry": {"signal": "close > open"},
+            "exit": {"max_holding_days": 5},
+        }
+    )
+    series = capture(
+        portfolio=run_simulation(daily, data).portfolio,
+        benchmark=buy_and_hold_portfolio(data, daily.execution, None, start_bar=0),
+        data=data,
+    )
+
+    assert all(not isinstance(stamp, datetime) for stamp in series.close.dates)

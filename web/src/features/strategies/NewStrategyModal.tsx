@@ -1,10 +1,12 @@
-import { Button, Group, Modal, Radio, Stack, Text, TextInput } from '@mantine/core'
+import { Button, Group, Modal, Radio, Select, Stack, Text, TextInput } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { useNavigate } from 'react-router'
 import { notifications } from '@mantine/notifications'
-import dayjs from 'dayjs'
-import type { BarInterval } from '../../api/types'
+import type { BarInterval, IntervalOption } from '../../api/types'
+import { useMeta } from '../../api/metaContext'
+import { Explain } from '../../components/Explain'
 import { descriptionOf } from '../../lib/glossary'
+import { INTERVAL_LABELS, defaultRange, intervalHint, rangeTooWide } from '../../lib/intervals'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { useCreateStrategy } from './queries'
 
@@ -15,26 +17,35 @@ import { useCreateStrategy } from './queries'
  * already validates and can be backtested immediately, which is the only way a new user
  * sees the loop work before they have learned the schema. "Empty" is for someone who knows
  * what they are writing.
+ *
+ * The bar interval is decided here and effectively only here. It is editable afterwards, but
+ * changing it makes the existing date range meaningless — 15m and 30m data reaches back about
+ * 55 days — so the choice belongs where the dates are being chosen anyway.
  */
 export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
   const navigate = useNavigate()
   const create = useCreateStrategy()
+  const { meta } = useMeta()
+
+  const optionFor = (value: string): IntervalOption | undefined =>
+    meta.intervals.find((option) => option.value === value)
 
   const form = useForm({
     initialValues: {
       name: '',
       ticker: '',
-      start_date: dayjs().subtract(3, 'year').format('YYYY-MM-DD'),
-      end_date: dayjs().format('YYYY-MM-DD'),
-      // No control for this yet -- the dialog gains the picker, and the interval-dependent
-      // date defaults that go with it, in the next phase.
+      ...defaultRange({ intraday: false, max_lookback_days: null }),
       interval: '1d' as BarInterval,
       seed: 'minimal' as 'minimal' | 'empty',
     },
     validate: {
       name: (value) => (value.trim() ? null : 'A name is required.'),
       ticker: (value) => (value.trim() ? null : 'One ticker is required — no portfolios.'),
-      start_date: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? null : 'Use YYYY-MM-DD.'),
+      start_date: (value, values) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Use YYYY-MM-DD.'
+        const option = optionFor(values.interval)
+        return option ? rangeTooWide(option, value, values.end_date) : null
+      },
       end_date: (value, values) => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Use YYYY-MM-DD.'
         return value > values.start_date ? null : 'The end date must be after the start date.'
@@ -42,11 +53,22 @@ export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose
     },
   })
 
+  // Changing the interval re-defaults the dates. Anything the user typed under the old interval
+  // was chosen against a different reach, and silently keeping a range the new interval cannot
+  // serve would turn a choice into an error message.
+  const chooseInterval = (value: string | null) => {
+    const option = value === null ? undefined : optionFor(value)
+    if (!option) return
+    form.setValues({ interval: option.value, ...defaultRange(option) })
+  }
+
   const close = () => {
     form.reset()
     create.reset()
     onClose()
   }
+
+  const currentInterval = optionFor(form.values.interval)
 
   const submit = form.onSubmit((values) => {
     create.mutate(
@@ -91,6 +113,25 @@ export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose
             placeholder="NVDA"
             {...form.getInputProps('ticker')}
           />
+          <Select
+            allowDeselect={false}
+            data={meta.intervals.map((option) => ({
+              label: INTERVAL_LABELS[option.value],
+              value: option.value,
+            }))}
+            description={
+              currentInterval ? intervalHint(currentInterval) : descriptionOf('bar_interval')
+            }
+            label={
+              <>
+                Bar interval{' '}
+                {currentInterval?.intraday === true && <Explain term="session_close" />}
+              </>
+            }
+            onChange={chooseInterval}
+            value={form.values.interval}
+          />
+
           <Group grow>
             <TextInput
               description={descriptionOf('start_date')}

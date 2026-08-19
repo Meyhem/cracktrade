@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   Anchor,
+  Badge,
   Button,
   Card,
   Center,
@@ -24,6 +25,7 @@ import { OptimizationView } from './view/OptimizationView'
 import { ValidationView } from './view/ValidationView'
 import { EvolutionView } from './view/EvolutionView'
 import { PromoteRunModal } from './PromoteRunModal'
+import { HistoryBanner } from './HistoryBanner'
 import { asString, field } from '../../lib/result'
 import { explanationOf } from '../../lib/glossary'
 
@@ -71,6 +73,18 @@ export function RunViewPage() {
             v{run.version}
           </Text>
           {run.stale && <StaleBadge version={run.version} />}
+          {/* The interval this run pinned, not the strategy's current one. Shown only when it
+              is not daily: every bar count below means something different under it, and a
+              badge on every run would be read as decoration long before it mattered. */}
+          {run.interval !== '1d' && (
+            <Tooltip label={explanationOf('bar_interval')} multiline w={280}>
+              {/* Not uppercased. Mantine's default would render "30m" as "30M BARS", and a
+                  capital M next to a number reads as months. */}
+              <Badge color="grape" size="sm" tt="none" variant="light">
+                {run.interval} bars
+              </Badge>
+            </Tooltip>
+          )}
           <RunStatusCell run={run} />
         </Group>
         <Group gap="sm">
@@ -137,6 +151,7 @@ export function RunViewPage() {
 
       {run.status === 'succeeded' && data.result && (
         <>
+          <HistoryBanner result={data.result} />
           {run.kind === 'backtest' && <BacktestView result={data.result} />}
           {run.kind === 'optimize' && <OptimizationView result={data.result} />}
           {run.kind === 'walk_forward' && (

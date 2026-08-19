@@ -4,7 +4,7 @@ import { Explain } from '../../../components/Explain'
 import { explanationOf } from '../../../lib/glossary'
 import { Figure, MetricsTable, TooFewTrades } from './Figures'
 import { TradeList } from './TradeList'
-import { backtestResult, figuresOf, type Json } from '../../../lib/result'
+import { backtestResult, figuresOf, isIntraday, type Json } from '../../../lib/result'
 import { dateOnly, integer, percent, points } from '../../../lib/format'
 
 /**
@@ -60,6 +60,27 @@ export function BacktestView({ result }: { result: Json | null }) {
               This strategy underperformed simply owning the ticker. Every figure below describes a
               result you could have beaten by doing nothing.
             </Text>
+          )}
+
+          {/* Only when non-zero. Zero is the expected state on every daily run and every healthy
+              intraday one, and a permanent "0 overnight carries" would be read as decoration
+              within a day and then stop being read at all. */}
+          {(backtest.overnightCarries ?? 0) > 0 && (
+            <Alert
+              color="orange"
+              icon={<IconAlertTriangle size={18} />}
+              title={
+                <>
+                  {integer(backtest.overnightCarries)} position(s) carried overnight{' '}
+                  <Explain term="overnight_carry" />
+                </>
+              }
+              variant="light"
+            >
+              An intraday position is meant to be closed on its session&apos;s last bar. These were
+              not, so their returns include an overnight gap the strategy never chose to hold —
+              check the trade list below for which ones.
+            </Alert>
           )}
         </Stack>
       </Card>
@@ -172,7 +193,7 @@ export function BacktestView({ result }: { result: Json | null }) {
           <Title order={4}>Trades</Title>
           <Explain term="trades" />
         </Group>
-        <TradeList trades={backtest.trades} />
+        <TradeList intraday={isIntraday(backtest.history)} trades={backtest.trades} />
       </Stack>
     </Stack>
   )

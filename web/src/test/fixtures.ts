@@ -101,10 +101,10 @@ export const testMeta: EngineMeta = {
     { name: 'max_holding_bars', stop_priority: null, daily_only: false },
   ],
   intervals: [
-    { value: '15m', intraday: true, max_lookback_days: 55 },
-    { value: '30m', intraday: true, max_lookback_days: 55 },
-    { value: '1h', intraday: true, max_lookback_days: 700 },
-    { value: '1d', intraday: false, max_lookback_days: null },
+    { value: '15m', intraday: true, max_lookback_days: 55, evolvable: false },
+    { value: '30m', intraday: true, max_lookback_days: 55, evolvable: false },
+    { value: '1h', intraday: true, max_lookback_days: 700, evolvable: true },
+    { value: '1d', intraday: false, max_lookback_days: null, evolvable: true },
   ],
   limits: [
     'Ticker selection is hindsight - you chose the symbol knowing its history.',

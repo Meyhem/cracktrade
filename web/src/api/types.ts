@@ -224,11 +224,15 @@ export type BarInterval = (typeof BAR_INTERVALS)[number]
  * `max_lookback_days` is the provider's reach, not a preference: 15m and 30m bars are served
  * for about 55 days and no wider range can be fetched at all. The client mirrors that check in
  * the form, where the user can still fix it, rather than letting the run fail after launch.
+ *
+ * `evolvable` is the engine's own arithmetic on whether that reach can be cut into the segments
+ * an evolution selects on. Never recompute it here — it moves when the engine's floors do.
  */
 export type IntervalOption = {
   value: BarInterval
   intraday: boolean
   max_lookback_days: number | null
+  evolvable: boolean
 }
 
 /** `/meta` with its open records narrowed. */

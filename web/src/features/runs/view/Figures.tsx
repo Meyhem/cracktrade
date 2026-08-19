@@ -93,7 +93,7 @@ const ROWS: { term: TermKey; render: (metrics: Metrics) => string }[] = [
     render: (m) => (m.profitFactor === null ? 'no losing trades' : ratio(m.profitFactor)),
   },
   { term: 'exposure', render: (m) => percent(m.exposurePct) },
-  { term: 'avg_holding_days', render: (m) => ratio(m.avgHoldingDays, 1) },
+  { term: 'avg_holding_bars', render: (m) => ratio(m.avgHoldingBars, 1) },
   { term: 'trades', render: (m) => integer(m.totalTrades) },
   { term: 'final_equity', render: (m) => money(m.finalEquity) },
 ]

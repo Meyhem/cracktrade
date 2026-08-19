@@ -19,6 +19,7 @@ from cracktrade.evolution import (
     GaSettings,
     library_warmup,
 )
+from cracktrade.evolution.protocol import MIN_SEGMENT_SESSIONS
 from cracktrade.indicators.catalogue import install
 from cracktrade.indicators.describe import IndicatorDescription, describe_catalogue
 from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES
@@ -47,6 +48,32 @@ EXIT_FIELDS: tuple[tuple[str, int | None, bool], ...] = (
 #: The engine's own search defaults, read rather than restated.
 _GA = GaSettings()
 
+#: Calendar days per trading session, near enough to turn a provider reach in days into a
+#: session count. The exchange decides the true figure and it varies by a few days a year; this
+#: only has to be right enough to separate "nowhere near enough" from "comfortably enough",
+#: which is the only distinction :func:`_evolvable` draws.
+_DAYS_PER_SESSION = 7 / 5
+
+
+def _evolvable(interval: Interval) -> bool:
+    """Whether an evolution could be divided at all at this interval.
+
+    An evolution needs ``DEFAULT_SEGMENTS`` segments and a holdout, each at least
+    ``MIN_SEGMENT_SESSIONS`` sessions (spec section 12.12), behind the block library's warm-up.
+    At 15m and 30m the provider serves about 55 days -- roughly forty sessions against the three
+    hundred the division needs -- so the run is refused, and a client that knows this can stop
+    offering the interval instead of letting the user fill in a long form for a run that cannot
+    start.
+
+    Computed rather than listed, so raising the segment floor or the segment count moves this
+    with it instead of leaving a stale list of intervals behind.
+    """
+    if interval.max_lookback is None:
+        return True
+    needed = MIN_SEGMENT_SESSIONS * (DEFAULT_SEGMENTS + 1)
+    return interval.max_lookback.days / _DAYS_PER_SESSION >= needed
+
+
 LIMITS: tuple[str, ...] = (
     "Ticker selection is hindsight - you chose the symbol knowing its history.",
     "Prices are retroactively adjusted; the same backtest run months apart uses different data.",
@@ -72,11 +99,16 @@ class IntervalOption:
     bars are served for about 55 days and no date range wider than that can be fetched at all
     (spec section 4.2). A client that has this can refuse the range in the form, where the user
     can still fix it, rather than letting the engine refuse it after the launch.
+
+    ``evolvable`` answers a question only the engine can: whether the deepest history this
+    interval can reach is enough to cut into the segments an evolution selects on
+    (spec section 12.12). It is false at 15m and 30m, where the answer is not close.
     """
 
     value: str
     intraday: bool
     max_lookback_days: int | None
+    evolvable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +212,7 @@ def describe_engine() -> Meta:
                 max_lookback_days=(
                     interval.max_lookback.days if interval.max_lookback is not None else None
                 ),
+                evolvable=_evolvable(interval),
             )
             for interval in Interval
         ),

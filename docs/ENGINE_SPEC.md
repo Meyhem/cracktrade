@@ -316,12 +316,49 @@ so uniqueness is checked at the persistence boundary, not here.
 | `ticker` | `str` | — | **[FIX]** Exactly one. Non-empty after strip. Legacy: `tickers: List[str]` (`src/core/config.py:33`). |
 | `start_date` | `datetime.date` | — | **[FIX]** Legacy typed dates as `str` and compared them lexicographically (`src/core/config.py:34, 39`), which happens to work for ISO-8601 and fails for anything else. |
 | `end_date` | `datetime.date` | today (UTC) | **[PORT]** default_factory, `src/core/config.py:35`. |
+| `interval` | `Interval` | `1d` | **[NEW]** One of `15m`, `30m`, `1h`, `1d`. The width of one bar. |
 
 Validation: `start_date < end_date`; the span must cover at least `max(indicator warmup) + 30`
 trading days, estimated at 252 trading days per calendar year. **[NEW]** — legacy accepted a
 two-week backtest of a 200-day moving average and reported it as a result.
 
 `end_date` is **inclusive** of the named day. See §4.2.
+
+#### 3.3.1 `interval` — bar width
+
+The default is `1d`, so every strategy written before intraday support existed keeps its exact
+meaning by omitting the field. `Interval` is the single place the four spellings of a bar width
+are related: the YAML token, the pandas offset alias, the bar's duration, and how far back the
+provider serves it.
+
+| Token | pandas alias | Bar duration | Provider reach |
+| --- | --- | --- | --- |
+| `15m` | `15min` | 15 minutes | 55 days |
+| `30m` | `30min` | 30 minutes | 55 days |
+| `1h` | `1h` | 1 hour | 700 days |
+| `1d` | `1D` | 1 day | unlimited |
+
+The pandas alias is **not** the YAML token: pandas has no `30m` alias (`m` means month-end) and
+deprecated `T`/`H` in 2.x. Getting it wrong does not raise — it silently changes what every
+time-based metric is annualised against.
+
+The provider reach figures carry a safety margin below Yahoo's actual limits (60 days for 15m
+and 30m, 730 for 1h), because the cutoff moves during the day and a strategy that validated at
+09:00 must not become invalid at 17:00. `30m` is *resampled from 15m* by the provider, which is
+why it inherits the shorter window rather than getting one of its own. All of this was measured,
+not read from documentation; see `tests/fixtures/README.md`.
+
+**Range validation is split in two, deliberately.** The *width* of the range is checked at parse
+time and a range wider than the interval's reach is refused. How far in the *past* the range
+sits is **not** checked at parse time: the provider's window slides forward every day, so a
+strategy that parsed yesterday would fail to parse today, and since the API re-parses stored
+YAML on every read, a saved 30m strategy would become unreadable 55 days after it was written —
+taking the detail view of every run it ever produced with it. An out-of-reach range instead
+produces a `ConfigWarning` on `universe.start_date` and, if run anyway, a loud refusal from the
+data layer naming the limit (§4.2). Nothing produces numbers from data that was never fetched.
+
+Intraday strategies carry additional semantics — forced session-close exits, measured
+annualisation, exchange-local timestamps — recorded in §4.1, §7.5 and §7.6.
 
 ### 3.4 `execution` — required
 
@@ -411,13 +448,27 @@ A single mapping, not a list.
 | `trailing_stop_pct` | `float \| None` | `None` | `> 0`. Percent from peak since entry. |
 | `atr_stop_multiplier` | `float \| None` | `None` | `> 0`. Multiple of ATR(14). |
 | `take_profit_pct` | `float \| None` | `None` | `> 0`. Percent from entry price. |
-| `min_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. |
-| `max_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. |
+| `min_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. Daily strategies only. |
+| `max_holding_days` | `int \| None` | `None` | `>= 1`. Trading days. Daily strategies only. |
+| `min_holding_bars` | `int \| None` | `None` | **[NEW]** `>= 1`. Bars. Any interval. |
+| `max_holding_bars` | `int \| None` | `None` | **[NEW]** `>= 1`. Bars. Any interval. |
 
 **[PORT]** `src/core/config.py:77-85`.
 
+**Holding periods have always been counted in bars.** On daily data a bar is a trading day, so
+`min_holding_days` was an accurate name by coincidence; it stops being accurate the moment a bar
+is 30 minutes long. The `_bars` fields are therefore the general spelling and work at every
+interval, while the `_days` fields are accepted **only when `universe.interval` is `1d`**, where
+the two words denote the same quantity.
+
+Reinterpreting `max_holding_days: 5` on 30m bars is refused rather than guessed at: reading it
+as five bars would turn a week-long limit into two and a half hours, and reading it as five
+*sessions* would invent a number the user never wrote.
+
 Validation **[NEW]**: at least one exit mechanism must be set — an empty `exit` never exits and
-produces a single open position. `min_holding_days < max_holding_days` when both are set.
+produces a single open position. The minimum holding period must be less than the maximum when
+both are set. Declaring the same bound in both spellings (`max_holding_days` *and*
+`max_holding_bars`) is an error; declaring different bounds in different spellings is not.
 
 **Stop-loss priority chain [PORT]** (`src/execution/portfolio.py:19-32`): exactly one stop type is
 active, in order

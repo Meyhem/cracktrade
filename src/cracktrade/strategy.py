@@ -132,6 +132,8 @@ def strategy_warnings(strategy: Strategy) -> tuple[ConfigWarning, ...]:
     """
     warnings: list[ConfigWarning] = []
 
+    warnings.extend(_history_reach_warnings(strategy))
+
     active = strategy.exit.active_stop
     for field_name in strategy.exit.shadowed_stops:
         warnings.append(
@@ -158,6 +160,43 @@ def strategy_warnings(strategy: Strategy) -> tuple[ConfigWarning, ...]:
             )
 
     return tuple(warnings)
+
+
+def _history_reach_warnings(strategy: Strategy) -> list[ConfigWarning]:
+    """Warn when an intraday range starts further back than the provider still serves.
+
+    A warning rather than a validation error, because the file is not wrong -- it has aged.
+    The provider's window slides forward every day, so a range that was fetchable when it was
+    written stops being fetchable without anything about the strategy changing. Refusing to
+    *parse* it would mean a stored strategy became unreadable on a timer, and would take the
+    detail view of every run it ever produced with it.
+
+    The width of the range is checked at parse time instead (:class:`Universe`), and a run
+    launched against unreachable data is refused loudly by the data layer. This warning exists
+    so the editor can say so before the user waits for that.
+    """
+    from datetime import UTC, datetime
+
+    universe = strategy.universe
+    limit = universe.interval.max_lookback
+    if limit is None:
+        return []
+
+    earliest = datetime.now(UTC).date() - limit
+    if universe.start_date >= earliest:
+        return []
+
+    return [
+        ConfigWarning(
+            path="universe.start_date",
+            message=(
+                f"{universe.start_date} is further back than {universe.interval.value} bars are "
+                f"still available: the provider serves roughly the last {limit.days} days, so "
+                f"the earliest usable start is around {earliest}. Move the range forward, or "
+                f"switch to 1h (about two years) or 1d (no limit)."
+            ),
+        )
+    ]
 
 
 #: Which YAML field each ``active_stop`` value corresponds to.

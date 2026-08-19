@@ -33,6 +33,8 @@ EXIT_FIELDS: tuple[tuple[str, int | None], ...] = (
     ("take_profit_pct", None),
     ("min_holding_days", None),
     ("max_holding_days", None),
+    ("min_holding_bars", None),
+    ("max_holding_bars", None),
 )
 
 #: The "what this cannot tell you" banner. Kept here because they are engine limits, not

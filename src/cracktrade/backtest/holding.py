@@ -97,5 +97,9 @@ def as_signal_column(series: Any) -> npt.NDArray[np.bool_]:
 
 
 def holding_bounds(rule: ExitRule) -> tuple[int, int]:
-    """``(minimum, maximum)`` holding days, with 0 meaning "no bound"."""
-    return rule.min_holding_days or 0, rule.max_holding_days or 0
+    """``(minimum, maximum)`` holding period in **bars**, with 0 meaning "no bound".
+
+    Bars is what this was always counting; on a daily strategy a bar is a trading day, which is
+    why the ``_days`` spelling of these fields was accurate until bars stopped being days.
+    """
+    return rule.min_holding or 0, rule.max_holding or 0

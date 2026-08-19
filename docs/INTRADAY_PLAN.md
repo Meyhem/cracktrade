@@ -170,6 +170,30 @@ Files: `src/cracktrade/config/models.py`, `src/cracktrade/strategy.py`,
 `start_date` is refused at *validation* time (before any download) with an actionable
 message; gates green; committed.
 
+### Phase 1 outcome — DONE, with one deliberate deviation
+
+Item 3 above (reject `start_date < today − max_lookback` at parse time) was **not implemented
+as written**, because it would have made a stored strategy stop parsing on a timer: the API
+re-parses stored YAML on every read, so a saved 30m strategy would have become unreadable — and
+taken the detail view of every run it produced with it — 55 days after being written. Replaced
+by three checks that together are stricter, not weaker:
+
+1. **Parse time, deterministic:** the range's *width* must not exceed the interval's reach.
+   Catches the mistake that actually happens (switching an existing multi-year daily strategy
+   to intraday) and never goes stale.
+2. **Warning:** `strategy_warnings` emits a `universe.start_date` warning when the range sits
+   further back than the provider still serves, naming the earliest usable date. This is what
+   the editor shows.
+3. **Fetch time, loud:** Phase 2.2's `DataUnavailableError` naming the limit.
+
+**Phase 6 must mirror the width check client-side, and surface the warning — not reimplement a
+client-side "too old" hard error.** Rationale is recorded in spec §3.3.1.
+
+Also landed: `ExitRule.min_holding` / `max_holding` properties return the bound in bars from
+whichever spelling declared it, so `holding_bounds` and everything downstream stay
+interval-agnostic. `_days` and `_bars` for the *same* bound is an error; for different bounds it
+is fine.
+
 ---
 
 ## Phase 2 — Data layer: fetch, normalise, cache intraday bars

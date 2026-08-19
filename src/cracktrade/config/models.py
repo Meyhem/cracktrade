@@ -15,7 +15,7 @@ Two deliberate departures from the legacy schema, both recorded in the spec:
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
@@ -38,6 +38,82 @@ class PriceSeries(StrEnum):
     LOW = "low"
     CLOSE = "close"
     VOLUME = "volume"
+
+
+class Interval(StrEnum):
+    """The width of one bar.
+
+    Spec section 3.3. The enum is the *only* place the four spellings of an interval are
+    related to each other: the YAML token, the pandas offset alias, the bar's duration, and how
+    far back the provider will serve it. An if-chain repeating any of these mappings elsewhere
+    is how a 30-minute strategy ends up annualised as if its bars were days.
+    """
+
+    M15 = "15m"
+    M30 = "30m"
+    H1 = "1h"
+    D1 = "1d"
+
+    @property
+    def is_intraday(self) -> bool:
+        """Whether a bar is shorter than a trading session."""
+        return self is not Interval.D1
+
+    @property
+    def pandas_freq(self) -> str:
+        """The pandas offset alias for this interval.
+
+        Not the same string as the YAML token: pandas has no ``"30m"`` alias (``m`` is
+        month-end), and the ``T``/``H`` aliases were deprecated in pandas 2.x. Every
+        time-based vectorbt metric is derived from this value, so a wrong alias here is
+        silently wrong arithmetic everywhere.
+        """
+        return _PANDAS_FREQ[self]
+
+    @property
+    def bar_timedelta(self) -> timedelta:
+        """How long one bar covers, for spacing checks and annualisation."""
+        return _BAR_DURATION[self]
+
+    @property
+    def max_lookback(self) -> timedelta | None:
+        """How far back the provider will serve this interval, or ``None`` for no limit.
+
+        Yahoo serves 15m and 30m for the last 60 calendar days and 1h for the last 730; the
+        values here carry a safety margin because the cutoff moves during the day, and a
+        strategy that validated at 09:00 must not become invalid at 17:00. Measured, not read
+        from documentation -- see ``tests/fixtures/README.md``.
+
+        Note that 30m is *resampled from 15m* by the provider, which is why it inherits the
+        60-day limit rather than getting a longer one of its own.
+        """
+        return _MAX_LOOKBACK[self]
+
+
+#: Interval → pandas offset alias. See :attr:`Interval.pandas_freq`.
+_PANDAS_FREQ: dict[Interval, str] = {
+    Interval.M15: "15min",
+    Interval.M30: "30min",
+    Interval.H1: "1h",
+    Interval.D1: "1D",
+}
+
+#: Interval → bar duration. A daily bar is one calendar day for spacing purposes, which is what
+#: the median gap between consecutive daily bars actually is.
+_BAR_DURATION: dict[Interval, timedelta] = {
+    Interval.M15: timedelta(minutes=15),
+    Interval.M30: timedelta(minutes=30),
+    Interval.H1: timedelta(hours=1),
+    Interval.D1: timedelta(days=1),
+}
+
+#: Interval → how far back the provider reaches. See :attr:`Interval.max_lookback`.
+_MAX_LOOKBACK: dict[Interval, timedelta | None] = {
+    Interval.M15: timedelta(days=55),
+    Interval.M30: timedelta(days=55),
+    Interval.H1: timedelta(days=700),
+    Interval.D1: None,
+}
 
 
 class PositionSizingType(StrEnum):
@@ -121,11 +197,20 @@ class Universe(_Base):
 
     Exactly one ticker. Dates are real ``date`` objects, not the lexicographically compared
     strings the legacy engine used.
+
+    ``interval`` defaults to daily, which is what every strategy written before intraday
+    support existed means. Nothing about an existing file changes by omitting it.
     """
 
     ticker: Annotated[str, Field(min_length=1)]
     start_date: date
     end_date: Annotated[date, Field(default_factory=lambda: datetime.now().astimezone().date())]
+    interval: Interval = Interval.D1
+
+    @field_validator("interval", mode="before")
+    @classmethod
+    def _accept_interval_string(cls, value: object) -> object:
+        return _coerce_enum(value, Interval)
 
     @field_validator("ticker")
     @classmethod
@@ -158,6 +243,38 @@ class Universe(_Base):
     def _check_range(self) -> Self:
         if self.start_date >= self.end_date:
             msg = f"start_date ({self.start_date}) must be before end_date ({self.end_date})"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _span_is_within_provider_reach(self) -> Self:
+        """Reject a range wider than the provider will ever serve at this interval.
+
+        Deliberately a check on the range's *width*, not on how old ``start_date`` is. The
+        provider's window is "the last N days from now", which moves: validating against it
+        here would make a strategy that parsed yesterday fail to parse today, and the API
+        re-parses stored YAML every time it reads a strategy -- so a saved 30m strategy would
+        become unreadable 55 days after it was written, taking its run history's detail view
+        with it.
+
+        The width check is time-independent and catches the mistake that actually happens:
+        switching an existing multi-year daily strategy to an intraday interval. A range that
+        is narrow enough but too far in the past gets a warning from
+        :func:`cracktrade.strategy.strategy_warnings` and, if run anyway, a loud refusal from
+        the data layer naming the limit. Nothing produces numbers from data that was never
+        fetched.
+        """
+        limit = self.interval.max_lookback
+        if limit is None:
+            return self
+        span = self.end_date - self.start_date
+        if span > limit:
+            msg = (
+                f"a {self.interval.value} history spans at most {limit.days} days "
+                f"(the provider serves a rolling window and this leaves margin for its moving "
+                f"cutoff), but start_date to end_date is {span.days} days. Shorten the range, "
+                f"or use a wider interval -- 1h reaches back about two years, 1d has no limit"
+            )
             raise ValueError(msg)
         return self
 
@@ -254,6 +371,12 @@ class ExitRule(_Base):
     Stop priority is ``atr_stop_multiplier`` > ``trailing_stop_pct`` > ``stop_loss_pct``; only
     the highest-priority one set is active. ``take_profit_pct`` is orthogonal and always
     applies. See spec section 3.7.
+
+    Holding periods come in two spellings of the same quantity. The engine counts **bars**, and
+    always did -- on daily data a bar is a trading day, so ``min_holding_days`` was an accurate
+    name by coincidence. It stops being accurate the moment a bar is 30 minutes long, so
+    ``min_holding_bars`` / ``max_holding_bars`` are the general form and the ``_days`` fields
+    are accepted only on a daily strategy, where the two words mean the same thing.
     """
 
     signal: str | None = None
@@ -263,7 +386,19 @@ class ExitRule(_Base):
     take_profit_pct: Annotated[float, Field(gt=0)] | None = None
     min_holding_days: Annotated[int, Field(ge=1)] | None = None
     max_holding_days: Annotated[int, Field(ge=1)] | None = None
+    min_holding_bars: Annotated[int, Field(ge=1)] | None = None
+    max_holding_bars: Annotated[int, Field(ge=1)] | None = None
     optimize: OptimizeSpec = True
+
+    @property
+    def min_holding(self) -> int | None:
+        """The minimum holding period in bars, whichever spelling declared it."""
+        return self.min_holding_bars if self.min_holding_bars is not None else self.min_holding_days
+
+    @property
+    def max_holding(self) -> int | None:
+        """The maximum holding period in bars, whichever spelling declared it."""
+        return self.max_holding_bars if self.max_holding_bars is not None else self.max_holding_days
 
     @property
     def active_stop(self) -> Literal["atr", "trailing", "fixed"] | None:
@@ -299,27 +434,45 @@ class ExitRule(_Base):
             self.trailing_stop_pct,
             self.atr_stop_multiplier,
             self.take_profit_pct,
-            self.max_holding_days,
+            self.max_holding,
         )
         if all(mechanism is None for mechanism in mechanisms):
             msg = (
                 "defines no way to exit a position: set at least one of signal, stop_loss_pct, "
-                "trailing_stop_pct, atr_stop_multiplier, take_profit_pct, max_holding_days"
+                "trailing_stop_pct, atr_stop_multiplier, take_profit_pct, max_holding_bars"
             )
             raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
+    def _one_spelling_per_holding_bound(self) -> Self:
+        """Reject a bound declared both ways.
+
+        They mean the same thing on a daily strategy, so a file setting both is not ambiguous
+        so much as confused -- and if the two disagree, silently preferring one would make the
+        other a number the user wrote and the engine ignored.
+        """
+        for bound in ("min", "max"):
+            days = getattr(self, f"{bound}_holding_days")
+            bars = getattr(self, f"{bound}_holding_bars")
+            if days is not None and bars is not None:
+                msg = (
+                    f"{bound}_holding_days ({days}) and {bound}_holding_bars ({bars}) are two "
+                    f"spellings of the same limit; set one of them"
+                )
+                raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
     def _holding_bounds_are_consistent(self) -> Self:
-        if (
-            self.min_holding_days is not None
-            and self.max_holding_days is not None
-            and self.min_holding_days >= self.max_holding_days
-        ):
-            msg = (
-                f"min_holding_days ({self.min_holding_days}) must be less than "
-                f"max_holding_days ({self.max_holding_days})"
-            )
+        minimum, maximum = self.min_holding, self.max_holding
+        if minimum is not None and maximum is not None and minimum >= maximum:
+            # Name the fields the user actually wrote, not the internal bar-denominated pair:
+            # spec section 3.9 requires an error to identify the key that caused it, which is
+            # what lets an editor mark the offending line rather than show a banner.
+            low = "min_holding_bars" if self.min_holding_bars is not None else "min_holding_days"
+            high = "max_holding_bars" if self.max_holding_bars is not None else "max_holding_days"
+            msg = f"{low} ({minimum}) must be less than {high} ({maximum})"
             raise ValueError(msg)
         return self
 
@@ -373,6 +526,33 @@ class Strategy(_Base):
         if isinstance(value, list):
             return tuple(value)
         return value
+
+    @model_validator(mode="after")
+    def _holding_days_require_daily_bars(self) -> Self:
+        """``_days`` holding bounds are meaningless once a bar is not a day.
+
+        Checked here rather than on :class:`ExitRule`, which cannot see the interval. Refusing
+        the file is the right answer: reinterpreting ``max_holding_days: 5`` as five 30-minute
+        bars would turn a week-long limit into two and a half hours without saying so, and
+        reinterpreting it as five *sessions* would guess at a number the user never wrote.
+        """
+        interval = self.universe.interval
+        if not interval.is_intraday:
+            return self
+        declared = [
+            name
+            for name in ("min_holding_days", "max_holding_days")
+            if getattr(self.exit, name) is not None
+        ]
+        if declared:
+            msg = (
+                f"{', '.join(declared)} cannot be used with interval {interval.value}: a bar is "
+                f"not a day here. Use "
+                f"{', '.join(name.replace('_days', '_bars') for name in declared)} instead, "
+                f"counted in {interval.value} bars"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _indicator_names_are_unique(self) -> Self:

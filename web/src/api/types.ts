@@ -197,23 +197,62 @@ export type IndicatorDescription = {
   uses_source: boolean
 }
 
-/** One exit field and where it sits in the stop-priority chain (null = not a stop). */
+/**
+ * One exit field, where it sits in the stop-priority chain (null = not a stop), and whether
+ * the engine accepts it only on daily bars — the `_days` holding bounds are refused outright
+ * on an intraday strategy, where `_bars` is the only spelling that means anything.
+ */
 export type ExitField = {
   name: string
   stop_priority: number | null
+  daily_only: boolean
+}
+
+/**
+ * The four bar widths the engine accepts.
+ *
+ * Named `BarInterval`, not `Interval`: `lib/result.ts` already exports an `Interval`, and that
+ * one is a confidence interval. Two things called the same thing on the same screen is how a
+ * chart ends up labelled with a bootstrap bound.
+ */
+export const BAR_INTERVALS = ['15m', '30m', '1h', '1d'] as const
+export type BarInterval = (typeof BAR_INTERVALS)[number]
+
+/**
+ * One interval offered by the New-strategy dialog.
+ *
+ * `max_lookback_days` is the provider's reach, not a preference: 15m and 30m bars are served
+ * for about 55 days and no wider range can be fetched at all. The client mirrors that check in
+ * the form, where the user can still fix it, rather than letting the run fail after launch.
+ */
+export type IntervalOption = {
+  value: BarInterval
+  intraday: boolean
+  max_lookback_days: number | null
 }
 
 /** `/meta` with its open records narrowed. */
-export type EngineMeta = Omit<MetaResponse, 'defaults' | 'indicators' | 'exit_fields'> & {
+export type EngineMeta = Omit<
+  MetaResponse,
+  'defaults' | 'indicators' | 'exit_fields' | 'intervals'
+> & {
   defaults: Record<RunKind, RunDefaults>
   indicators: IndicatorDescription[]
   exit_fields: ExitField[]
+  intervals: IntervalOption[]
 }
 
 /** `RunOut` with the fields the generator left open narrowed to what the server sends. */
 export type Run = Omit<
   RunOut,
-  'kind' | 'status' | 'strategy' | 'progress' | 'headline' | 'failure_category' | 'params'
+  | 'kind'
+  | 'status'
+  | 'strategy'
+  | 'progress'
+  | 'headline'
+  | 'failure_category'
+  | 'params'
+  | 'interval'
 > & {
   kind: RunKind
   status: RunStatus
@@ -222,6 +261,8 @@ export type Run = Omit<
   headline: Headline | null
   failure_category: FailureCategory | null
   params: Record<string, unknown>
+  /** The interval this run pinned, which is its own version's and not the head's. */
+  interval: BarInterval
 }
 
 /** `RunDetail` with its nested run narrowed, and the two loose blobs named. */
@@ -232,8 +273,12 @@ export type RunDetailNarrowed = Omit<RunDetail, 'run' | 'error' | 'result'> & {
   result: Record<string, unknown> | null
 }
 
-export type StrategyRow = Omit<StrategySummary, 'verdict' | 'last_run_kind' | 'last_run_status'> & {
+export type StrategyRow = Omit<
+  StrategySummary,
+  'verdict' | 'last_run_kind' | 'last_run_status' | 'interval'
+> & {
   verdict: VerdictState
   last_run_kind: RunKind | null
   last_run_status: RunStatus | null
+  interval: BarInterval
 }

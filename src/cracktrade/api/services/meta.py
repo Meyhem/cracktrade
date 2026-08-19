@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cracktrade import __version__
+from cracktrade.config import Interval
 from cracktrade.domain import INSTABILITY_THRESHOLD, MIN_TRADES_TO_JUDGE, SIGNIFICANCE
 from cracktrade.evolution import (
     DEFAULT_HOLDOUT_FRACTION,
@@ -23,18 +24,22 @@ from cracktrade.indicators.describe import IndicatorDescription, describe_catalo
 from cracktrade.optimize.objective import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, OBJECTIVES
 from cracktrade.validate.folds import DEFAULT_FOLDS, FoldScheme
 
-#: Exit fields in stop-priority order (spec section 3.7). ``stop_priority`` is what lets the
-#: editor say which stop shadows which without hard-coding the chain a second time.
-EXIT_FIELDS: tuple[tuple[str, int | None], ...] = (
-    ("signal", None),
-    ("atr_stop_multiplier", 1),
-    ("trailing_stop_pct", 2),
-    ("stop_loss_pct", 3),
-    ("take_profit_pct", None),
-    ("min_holding_days", None),
-    ("max_holding_days", None),
-    ("min_holding_bars", None),
-    ("max_holding_bars", None),
+#: Exit fields in stop-priority order (spec section 3.7), each with its place in the stop
+#: priority chain and whether it exists only on daily bars. ``stop_priority`` is what lets the
+#: editor say which stop shadows which without hard-coding the chain a second time;
+#: ``daily_only`` is what lets it stop offering a field the engine would refuse -- the ``_days``
+#: holding bounds are rejected outright on an intraday strategy (spec section 3.3), where the
+#: ``_bars`` spelling is the only one that means anything.
+EXIT_FIELDS: tuple[tuple[str, int | None, bool], ...] = (
+    ("signal", None, False),
+    ("atr_stop_multiplier", 1, False),
+    ("trailing_stop_pct", 2, False),
+    ("stop_loss_pct", 3, False),
+    ("take_profit_pct", None, False),
+    ("min_holding_days", None, True),
+    ("max_holding_days", None, True),
+    ("min_holding_bars", None, False),
+    ("max_holding_bars", None, False),
 )
 
 #: The "what this cannot tell you" banner. Kept here because they are engine limits, not
@@ -52,10 +57,26 @@ LIMITS: tuple[str, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class ExitField:
-    """One exit field, and where it sits in the stop priority chain."""
+    """One exit field, where it sits in the stop priority chain, and where it is accepted."""
 
     name: str
     stop_priority: int | None
+    daily_only: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IntervalOption:
+    """One bar width the engine accepts, and the one fact that constrains choosing it.
+
+    ``max_lookback_days`` is the provider's reach, not a preference: 15-minute and 30-minute
+    bars are served for about 55 days and no date range wider than that can be fetched at all
+    (spec section 4.2). A client that has this can refuse the range in the form, where the user
+    can still fix it, rather than letting the engine refuse it after the launch.
+    """
+
+    value: str
+    intraday: bool
+    max_lookback_days: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +121,10 @@ class Meta:
     evolution_warmup_bars: int
     indicators: tuple[IndicatorDescription, ...]
     exit_fields: tuple[ExitField, ...]
+    #: Bar widths, in the enum's own order. Read from the engine rather than restated, for the
+    #: reason this module exists: a client offering an interval the engine does not accept, or
+    #: omitting one it does, is a drift no test on either side would catch.
+    intervals: tuple[IntervalOption, ...]
     limits: tuple[str, ...]
 
 
@@ -144,6 +169,19 @@ def describe_engine() -> Meta:
         ),
         evolution_warmup_bars=library_warmup(),
         indicators=describe_catalogue(),
-        exit_fields=tuple(ExitField(name=name, stop_priority=rank) for name, rank in EXIT_FIELDS),
+        exit_fields=tuple(
+            ExitField(name=name, stop_priority=rank, daily_only=daily_only)
+            for name, rank, daily_only in EXIT_FIELDS
+        ),
+        intervals=tuple(
+            IntervalOption(
+                value=interval.value,
+                intraday=interval.is_intraday,
+                max_lookback_days=(
+                    interval.max_lookback.days if interval.max_lookback is not None else None
+                ),
+            )
+            for interval in Interval
+        ),
         limits=LIMITS,
     )

@@ -132,6 +132,7 @@ def post_strategy(body: CreateStrategyRequest, work: Work) -> CreatedStrategy:
         start_date=body.start_date,
         end_date=body.end_date,
         minimal=body.seed == "minimal",
+        interval=body.interval,
     )
     return _created(work, created)
 

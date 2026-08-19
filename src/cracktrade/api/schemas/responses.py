@@ -149,6 +149,9 @@ class StrategySummary(BaseModel):
     ticker: str | None
     start_date: str | None
     end_date: str | None
+    #: Bar width, one of the values spec 3.3 allows. Present so a list row can label a date
+    #: range and a bar count without fetching and parsing the YAML for every row.
+    interval: str
     head_version: int
     edited_at: datetime
     created_at: datetime
@@ -174,6 +177,7 @@ class StrategySummary(BaseModel):
             ticker=row.ticker,
             start_date=row.start_date,
             end_date=row.end_date,
+            interval=row.interval,
             head_version=row.head_version,
             edited_at=row.edited_at,
             created_at=row.created_at,
@@ -429,6 +433,7 @@ class MetaResponse(BaseModel):
     evolution_warmup_bars: int
     indicators: list[dict[str, Any]]
     exit_fields: list[dict[str, Any]]
+    intervals: list[dict[str, Any]]
     limits: list[str]
 
 
@@ -480,6 +485,7 @@ def meta_payload(meta: Any) -> MetaResponse:
         evolution_warmup_bars=meta.evolution_warmup_bars,
         indicators=[to_dict(indicator) for indicator in meta.indicators],
         exit_fields=[to_dict(field) for field in meta.exit_fields],
+        intervals=[to_dict(option) for option in meta.intervals],
         limits=list(meta.limits),
     )
 

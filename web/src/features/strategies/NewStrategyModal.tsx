@@ -3,6 +3,7 @@ import { useForm } from '@mantine/form'
 import { useNavigate } from 'react-router'
 import { notifications } from '@mantine/notifications'
 import dayjs from 'dayjs'
+import type { BarInterval } from '../../api/types'
 import { descriptionOf } from '../../lib/glossary'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { useCreateStrategy } from './queries'
@@ -25,6 +26,9 @@ export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose
       ticker: '',
       start_date: dayjs().subtract(3, 'year').format('YYYY-MM-DD'),
       end_date: dayjs().format('YYYY-MM-DD'),
+      // No control for this yet -- the dialog gains the picker, and the interval-dependent
+      // date defaults that go with it, in the next phase.
+      interval: '1d' as BarInterval,
       seed: 'minimal' as 'minimal' | 'empty',
     },
     validate: {
@@ -46,7 +50,12 @@ export function NewStrategyModal({ opened, onClose }: { opened: boolean; onClose
 
   const submit = form.onSubmit((values) => {
     create.mutate(
-      { ...values, ticker: values.ticker.trim().toUpperCase(), name: values.name.trim() },
+      {
+        ...values,
+        ticker: values.ticker.trim().toUpperCase(),
+        name: values.name.trim(),
+        interval: values.interval,
+      },
       {
         onSuccess: (created) => {
           if (created.warnings.length > 0) {

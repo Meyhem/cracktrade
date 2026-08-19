@@ -524,6 +524,30 @@ Files: `api/schemas/`, `api/routes/`, `api/worker/execute.py`, then
 **Definition of done:** OpenAPI reflects all changes; regenerated types compile under the
 web gate; both gates green; committed.
 
+### Phase 5 findings — DONE
+
+1. **Item 3 was already done.** `run.result` is a passthrough `dict[str, Any]` (spec §15.1), so
+   `history`, `overnight_carries` and the `_bars` renames reached the wire the moment Phase 3
+   and Phase 4 put them in the engine's serialisation. Nothing in the API reshapes a result, and
+   nothing should.
+2. **Migration 0005 was needed after all**, though not a table change — the plan said "no
+   strategy-table migration", which is true, but both overview *views* had to lift `interval` out
+   of the stored config. The run view joins `strategy_version` on the run's own pinned version
+   rather than reading the head. Verified against the live Postgres that `interval` is usable as
+   an unquoted column alias before relying on it.
+3. **`GET /meta` gained `intervals`**, and `exit_fields` gained `daily_only`. Both for the reason
+   that module exists: a client restating which intervals are allowed, or offering
+   `min_holding_days` on an intraday strategy the engine will refuse, is drift no test on either
+   side would catch.
+4. **The generated diff did its job.** Four added fields, four compile errors, each at a place
+   that genuinely had to account for the interval. The TypeScript `BarInterval` is named apart
+   from the existing `Interval` in `lib/result.ts`, which is a *confidence* interval — two things
+   with one name on one screen is how a chart ends up labelled with a bootstrap bound.
+5. **Deferred to Phase 6, deliberately:** the New-strategy dialog passes `'1d'` explicitly and
+   has no picker yet. Also found and left for Phase 6: `web/src/lib/result.ts` still reads
+   `avg_holding_days` and `holding_days`, which Phase 3 renamed — the web tests pass because
+   their fixtures still carry the old names. Those two figures currently render as nothing.
+
 ---
 
 ## Phase 6 — Web UI

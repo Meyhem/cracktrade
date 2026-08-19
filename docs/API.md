@@ -90,11 +90,22 @@ Static facts the UI needs before rendering anything; cacheable for the session.
     // ...
   ],
   "exit_fields": [                      // priority chain, for the editor's shadowing hints
-    { "name": "atr_stop_multiplier", "stop_priority": 1 },
-    { "name": "trailing_stop_pct",   "stop_priority": 2 },
-    { "name": "stop_loss_pct",       "stop_priority": 3 },
-    { "name": "take_profit_pct" }, { "name": "signal" },
-    { "name": "min_holding_days" }, { "name": "max_holding_days" }
+    { "name": "atr_stop_multiplier", "stop_priority": 1, "daily_only": false },
+    { "name": "trailing_stop_pct",   "stop_priority": 2, "daily_only": false },
+    { "name": "stop_loss_pct",       "stop_priority": 3, "daily_only": false },
+    { "name": "take_profit_pct", "daily_only": false }, { "name": "signal", "daily_only": false },
+    // `daily_only` fields are refused outright on an intraday strategy: the editor must stop
+    // offering them rather than let the engine reject the save.
+    { "name": "min_holding_days", "daily_only": true },
+    { "name": "max_holding_days", "daily_only": true },
+    { "name": "min_holding_bars", "daily_only": false },
+    { "name": "max_holding_bars", "daily_only": false }
+  ],
+  "intervals": [                        // bar widths, and the provider reach that bounds each
+    { "value": "15m", "intraday": true,  "max_lookback_days": 55 },
+    { "value": "30m", "intraday": true,  "max_lookback_days": 55 },
+    { "value": "1h",  "intraday": true,  "max_lookback_days": 700 },
+    { "value": "1d",  "intraday": false, "max_lookback_days": null }
   ],
   "limits": [                           // the "What this cannot tell you" banner lines
     "Ticker selection is hindsight — you chose the symbol knowing its history.",
@@ -163,6 +174,7 @@ Rows come from the `strategy_overview` view:
   "strategies": [{
     "id": "…", "name": "momentum_v2", "ticker": "NVDA",
     "start_date": "2018-01-01", "end_date": "2025-12-31",
+    "interval": "1d",                   // head's bar width; "1d" for a config written before it
     "head_version": 7, "edited_at": "…", "created_at": "…",
     "origin": "forked",
     "lineage": { "parent_strategy_id": "…", "parent_name": "momentum_breakout",
@@ -186,8 +198,14 @@ The New-strategy dialog (blank or minimal seed; the fork option routes to `/fork
 // request
 { "name": "rsi_pullback", "ticker": "NVDA",
   "start_date": "2018-01-01", "end_date": "2025-12-31",   // end_date optional → today
+  "interval": "1d",                                       // 15m | 30m | 1h | 1d, default 1d
   "seed": "minimal" }                                     // "minimal" | "empty"
 ```
+
+`interval` is written into the seed config rather than left implied, and is validated by the
+engine, not by the request schema — an unknown value comes back as a `422` addressed to
+`universe.interval`, and a date range wider than the interval's provider reach as a `422`
+addressed to `universe.start_date`.
 
 Creates the strategy and v1 (`origin: created`), returns `201` with the detail shape (§3,
 `GET /strategies/{id}`). No run is launched — the strategy starts never-run. `409` on duplicate
@@ -379,6 +397,7 @@ print, extracted server-side from `result` so every list and the run page agree:
     "id": "…", "number": 22, "kind": "walk_forward", "status": "succeeded",
     "strategy": { "id": "…", "name": "momentum_v2" },
     "version": 7, "stale": false,
+    "interval": "1d",                        // the *pinned version's* bar width, not the head's
     "queued_at": "…", "started_at": "…", "finished_at": "…", "elapsed_seconds": 1491.0,
     "params": { "objective": "calmar", "epochs": 10, "folds": 4, "scheme": "anchored" },
     "seed": 20240517,

@@ -51,6 +51,11 @@ class CreateStrategyRequest(Body):
     ticker: str = Field(min_length=1, max_length=20)
     start_date: str
     end_date: str
+    #: Bar width. Not validated here -- the engine owns which values exist (spec 3.3) and
+    #: rejects the rest with a message addressed to ``universe.interval``, which is the message
+    #: the editor already knows how to render. A pattern here would duplicate that list and
+    #: answer with a schema error instead.
+    interval: str = "1d"
     #: "minimal" seeds one indicator pair, an entry and an exit; "empty" the bare minimum.
     seed: str = Field(default="minimal", pattern="^(minimal|empty)$")
 

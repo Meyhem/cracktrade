@@ -43,13 +43,25 @@ def _config_of(strategy: Strategy) -> dict[str, Any]:
     return dict(strategy.model_dump(mode="json"))
 
 
-def seed_config(*, name: str, ticker: str, start: str, end: str, minimal: bool) -> dict[str, Any]:
-    """The configuration a newly created strategy starts from."""
+def seed_config(
+    *, name: str, ticker: str, start: str, end: str, minimal: bool, interval: str = "1d"
+) -> dict[str, Any]:
+    """The configuration a newly created strategy starts from.
+
+    The interval is written out even when it is the default. A seed is a document the user will
+    read and edit, and a field that governs what every bar count in the results means should be
+    visible in it rather than implied by its absence.
+    """
     indicators = list(MINIMAL_INDICATORS) if minimal else []
     entry = "(close > sma_long) & (rsi_ind < 35)" if minimal else "close > open"
     return {
         "strategy": {"name": name},
-        "universe": {"ticker": ticker, "start_date": start, "end_date": end},
+        "universe": {
+            "ticker": ticker,
+            "start_date": start,
+            "end_date": end,
+            "interval": interval,
+        },
         "execution": {
             "initial_capital": 10000.0,
             "slippage_pct": 0.1,
@@ -126,10 +138,19 @@ def create_strategy(
     start_date: str,
     end_date: str,
     minimal: bool = True,
+    interval: str = "1d",
 ) -> Created:
     """Create a strategy from the New dialog. No run is launched: it starts never-run."""
     strategy = _validated(
-        seed_config(name=name, ticker=ticker, start=start_date, end=end_date, minimal=minimal), None
+        seed_config(
+            name=name,
+            ticker=ticker,
+            start=start_date,
+            end=end_date,
+            minimal=minimal,
+            interval=interval,
+        ),
+        None,
     )
     return _create(
         work,

@@ -2299,11 +2299,22 @@ explain a result, which is the only reason to keep it.
 
 ### 14.4 Derived truths — never stored
 
-Two facts the UI displays everywhere are computed at read time, because storing them creates a
+Three facts the UI displays everywhere are computed at read time, because storing them creates a
 second copy that can disagree with the first:
 
 **Staleness.** A run is stale when its `version` is below the strategy's current head. It
 describes a config that no longer exists.
+
+**Bar interval.** **[NEW — decided 2026-08-19.]** Lifted out of the stored config by the
+overview views, beside the ticker and the dates, so a list row can label a date range and a bar
+count without fetching and parsing YAML for every row. Two rules, both load-bearing:
+
+- On a **strategy** it is the *head's*; on a **run** it is the interval of the *version that run
+  pinned*. Labelling an old run's bar counts with the current head's interval would put a wrong
+  unit on numbers that are otherwise correct, which is worse than putting none on them.
+- A config written before the interval existed has no such key, and the views read it as `1d`
+  rather than null. That run was a daily one; making every consumer re-decide what a missing
+  interval meant would invite four different answers, and the answer is not "unknown".
 
 **Verdict.** A strategy is:
 

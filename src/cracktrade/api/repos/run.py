@@ -125,12 +125,15 @@ class RunRepo(Repository):
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         rows = self._fetch_all(
             f"""
-            SELECT {_COLUMNS}, strategy_name, stale FROM run_overview
+            SELECT {_COLUMNS}, strategy_name, stale, interval FROM run_overview
             {where} ORDER BY queued_at DESC LIMIT %s OFFSET %s
             """,
             [*params, limit, offset],
         )
-        return [RunOverviewRow(run=_run(row), strategy_name=row[20], stale=row[21]) for row in rows]
+        return [
+            RunOverviewRow(run=_run(row), strategy_name=row[20], stale=row[21], interval=row[22])
+            for row in rows
+        ]
 
     def count(
         self,
@@ -158,11 +161,12 @@ class RunRepo(Repository):
 
     def overview(self, run_id: UUID) -> RunOverviewRow | None:
         row = self._fetch_one(
-            f"SELECT {_COLUMNS}, strategy_name, stale FROM run_overview WHERE id = %s", (run_id,)
+            f"SELECT {_COLUMNS}, strategy_name, stale, interval FROM run_overview WHERE id = %s",
+            (run_id,),
         )
         if row is None:
             return None
-        return RunOverviewRow(run=_run(row), strategy_name=row[20], stale=row[21])
+        return RunOverviewRow(run=_run(row), strategy_name=row[20], stale=row[21], interval=row[22])
 
     # ------------------------------------------------------------------ the worker's side
 

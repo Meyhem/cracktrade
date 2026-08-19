@@ -30,7 +30,7 @@ _COLUMNS = """
 
 _OVERVIEW_COLUMNS = """
   id, name, origin, parent_strategy_id, parent_version, origin_run_id, origin_not_credible,
-  created_at, head_version, edited_at, ticker, start_date, end_date,
+  created_at, head_version, edited_at, ticker, start_date, end_date, interval,
   optimize_runs, backtest_runs, walk_forward_runs, evolve_runs, versions,
   last_run_id, last_run_kind, last_run_status, last_run_at, verdict, verdict_run_id
 """
@@ -64,17 +64,18 @@ def _overview(row: tuple[Any, ...]) -> StrategyOverviewRow:
         ticker=row[10],
         start_date=row[11],
         end_date=row[12],
-        optimize_runs=row[13],
-        backtest_runs=row[14],
-        walk_forward_runs=row[15],
-        evolve_runs=row[16],
-        versions=row[17],
-        last_run_id=row[18],
-        last_run_kind=RunKind(row[19]) if row[19] else None,
-        last_run_status=RunStatus(row[20]) if row[20] else None,
-        last_run_at=row[21],
-        verdict=Verdict(row[22]),
-        verdict_run_id=row[23],
+        interval=row[13],
+        optimize_runs=row[14],
+        backtest_runs=row[15],
+        walk_forward_runs=row[16],
+        evolve_runs=row[17],
+        versions=row[18],
+        last_run_id=row[19],
+        last_run_kind=RunKind(row[20]) if row[20] else None,
+        last_run_status=RunStatus(row[21]) if row[21] else None,
+        last_run_at=row[22],
+        verdict=Verdict(row[23]),
+        verdict_run_id=row[24],
     )
 
 

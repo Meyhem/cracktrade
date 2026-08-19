@@ -37,6 +37,10 @@ class RunOut(BaseModel):
     status: str
     strategy: dict[str, Any]
     version: int
+    #: Bar width of the version this run pinned, not of the strategy's head. Every bar count in
+    #: the result -- holding periods, warm-up, window lengths -- means a different span of
+    #: calendar time depending on it, and the head may have moved on since.
+    interval: str
     stale: bool
     params: dict[str, Any]
     seed: int
@@ -65,6 +69,7 @@ class RunOut(BaseModel):
             status=run.status.value,
             strategy={"id": str(run.strategy_id), "name": row.strategy_name},
             version=run.version,
+            interval=row.interval,
             stale=row.stale,
             params=run.params,
             seed=run.seed,

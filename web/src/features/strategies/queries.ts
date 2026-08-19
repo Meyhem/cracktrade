@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from '../../api/client'
 import { queryKeys, type StrategyListFilters } from '../../api/keys'
 import type {
+  BarInterval,
   CreatedStrategy,
   DeletedStrategy,
   StrategyDetail,
@@ -45,6 +46,7 @@ export type CreateStrategyInput = {
   ticker: string
   start_date: string
   end_date: string
+  interval: BarInterval
   seed: 'minimal' | 'empty'
 }
 

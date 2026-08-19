@@ -551,6 +551,11 @@ export interface components {
             /** End Date */
             end_date: string;
             /**
+             * Interval
+             * @default 1d
+             */
+            interval: string;
+            /**
              * Seed
              * @default minimal
              */
@@ -723,6 +728,10 @@ export interface components {
             exit_fields: {
                 [key: string]: unknown;
             }[];
+            /** Intervals */
+            intervals: {
+                [key: string]: unknown;
+            }[];
             /** Limits */
             limits: string[];
         };
@@ -860,6 +869,8 @@ export interface components {
             };
             /** Version */
             version: number;
+            /** Interval */
+            interval: string;
             /** Stale */
             stale: boolean;
             /** Params */
@@ -1032,6 +1043,8 @@ export interface components {
             start_date: string | null;
             /** End Date */
             end_date: string | null;
+            /** Interval */
+            interval: string;
             /** Head Version */
             head_version: number;
             /**

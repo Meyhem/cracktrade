@@ -74,6 +74,10 @@ export function ComposeStrategyModal({
         ticker: values.ticker.trim().toUpperCase(),
         start_date: values.start_date,
         end_date: values.end_date,
+        // Daily until this dialog offers a choice. Evolution needs sixty sessions per segment
+        // across four segments plus a holdout, which no 15m or 30m range can supply, so daily
+        // is the only interval every evolution launched from here can actually run at.
+        interval: '1d',
         // The composed conditions replace whatever is here, so the seed is only ever a
         // placeholder. `minimal` rather than `empty` so the chassis is a strategy that can be
         // backtested on its own if evolution turns out not to be what the user wanted.

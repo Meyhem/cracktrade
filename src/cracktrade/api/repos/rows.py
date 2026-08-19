@@ -140,11 +140,14 @@ class RunRow:
 
 @dataclass(frozen=True, slots=True)
 class RunOverviewRow:
-    """A run plus the two facts its own table cannot know: the strategy's name, and staleness."""
+    """A run plus the three facts its own table cannot know: the strategy's name, staleness,
+    and the bar interval of the version it pinned."""
 
     run: RunRow
     strategy_name: str
     stale: bool
+    #: Bar interval of the version this run pinned, never the head's -- see migration 0005.
+    interval: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +167,9 @@ class StrategyOverviewRow:
     ticker: str | None
     start_date: str | None
     end_date: str | None
+    #: Never None: a config written before the interval existed ran on daily bars, and the view
+    #: says so rather than making every consumer re-decide what a missing value meant.
+    interval: str
     optimize_runs: int
     backtest_runs: int
     walk_forward_runs: int

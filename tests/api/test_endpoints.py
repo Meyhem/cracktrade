@@ -88,6 +88,20 @@ def test_meta_reports_the_engines_own_constants(client: TestClient) -> None:
     assert body["limits"]
 
 
+def test_meta_lists_every_bar_interval_with_its_provider_reach(client: TestClient) -> None:
+    """The client must not restate this list. An interval it offers and the engine refuses, or
+    one the engine accepts and it hides, is a drift no test on either side would catch.
+    """
+    intervals = client.get(f"{BASE}/meta").json()["intervals"]
+
+    by_value = {option["value"]: option for option in intervals}
+    assert set(by_value) == {"15m", "30m", "1h", "1d"}
+    assert by_value["1d"]["intraday"] is False
+    assert by_value["1d"]["max_lookback_days"] is None
+    assert by_value["30m"]["intraday"] is True
+    assert 0 < by_value["30m"]["max_lookback_days"] < by_value["1h"]["max_lookback_days"]
+
+
 def test_meta_orders_the_stop_priority_chain(client: TestClient) -> None:
     """The editor needs to say which stop shadows which without hard-coding the chain again."""
     fields = {
@@ -329,6 +343,89 @@ def test_creating_a_strategy_starts_it_never_run(client: TestClient) -> None:
     assert detail["promoted_warning"] is None
     assert detail["counts"]["versions"] == 1
     assert detail["lineage"]["origin"] == "authored"
+
+
+# --------------------------------------------------------------------------- bar interval
+
+
+def test_a_created_strategy_defaults_to_daily_bars(client: TestClient) -> None:
+    detail = _create(client)
+    assert detail["head"]["config"]["universe"]["interval"] == "1d"
+
+
+def test_the_new_dialog_can_ask_for_intraday_bars(client: TestClient) -> None:
+    """The interval is written into the seed, not left implied by its absence.
+
+    A field that decides what every bar count in the results means should be visible in the
+    document the user is about to edit.
+    """
+    response = client.post(
+        f"{BASE}/strategies",
+        json={
+            "name": "intraday",
+            "ticker": "SAP.DE",
+            "start_date": "2026-07-01",
+            "end_date": "2026-08-18",
+            "interval": "30m",
+        },
+    )
+    assert response.status_code == 201, response.text
+    detail = response.json()["strategy"]
+    assert detail["head"]["config"]["universe"]["interval"] == "30m"
+    assert "interval: 30m" in detail["head"]["yaml"]
+
+
+def test_an_unknown_interval_is_addressed_to_its_own_field(client: TestClient) -> None:
+    """Not a schema error. The engine owns the list of intervals, so it owns the message."""
+    response = client.post(
+        f"{BASE}/strategies",
+        json={
+            "name": "hourly-ish",
+            "ticker": "SAP.DE",
+            "start_date": "2026-07-01",
+            "end_date": "2026-08-18",
+            "interval": "45m",
+        },
+    )
+    assert response.status_code == 422, response.text
+    paths = [issue["path"] for issue in response.json()["errors"]]
+    assert "universe.interval" in paths
+
+
+def test_a_range_wider_than_the_provider_serves_is_refused_at_creation(
+    client: TestClient,
+) -> None:
+    """Spec 3.3.1: the width check is deterministic, so it can run this early."""
+    response = client.post(
+        f"{BASE}/strategies",
+        json={
+            "name": "too-wide",
+            "ticker": "SAP.DE",
+            "start_date": "2020-01-01",
+            "end_date": "2026-08-18",
+            "interval": "30m",
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_the_strategy_list_labels_every_row_with_its_interval(client: TestClient) -> None:
+    _create(client, name="daily_one", ticker="NVDA")
+    client.post(
+        f"{BASE}/strategies",
+        json={
+            "name": "intraday_one",
+            "ticker": "SAP.DE",
+            "start_date": "2026-07-01",
+            "end_date": "2026-08-18",
+            "interval": "1h",
+        },
+    )
+
+    rows = client.get(f"{BASE}/strategies").json()["strategies"]
+
+    by_name = {row["name"]: row["interval"] for row in rows}
+    assert by_name == {"daily_one": "1d", "intraday_one": "1h"}
 
 
 def test_a_duplicate_name_is_a_conflict(client: TestClient) -> None:

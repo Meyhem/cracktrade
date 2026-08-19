@@ -318,6 +318,34 @@ def test_a_run_against_an_older_version_reads_as_stale(client: TestClient, db_ur
     assert client.get(f"{BASE}/runs/{run['id']}").json()["run"]["stale"] is True
 
 
+def test_a_run_carries_the_interval_of_the_version_it_pinned(client: TestClient) -> None:
+    """Not the head's. A run pins a version at launch, and the head may have moved since.
+
+    Labelling an old run's bar counts with the current head's interval would put a wrong unit on
+    numbers that are otherwise correct, which is worse than putting none on them.
+    """
+    strategy_id = _strategy(client)
+    run = _launch(client, strategy_id, "backtest")
+    assert client.get(f"{BASE}/runs/{run['id']}").json()["run"]["interval"] == "1d"
+
+    detail = client.get(f"{BASE}/strategies/{strategy_id}").json()
+    config = dict(detail["head"]["config"])
+    config["universe"] = {
+        **config["universe"],
+        "interval": "1h",
+        "start_date": "2025-01-02",
+        "end_date": "2026-08-18",
+    }
+    saved = client.post(
+        f"{BASE}/strategies/{strategy_id}/versions",
+        json={"base_version": 1, "config": config},
+    )
+    assert saved.status_code == 201, saved.text
+
+    assert client.get(f"{BASE}/runs/{run['id']}").json()["run"]["interval"] == "1d"
+    assert client.get(f"{BASE}/strategies").json()["strategies"][0]["interval"] == "1h"
+
+
 # --------------------------------------------------------------------------- series
 
 

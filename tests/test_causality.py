@@ -41,7 +41,7 @@ SRC_ROOT = Path(__file__).resolve().parent.parent / "src" / "cracktrade"
 
 
 def market_data(bars: int = BARS) -> MarketData:
-    frame = prepare_frame(make_ohlcv(bars), ticker="TEST", today=date(2100, 1, 1))
+    frame = prepare_frame(make_ohlcv(bars), ticker="TEST", now=date(2100, 1, 1))
     return MarketData(
         ticker="TEST",
         frame=frame,

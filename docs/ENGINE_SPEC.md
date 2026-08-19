@@ -633,8 +633,39 @@ The engine consumes exactly one shape. Providers adapt to it; the engine never a
 | dtype | `float64` for all five |
 | Content | no NaN after preparation; `Low <= Open, Close <= High`; `Volume >= 0` |
 
+`MarketData` additionally carries the `interval` its bars were fetched at and, for intraday
+data, the `timezone` its timestamps are expressed in. Both propagate through `slice` and
+`head`: the truncation harness and the walk-forward splitter go through those, and a window
+that forgot its bar width would be annualised as daily — in the very code path meant to catch
+that class of error.
+
 **[PORT]** DatetimeIndex preservation is load-bearing — vectorbt derives annualisation from it.
 `.reset_index()` is prohibited (`.agents/AGENTS.md` §3).
+
+#### What a naive timestamp *means* **[NEW]**
+
+The index is timezone-naive at every interval, but it does not denote the same thing at each:
+
+- **Daily** — UTC, truncated to midnight. Unchanged.
+- **Intraday** — **exchange-local wall-clock time**, with the IANA zone carried alongside in
+  `MarketData.timezone`. A Xetra bar stamped `09:00` means 09:00 in Frankfurt.
+
+This is not a convenience. The EU switches to summer time on the last Sunday of March and back
+on the last Sunday of October; the US switches on the second Sunday of March and the first
+Sunday of November. On a UTC index the same unchanging Xetra session would sit at 07:00–15:30
+for part of the year and 08:00–16:30 for the rest, so "the session's last bar" — the quantity
+the forced-close rule in §7.6 keys off — would move twice a year, and differently from a US
+listing in the same database. Every downstream consumer wants wall-clock exchange time:
+session grouping, the forced close, chart axes, and eventually a notification telling a trader
+in the EU what to do at a particular local time.
+
+Wall-clock local time stays unique and monotonic for equity sessions because the DST fall-back
+hour (02:00–03:00) lies outside every exchange's trading day. That assumption is *enforced*, not
+trusted: the uniqueness and monotonicity checks above are what fail if it is ever violated.
+Instruments trading around the clock are out of scope for this pass (§3.3.1).
+
+Yahoo's EU quotes are delayed roughly 15 minutes. Irrelevant to a backtest of closed bars;
+recorded because live evaluation would inherit it.
 
 **[FIX]** `float64`, not `float32`. Legacy cast to `float32`
 (`src/data/market.py:38`) as a memory guardrail for multi-ticker universes. With one ticker the
@@ -649,13 +680,24 @@ The contract is validated on entry to the engine by an explicit check, not assum
 
 ```python
 class MarketDataProvider(Protocol):
-    def fetch(self, ticker: str, start: date, end: date) -> pd.DataFrame: ...
+    def fetch(
+        self, ticker: str, start: date, end: date, interval: Interval = Interval.D1
+    ) -> pd.DataFrame: ...
 ```
 
 `YFinanceProvider` implements it.
 
 - **End-date inclusivity [PORT].** yfinance's `end` is exclusive; one day is added so the
   user's `end_date` is included (`src/data/market.py:9-11`).
+- **`prepost=False` is pinned [NEW]**, like `auto_adjust`. Regular session only. This is also
+  what the trader can actually execute: XTB trades EU stocks and ETFs during exchange hours, so
+  a backtest filling on a pre-market print would model a trade nobody could place.
+- **Interval limits [NEW].** yfinance does **not raise** when a range exceeds what it will
+  serve — it prints the reason to stdout and returns an empty frame. Emptiness is therefore the
+  only signal reaching the engine, and a bare "no data returned" would leave the user choosing
+  between a wrong ticker, a holiday range, and a limit they have never heard of. The message
+  names the interval's reach and the earliest fetchable date. See §3.3.1 for why this is a
+  backstop rather than the primary check.
 - **Column normalisation [PORT].** Labels are capitalised and the five needed columns selected
   (`src/data/market.py:30-32`). The MultiIndex branch (`src/data/market.py:22-28`) is **[DROP]**ped
   — single ticker only. If yfinance returns a MultiIndex anyway (it does for some call shapes), it is
@@ -684,17 +726,82 @@ class MarketDataProvider(Protocol):
    snapping the offending value onto the bracket only when the discrepancy is within `1e-8` relative
    tolerance, orders of magnitude tighter than any plausible real error; a bar outside that
    tolerance is left alone and still fails the §4.1 contract.
+7. **[NEW] Intraday forward-filling never crosses a session boundary.** The fill is grouped by
+   local calendar date. A global `ffill` on 30-minute bars would repair a missing 09:00 print by
+   copying the previous day's 17:00 row onto it: a fabricated bar that swallows the whole
+   overnight gap, reports a zero return across it, and offers a stop-loss a high/low range from
+   a different day to fire against. A hole at a session's *open* has no earlier bar in its own
+   session to copy, so the row is **dropped**, not filled — dropping a bar loses information,
+   inventing one manufactures a price a stop can fire against on a morning the market never
+   printed it. The drop is logged with a count.
+
+   In practice yfinance omits untraded intraday bars rather than emitting NaN rows, so this
+   path is rarely reached. It is specified and implemented anyway: "rarely" is not "never", and
+   the failure it would otherwise produce is silent.
+
+The history is **not** reindexed onto a synthetic complete-session grid. Halts and thin
+half-hours are real, and the spacing check (§7.5) uses the median precisely so that gaps do not
+break it.
 
 ### 4.4 Incomplete bars
 
-**[NEW]** If the last row's date equals today in the exchange's timezone and the session has not
-closed, the row is dropped. Determinism within a trading day matters more than one extra bar.
+**[NEW]** A bar that has not finished forming is dropped. Yahoo does return the still-forming
+bar, so this is necessary rather than theoretical.
+
+- **Daily** — the last row is dropped if its date has reached today in UTC. Unchanged.
+- **Intraday** — a bar is kept only once `timestamp + interval` has passed **in the exchange's
+  timezone**. A 09:00 bar on a 30-minute Xetra strategy is complete at 09:30 Frankfurt time and
+  not before.
+
+The determinism guarantee therefore shifts from "the same history per UTC day" to "the same
+history per closed bar". Both are determinism: two runs in the same half hour see the same
+bars. Reading the clock in UTC instead would declare a Frankfurt bar closed two hours early.
 
 ### 4.5 Caching
 
 **[NEW]** Optional, off by default, enabled by `--cache`. Parquet keyed by
-`(provider, ticker, start, end)`. Purely a redownload optimisation; it holds no results and is not
-persistence in the sense excluded from this pass.
+`(provider, ticker, interval, start, end)`. Purely a redownload optimisation; it holds no results
+and is not persistence in the sense excluded from this pass.
+
+The interval joins the key so that a 30-minute request cannot be served the daily frame stored
+under the same ticker and range. Adding it changed every digest and orphaned entries written
+before it — acceptable for an input cache, whose worst case is one extra download.
+
+**Known limitation, made visible by intraday.** The key holds the requested range, not the
+moment of the request, so a range ending today freezes whatever had printed when it was first
+fetched; later runs the same day reuse it. Daily has always behaved this way and it was nearly
+invisible, since the current day's bar is dropped as incomplete anyway. On 30-minute bars an
+afternoon run can reproduce the morning's history. Left as it is deliberately — a cache
+invalidating on a wall clock would stop being reproducible, which is worse. The mitigations are
+elsewhere: the cache is off unless asked for, and the UI defaults an intraday range to end
+*yesterday* (§13), so the common path never touches a live session.
+
+### 4.6 Sessions **[NEW]**
+
+`cracktrade.data.sessions` groups an intraday index into trading sessions. Every function there
+is a pure function of the index — no wall clock, no network, no exchange calendar, no state.
+That is the causality constraint, not tidiness: these feed the forced-close rule of §7.6, and
+anything they returned that was not derivable from bars already seen would be look-ahead.
+
+A **session** is one local calendar date. This works because the index carries exchange-local
+time (§4.1) and no equity session in scope crosses midnight; it would not work on a UTC index.
+
+Session length is **measured, never assumed**. Two years of Xetra hourly bars contain nine-bar
+days, an eight-bar early close, a seven-bar late open, and five-bar sessions either side of
+Christmas, while the LSE runs four-bar half-days on dates Xetra is closed outright. A 30-minute
+Xetra session is 17 bars; a 30-minute New York session is 13. Any bars-per-day constant is wrong
+for some venue on some date.
+
+`median_bars_per_session` is the figure annualisation is built on (§7.5). It is a median over
+*completed* sessions: half-days and early closes are real and all shorter than normal, so a mean
+would let a handful of them drag the figure down, and counting the trailing partial session would
+do so on every single run.
+
+**Data-quality caveat, measured not assumed:** Yahoo reports `Volume == 0` on 415 of 482 Xetra
+opening bars while quoting prices normally. Volume-based indicators are unreliable on the EU
+opening bar. This is recorded rather than repaired — zero is a legal volume under §4.1, and
+substituting a plausible number would be exactly the authoritative-looking fiction this engine
+exists to avoid.
 
 ---
 

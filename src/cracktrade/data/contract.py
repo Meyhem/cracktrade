@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 import pandas as pd
 
+from cracktrade.config import Interval
 from cracktrade.errors import DataContractError
 
 if TYPE_CHECKING:
@@ -43,6 +44,26 @@ class MarketData:
         requested_end: the ``end_date`` the strategy asked for.
         filled: optional boolean series, aligned to ``frame``, True on bars that were
             forward-filled rather than observed. ``None`` means the provenance was not tracked.
+        interval: the width of one bar. Everything time-based downstream is derived from it,
+            so it travels with the data rather than being re-read from the strategy: a window
+            of this history handed to the optimizer must carry its own bar width.
+        timezone: IANA name of the exchange's timezone for intraday data, e.g.
+            ``"Europe/Berlin"``. ``None`` on daily data, where it never mattered. See the note
+            on the index below.
+
+    **The index is timezone-naive, and for intraday data it holds exchange-local wall-clock
+    time** -- 09:00 on a Xetra bar means 09:00 in Frankfurt, not 07:00 UTC. This is a
+    deliberate choice, recorded in spec section 4.1: the EU switches to summer time on the last
+    Sunday of March and back on the last Sunday of October, while the US switches on the second
+    Sunday of March and the first Sunday of November, so a UTC index would move EU session
+    boundaries by an hour for several weeks a year and make "the session's last bar" a moving
+    target. Every downstream consumer -- session grouping, the forced close, charts, and
+    eventually notifications to a trader sitting in the EU -- wants wall-clock exchange time.
+
+    Wall-clock local time stays unique and monotonic for equity sessions because the DST
+    fall-back hour (02:00-03:00) is outside every exchange's trading day; the uniqueness and
+    monotonicity checks in :func:`validate_frame` are what enforce that assumption rather than
+    trusting it.
     """
 
     ticker: str
@@ -50,6 +71,8 @@ class MarketData:
     requested_start: date
     requested_end: date
     filled: pd.Series | None = None
+    interval: Interval = Interval.D1
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         validate_frame(self.frame)
@@ -101,13 +124,22 @@ class MarketData:
         return self.slice(0, bars)
 
     def slice(self, start: int, stop: int) -> MarketData:
-        """A positional slice, as a new :class:`MarketData`."""
+        """A positional slice, as a new :class:`MarketData`.
+
+        ``interval`` and ``timezone`` propagate. They have to: the truncation harness and the
+        walk-forward splitter both go through here, and a window that forgot its bar width
+        would be annualised as daily -- turning a 30-minute strategy's Sharpe into a number
+        several times too large, in exactly the code path that is supposed to be checking for
+        that class of error.
+        """
         return MarketData(
             ticker=self.ticker,
             frame=self.frame.iloc[start:stop],
             requested_start=self.requested_start,
             requested_end=self.requested_end,
             filled=None if self.filled is None else self.filled.iloc[start:stop],
+            interval=self.interval,
+            timezone=self.timezone,
         )
 
 

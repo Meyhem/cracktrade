@@ -27,7 +27,7 @@ BARS = 400
 
 @pytest.fixture(scope="module")
 def data() -> MarketData:
-    frame = prepare_frame(make_ohlcv(BARS), ticker="TEST", today=date(2100, 1, 1))
+    frame = prepare_frame(make_ohlcv(BARS), ticker="TEST", now=date(2100, 1, 1))
     return MarketData(
         ticker="TEST",
         frame=frame,

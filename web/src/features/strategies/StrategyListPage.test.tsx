@@ -1,3 +1,4 @@
+import dayjs from 'dayjs'
 import { describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -125,6 +126,56 @@ describe('StrategyListPage', () => {
       ticker: 'MSFT',
       seed: 'minimal',
     })
+  })
+
+  it('lets the bar interval be picked, and sends the one that was picked', async () => {
+    // Regression: the field went dead once because the server had not been restarted and its
+    // `/meta` predated `evolvable`. Nothing said so — the Select simply had no options. These
+    // two tests pin the field as pickable against the payload the engine actually serves.
+    const posted: unknown[] = []
+    server.use(
+      http.post('*/api/v1/strategies', async ({ request }) => {
+        posted.push(await request.json())
+        return problem({ status: 409, slug: 'conflict', title: 'Conflict', detail: 'enough' })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderWithProviders(<StrategyListPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New strategy' }))
+    const dialog = await screen.findByRole('dialog')
+
+    await user.type(within(dialog).getByLabelText('Name'), 'intraday_one')
+    await user.type(within(dialog).getByLabelText('Ticker'), 'SAP.DE')
+    await user.click(within(dialog).getByRole('combobox', { name: /Bar interval/ }))
+    await user.click(await screen.findByRole('option', { name: '30 minutes' }))
+
+    // Picking an intraday interval re-defaults the dates to a range that interval can serve.
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('End date')).toHaveValue(
+        dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
+      ),
+    )
+
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).toMatchObject({ ticker: 'SAP.DE', interval: '30m' })
+  })
+
+  it('offers only the evolvable intervals when composing from scratch', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<StrategyListPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Compose from scratch' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('combobox', { name: 'Bar interval' }))
+
+    // 15m and 30m reach back 55 days, which cannot be cut into the segments an evolution
+    // selects on. Offering them would mean a long form filled in for a run refused at launch.
+    const offered = (await screen.findAllByRole('option')).map((option) => option.textContent)
+    expect(offered).toEqual(['1 hour', 'Daily'])
   })
 
   it('refuses to submit a date range that runs backwards, and says why', async () => {

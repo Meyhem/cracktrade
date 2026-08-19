@@ -77,9 +77,20 @@ def _drawdown(equity: pd.Series) -> pd.Series:
 
 
 def _monthly(equity: pd.Series, holdings: pd.Series) -> MonthlyReturns:
-    monthly_equity = equity.resample("ME").last()
-    opening = equity.resample("ME").first()
-    returns = 100.0 * (monthly_equity - opening) / opening.replace(0.0, np.nan)
+    """Each calendar month's return, compounded from the per-bar returns.
+
+    Measuring a month as ``(last - first) / first`` of its own equity looks equivalent and is
+    not: it drops the move from the previous month's *close* into this month's first bar. That
+    move belongs to this month, so the cells did not compound to the window's total return, and
+    a month whose gain arrived in an opening gap was understated by exactly the gap.
+
+    Compounding per-bar growth instead is the same method :func:`yearly_returns` already uses, so
+    the two breakdowns agree with each other and with the headline.
+    """
+    # Non-finite growth means an equity curve that touched zero; the bar contributed no
+    # measurable return and 0.0 is what every other series here maps such a value to.
+    growth = 1.0 + equity.pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    returns = 100.0 * (growth.resample("ME").prod() - 1.0)
     # ``max`` rather than ``any``: pandas-stubs types the resampler's ``any`` as a groupby
     # attribute rather than a method. On a boolean series the two agree, and this one
     # type-checks.

@@ -18,7 +18,7 @@ from cracktrade.backtest.holding import holding_bounds
 from cracktrade.backtest.portfolio import require_interval, simulate
 from cracktrade.backtest.sessionclose import SessionRules, session_rules
 from cracktrade.backtest.stops import StopConfiguration, build_stops
-from cracktrade.errors import BacktestError
+from cracktrade.errors import BacktestError, CausalityViolationError
 from cracktrade.indicators import compute_indicators
 from cracktrade.log import get_logger
 from cracktrade.signals import EvaluatedSignal, prepare_signal
@@ -66,12 +66,19 @@ def run_simulation(
     data: MarketData,
     *,
     seed: int = 0,
+    scored_from: int = 0,
 ) -> Simulation:
     """Simulate ``strategy``'s entry and exit rules over ``data``.
+
+    ``scored_from`` is the first bar whose result will be reported. Every window that carries a
+    warm-up prefix passes its offset here, and no position may be opened before it. See
+    :func:`_suppress_prefix_entries` for why that is a correctness requirement rather than
+    tidiness.
 
     Raises:
         BacktestError: the bars are not the width the strategy declared, or an intraday
             minimum holding period could never be satisfied within a session.
+        CausalityViolationError: ``scored_from`` is negative.
     """
     require_interval(data)
     calendar = Calendar.of(data)
@@ -107,6 +114,8 @@ def run_simulation(
         # decision where every other signal-shaping decision already lives.
         entries = entries & ~pd.Series(sessions.suppressed_entries, index=data.index)
 
+    entries = _suppress_prefix_entries(entries, scored_from)
+
     portfolio = simulate(
         data=data,
         entries=entries,
@@ -131,6 +140,46 @@ def run_simulation(
         calendar=calendar,
         sessions=sessions,
     )
+
+
+def _suppress_prefix_entries(entries: pd.Series, scored_from: int) -> pd.Series:
+    """Forbid opening a position before the first bar a window reports on.
+
+    A scored window is preceded by a warm-up prefix whose bars exist only to give the indicators
+    history (spec section 9.4). Nothing stops a signal from firing inside that prefix, and until
+    this existed nothing did: the prefix is sized for the *worst-case* candidate in the search
+    space, so a candidate needing less warm-up than the widest one could legitimately enter
+    there.
+
+    The result was a report that disagreed with itself. A position opened in the prefix and
+    still held at the first scored bar contributes its P&L to every returns-based figure --
+    Sharpe, CAGR, total return, drawdown, exposure, all computed from ``offset`` onward -- while
+    being filtered out of the trade list and the trade count, which key off the entry bar. So a
+    window could report a return earned by a trade the report did not contain, and the
+    buy-and-hold benchmark, which starts exactly at ``offset``, was compared against a strategy
+    that had been allowed an earlier fill.
+
+    Neither direction is safe. A prefix entry that ran into a rally flatters the strategy and one
+    that ran into a drawdown punishes it, so this was noise injected into the one number the
+    whole optimization protocol exists to keep clean.
+
+    Entering *at* ``scored_from`` is allowed and fills at that bar's open, which is where the
+    benchmark buys too.
+
+    Raises:
+        CausalityViolationError: ``scored_from`` is negative.
+    """
+    if scored_from < 0:
+        msg = f"refusing to score from bar {scored_from}: a window cannot begin before its data"
+        raise CausalityViolationError(msg)
+    if not scored_from:
+        return entries
+
+    # Copied rather than written in place: this series belongs to the EvaluatedSignal that
+    # Simulation reports, and mutating it would rewrite the record of what the signal said.
+    suppressed = entries.copy()
+    suppressed.iloc[:scored_from] = False
+    return suppressed
 
 
 def _require_holding_fits_a_session(strategy: Strategy, calendar: Calendar) -> None:

@@ -279,7 +279,7 @@ def score_strategy(
     trades = 0
 
     for window in segments:
-        simulation = run_simulation(strategy, window.data)
+        simulation = run_simulation(strategy, window.data, scored_from=window.offset)
         metrics = extract_metrics(
             simulation.portfolio,
             risk_free_rate=strategy.execution.risk_free_rate,

@@ -1341,7 +1341,7 @@ imported** — dead code. The metrics actually shipped were computed inline in
 | `cagr_pct` | `annualized_return() × 100`, `0.0` when NaN | `evaluator.py:105` |
 | `max_drawdown_pct` | `max_drawdown() × 100`, `0.0` when NaN. Negative. | `evaluator.py:106` |
 | `sharpe_ratio` | `sharpe_ratio(risk_free=<per-period>)` | `metrics.py:21` |
-| `sortino_ratio` | `sortino_ratio(risk_free=<per-period>)` | `metrics.py:31` |
+| `sortino_ratio` | `sortino_ratio(required_return=<per-period>)` | `metrics.py:31` |
 
 **[NEW]** Added to the shipped set: `final_equity`, `exposure_pct` (fraction of bars in a position),
 `avg_holding_days`, `best_trade_pnl`, `worst_trade_pnl`. These cost nothing to compute and are what
@@ -1427,6 +1427,14 @@ Consequences that follow from that, and are tested:
 - `walk_forward` captures **per fold and does not splice**. Each fold re-optimizes, so the folds
   are different strategies, and a continuous line through them would depict a strategy nobody
   traded.
+
+**[FIX] Calendar-month returns compound the per-bar returns — decided 2026-08-19.** They were
+measured as `(last - first) / first` of each month's own equity, which silently drops the move from
+the previous month's *close* into the month's first bar. That move belongs to the month, so the
+cells did not compound to the window's total return, and a month whose gain arrived in an opening
+gap was understated by exactly the gap. Compounding per-bar growth is the method the per-calendar-
+year table (§8) already uses, so the two breakdowns now agree with each other and with the
+headline.
 
 **[NEW — decided 2026-08-19.]** A series index carries **the precision its bars have**: dates on
 a daily run, datetimes on an intraday one. Truncating to the date intraday puts every bar of a
@@ -1686,6 +1694,31 @@ optimizer had already fit to (§10 D2).
 Indicator warm-up for the test window is computed from train-window bars — that is past data
 relative to every test bar and is correct, not leakage. The split index is chosen so that the test
 window has at least `max(warmup) + 30` bars available including its warm-up prefix.
+
+**[FIX] No position may be opened in the warm-up prefix — decided 2026-08-19.** The prefix
+contributes indicator state and nothing else, and this is now enforced: `run_simulation` takes a
+`scored_from` bar and forces every entry signal before it to False. Every window carrying a prefix
+passes its offset — the test window here, the walk-forward folds (§12.1), the CSCV re-scoring
+(§12.4), the cost scenarios (§12.7), and the evolution segments and holdout (§13).
+
+Without it a window reported two mutually inconsistent things. The prefix is sized for the
+*worst-case* candidate in the search space (§9.1), so a candidate needing less warm-up could
+legitimately enter inside it; a position opened there and still held at the first scored bar then
+contributed its P&L to every returns-based figure — Sharpe, CAGR, total return, drawdown, exposure,
+all sliced from `offset` — while the trade list and `total_trades`, which key off the entry bar,
+excluded it. The window could therefore report a return earned by a trade the report did not
+contain, and the buy-and-hold benchmark, which starts exactly at `offset`, was measured against a
+strategy that had been allowed an earlier fill. The bias has no fixed sign: a prefix entry into a
+rally flatters the result and one into a drawdown punishes it, which made it noise in precisely the
+number this protocol exists to keep clean.
+
+Entering *at* `scored_from` is allowed and fills at that bar's open, which is where the benchmark
+buys. Reported out-of-sample figures moved slightly against pre-fix runs; that is the defect being
+removed, not a regression.
+
+The trade lists no longer filter by entry date afterwards. That filter was the symptom's dressing
+rather than its fix, and on intraday data it admitted any prefix trade sharing a session with the
+first scored bar, since it compared dates while the bars carry times.
 
 Both optimized and baseline numbers are reported on the test window, so the improvement figure
 compares like with like. Legacy compared an in-sample optimized number against an in-sample baseline
@@ -2119,6 +2152,18 @@ applies through the deflated Sharpe — a result that cannot be distinguished fr
 not a result — and it was previously computed and displayed without being allowed to affect
 the verdict. Note the direction: this makes credibility *harder* to obtain, never easier. No
 check is ever added in the other direction without saying so here.
+
+**[FIX] Both intervals are fractions of a per-bar return, and every interface scales them —
+decided 2026-08-19.** `block_bootstrap_interval` works on raw per-bar returns, so
+`mean_return_interval` is a fraction of about 0.0003 and `total_return_interval` is the
+compounded fraction over the whole out-of-sample stretch. `ValidationReport`'s intervals check
+formatted the mean without scaling and at one decimal, so every real interval rendered as
+`+0.0% … +0.0%` — in the CLI, in the stored `checks`, and in the web robustness panel, which
+renders `stat` verbatim. It also called the quantity "mean fold return", which is a third thing
+again. The check now reads `100 × value` at three decimals and names it the mean *per-bar*
+return, matching `EvolutionResult` and the CLI, which were both already correct. The pass/fail
+boolean was computed on the raw fraction throughout and never wrong; only the printed figure and
+its label were.
 
 ### 12.7 Cost sensitivity
 

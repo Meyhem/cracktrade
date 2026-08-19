@@ -359,7 +359,7 @@ def _evaluate(strategy: Strategy, test: TestWindow) -> tuple[Metrics, pd.Series]
     another, and on bare arrays that subtraction is positional -- correct only while both
     happen to be the same length, and silently wrong the day one is not.
     """
-    simulation = run_simulation(strategy, test.data)
+    simulation = run_simulation(strategy, test.data, scored_from=test.offset)
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
@@ -407,12 +407,18 @@ def _evaluate_train(strategy: Strategy, train: TrainWindow) -> Metrics:
 
 
 def _test_trades(strategy: Strategy, test: TestWindow) -> tuple[Trade, ...]:
-    """Trades taken in the test window, excluding any opened during the warm-up prefix."""
-    simulation = run_simulation(strategy, test.data)
-    index = test.data.index
-    cutoff = index[test.offset].date()
-    return tuple(
-        trade for trade in extract_trades(simulation.portfolio, index) if trade.entry_date >= cutoff
+    """Trades taken in the test window.
+
+    No filtering is needed: ``scored_from`` forbids opening a position in the warm-up prefix, so
+    every trade the portfolio holds is one the reported metrics also counted. This used to drop
+    prefix trades by comparing entry *dates* against a cutoff, which both hid the disagreement
+    described in :func:`~cracktrade.backtest.runner._suppress_prefix_entries` rather than fixing
+    it and, on intraday data, admitted any prefix trade that happened to share a session with the
+    first scored bar.
+    """
+    simulation = run_simulation(strategy, test.data, scored_from=test.offset)
+    return extract_trades(
+        simulation.portfolio, test.data.index, intraday=test.data.interval.is_intraday
     )
 
 
@@ -472,7 +478,7 @@ def _capture_test_series(strategy: Strategy, test: TestWindow, hold: vbt.Portfol
     the train window too would draw a curve whose early half was fitted, presented beside
     numbers that were not.
     """
-    simulation = run_simulation(strategy, test.data)
+    simulation = run_simulation(strategy, test.data, scored_from=test.offset)
     return capture(
         portfolio=simulation.portfolio,
         benchmark=hold,

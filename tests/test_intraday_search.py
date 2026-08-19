@@ -421,7 +421,10 @@ def test_the_test_window_is_reported_on_the_run_calendar_not_a_daily_one() -> No
 
     reported, _ = _evaluate(base, division.test)
 
-    simulation = run_simulation(base, division.test.data)
+    # ``scored_from`` because the reference has to be the simulation ``_evaluate`` actually
+    # runs: a window that let its warm-up prefix open a position would differ from the reported
+    # figure for a reason that has nothing to do with the calendar this test is about.
+    simulation = run_simulation(base, division.test.data, scored_from=division.test.offset)
     honest = extract_metrics(
         simulation.portfolio,
         risk_free_rate=base.execution.risk_free_rate,
@@ -461,3 +464,29 @@ def test_trial_sharpes_deannualise_back_to_the_per_bar_footing_exactly() -> None
     annualised = per_bar * np.sqrt(calendar.periods_per_year)
 
     assert _per_period(annualised, calendar) == pytest.approx(per_bar)
+
+
+def test_an_optimized_intraday_trade_keeps_its_time_of_day() -> None:
+    """Spec 8. A date-stamped intraday trade is indistinguishable from the next one that session.
+
+    ``run_backtest`` passed the intraday flag through; the optimizer's trade list did not, so a
+    trade taken at 14:00 was reported as a bare date. Two trades in one session then read as the
+    same moment, and the UI rendered a fabricated 00:00 for both.
+    """
+    result = optimize(strategy(), hourly(), epochs=2, workers=1, seed=0)
+
+    assert result.trades, "the fixture must produce trades for this to assert anything"
+    assert all(isinstance(trade.entry_date, datetime) for trade in result.trades)
+    assert any(
+        trade.entry_date.time() != datetime.min.time()
+        for trade in result.trades
+        if isinstance(trade.entry_date, datetime)
+    )
+
+
+def test_intraday_trades_within_one_session_stay_distinguishable() -> None:
+    """The property the timestamp exists for: two trades on one date are two moments."""
+    result = optimize(strategy(), hourly(), epochs=2, workers=1, seed=0)
+
+    stamps = [trade.entry_date for trade in result.trades]
+    assert len(set(stamps)) == len(stamps)

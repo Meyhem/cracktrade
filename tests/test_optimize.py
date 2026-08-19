@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from cracktrade.backtest import run_simulation
 from cracktrade.config import Strategy, parse_strategy
 from cracktrade.data import MarketData
 from cracktrade.domain import Metrics, OptimizationResult
@@ -756,3 +757,45 @@ def test_theworst_case_warmup_falls_back_when_the_widest_combination_is_invalid(
 
     strategy = strategy_with()
     assert worst_case_warmup(strategy, discover_parameters(strategy)) >= 20
+
+
+# ------------------------------------------- 9.4: the scored window and its warm-up prefix
+
+
+def test_the_reported_trades_account_for_the_reported_metrics() -> None:
+    """Spec 9.4. The trade list and the returns-based figures must describe one set of trades.
+
+    They did not. The prefix is sized for the widest candidate in the search space, so a
+    candidate needing less warm-up could open a position inside it; that position's P&L reached
+    every returns-based figure, which are sliced from ``offset``, while the trade list and
+    ``total_trades`` dropped it for entering too early. A window could report a return earned by
+    a trade the report did not contain.
+    """
+    result = optimized()
+
+    closed = [trade for trade in result.trades if not trade.is_open]
+    assert len(closed) == result.test_metrics.total_trades
+
+
+def test_the_test_window_holds_no_position_through_its_warmup_prefix() -> None:
+    """The prefix contributes indicator state and nothing else, including no exposure."""
+    data = trending_market(760)
+    strategy = strategy_with()
+    division = split(data, train_fraction=0.8, warmup=30)
+
+    simulation = run_simulation(strategy, division.test.data, scored_from=division.test.offset)
+
+    held = simulation.portfolio.position_mask().to_numpy().reshape(-1)
+    assert not bool(held[: division.test.offset].any())
+
+
+def test_every_reported_trade_starts_inside_the_scored_region() -> None:
+    """No entry-date filter is applied downstream, so the simulation itself has to guarantee it."""
+    data = trending_market(760)
+    division = split(data, train_fraction=0.8, warmup=30)
+    first_scored = division.test.data.index[division.test.offset].date()
+
+    result = optimized(data=data)
+
+    assert result.trades, "the fixture must produce trades for this to assert anything"
+    assert all(trade.entry_date >= first_scored for trade in result.trades)

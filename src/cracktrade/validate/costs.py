@@ -48,7 +48,7 @@ def cost_sensitivity(
         config["execution"]["slippage_pct"] = strategy.execution.slippage_pct * multiple
         candidate = build_strategy(config)
 
-        simulation = run_simulation(candidate, test.data)
+        simulation = run_simulation(candidate, test.data, scored_from=test.offset)
         scenarios.append(
             CostScenario(
                 multiple=multiple,

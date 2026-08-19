@@ -704,17 +704,22 @@ class ValidationReport:
                 label="Confidence intervals",
                 passed=self.mean_return_interval.excludes_zero,
                 plain=(
-                    "Bootstrap intervals for the fold returns. An interval that straddles zero "
-                    "is not distinguishable from luck."
+                    "Bootstrap interval for the mean per-bar out-of-sample return. One that "
+                    "straddles zero is not distinguishable from luck."
                 ),
+                # A fraction, not a percentage: block_bootstrap_interval works on raw per-bar
+                # returns. Formatted as one -- ".1f%" without the scaling -- every real interval
+                # rounded to "+0.0% ... +0.0%", because a mean bar return is about 0.0003. The
+                # figure was also labelled "fold return", which is a different quantity again:
+                # this is one bar's mean, and the compounded stretch is total_return_interval.
                 stat=(
-                    f"mean interval {self.mean_return_interval.low:+.1f}% … "
-                    f"{self.mean_return_interval.high:+.1f}%"
+                    f"mean interval {100 * self.mean_return_interval.low:+.3f}% … "
+                    f"{100 * self.mean_return_interval.high:+.3f}%"
                 ),
                 detail=(
-                    f"the 95% interval on mean fold return, "
-                    f"{self.mean_return_interval.low:+.1f}% to "
-                    f"{self.mean_return_interval.high:+.1f}%, straddles zero"
+                    f"the 95% interval on mean per-bar out-of-sample return, "
+                    f"{100 * self.mean_return_interval.low:+.3f}% to "
+                    f"{100 * self.mean_return_interval.high:+.3f}%, straddles zero"
                 ),
             ),
             Check(

@@ -268,3 +268,40 @@ def test_series_survive_serialisation(market: MarketData) -> None:
 
 def test_an_uncaptured_result_serialises_to_null(market: MarketData) -> None:
     assert to_dict(run_backtest(strategy_with(), market))["series"] is None
+
+
+def test_monthly_returns_compound_to_the_windows_total_return(market: MarketData) -> None:
+    """Spec 8.1. Every bar's return belongs to exactly one month, so the cells must reconcile.
+
+    They did not. A month was measured as ``(last - first) / first`` of its own equity, which
+    drops the move from the previous month's *close* into its first bar -- so the cells fell
+    short of the headline by the sum of those gaps, and a month whose gain arrived in an
+    opening gap was understated by exactly that gain.
+    """
+    result = run_backtest(strategy_with(), market, capture_series=True)
+    assert result.series is not None
+
+    compounded = 1.0
+    for value in result.series.monthly_returns.values:
+        compounded *= 1.0 + value / 100.0
+
+    assert 100.0 * (compounded - 1.0) == pytest.approx(result.metrics.total_return_pct, abs=1e-6)
+
+
+def test_a_months_opening_move_is_not_discarded(market: MarketData) -> None:
+    """The bar that opens a month is measured against the previous month's close, not itself."""
+    result = run_backtest(strategy_with(), market, capture_series=True)
+    assert result.series is not None
+    monthly = result.series.monthly_returns
+
+    equity = pd.Series(
+        result.series.equity.values, index=pd.DatetimeIndex(result.series.equity.dates)
+    )
+    first_to_last = equity.resample("ME").last() / equity.resample("ME").first() - 1.0
+
+    # The two agree only where a month opened exactly where the previous one closed. Over a
+    # real equity curve that is not every month, and the difference is what used to be lost.
+    assert any(
+        abs(100.0 * float(naive) - reported) > 1e-9
+        for naive, reported in zip(first_to_last.to_numpy(), monthly.values, strict=True)
+    )

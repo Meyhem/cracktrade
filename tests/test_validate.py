@@ -553,3 +553,28 @@ def test_checks_survive_serialisation(report: ValidationReport) -> None:
     checks = payload["checks"]
     assert len(checks) == len(report.checks)
     assert set(checks[0]) == {"name", "label", "passed", "plain", "stat", "detail"}
+
+
+def test_the_intervals_check_prints_the_figure_it_measured(report: ValidationReport) -> None:
+    """Spec 12.6. The interval is a fraction of a per-bar return, and must be scaled to print.
+
+    Formatted raw at one decimal, as it was, every real interval rendered as ``+0.0% … +0.0%``
+    -- a mean bar return is about 0.0003 -- in the CLI, in the stored checks, and in the web
+    robustness panel, which renders ``stat`` verbatim. It was also labelled "mean fold return",
+    which is a third quantity again.
+    """
+    intervals = next(check for check in report.checks if check.name == "intervals")
+
+    assert f"{100 * report.mean_return_interval.low:+.3f}%" in intervals.stat
+    assert f"{100 * report.mean_return_interval.high:+.3f}%" in intervals.stat
+    assert "per-bar" in intervals.plain
+    assert "fold return" not in intervals.detail
+
+
+def test_the_intervals_check_does_not_collapse_to_zero(report: ValidationReport) -> None:
+    """The regression itself: a non-degenerate interval must not print as two zeroes."""
+    if report.mean_return_interval.low == report.mean_return_interval.high:
+        pytest.skip("a degenerate interval legitimately prints as zero")
+
+    intervals = next(check for check in report.checks if check.name == "intervals")
+    assert intervals.stat.count("+0.000%") < 2

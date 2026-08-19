@@ -27,7 +27,7 @@ from cracktrade.backtest import (
 from cracktrade.backtest.portfolio import _resolve_size
 from cracktrade.config import Strategy, parse_strategy
 from cracktrade.data import MarketData
-from cracktrade.errors import BacktestError
+from cracktrade.errors import BacktestError, CausalityViolationError
 from cracktrade.indicators import registry
 from cracktrade.indicators.compute import registry_installed
 from cracktrade.signals.alignment import causal_shift
@@ -539,3 +539,53 @@ def test_holding_rules_key_off_realised_positions_not_signals() -> None:
     closed = closed[closed["status"] == 1]
     held = set((closed["exit_idx"] - closed["entry_idx"]).tolist())
     assert held == {3}
+
+
+# ------------------------------------------------- conformance 5: the scored window's prefix
+
+
+def test_no_position_is_opened_before_the_scored_window_begins() -> None:
+    """Spec 9.4. The warm-up prefix contributes indicator state and nothing else.
+
+    The entry condition here holds on nearly every bar, so without suppression the very first
+    tradeable bar opens a position inside the prefix and carries it into the scored region.
+    """
+    data = oscillating_market(200)
+    strategy = strategy_with(entry="close > 80", exit_rule={"max_holding_days": 5})
+
+    simulation = run_simulation(strategy, data, scored_from=40)
+
+    held = simulation.portfolio.position_mask().to_numpy().reshape(-1)
+    assert not bool(held[:40].any())
+    assert bool(held[40:].any()), "the scored region must still be tradeable"
+    assert int(trades(simulation)["entry_idx"].min()) >= 40
+
+
+def test_the_scored_window_may_enter_on_its_very_first_bar() -> None:
+    """The bound is exclusive: bar ``scored_from`` is where the benchmark buys too."""
+    data = oscillating_market(200)
+    strategy = strategy_with(entry="close > 80", exit_rule={"max_holding_days": 5})
+
+    simulation = run_simulation(strategy, data, scored_from=40)
+
+    assert bool(simulation.entries.to_numpy()[40:].any())
+
+
+def test_suppressing_the_prefix_leaves_the_scored_signals_untouched() -> None:
+    """Only the prefix is rewritten; every later decision is the one the signal produced."""
+    data = oscillating_market(200)
+    strategy = strategy_with(entry="close > 100")
+
+    plain = run_simulation(strategy, data)
+    scored = run_simulation(strategy, data, scored_from=40)
+
+    assert plain.entries.to_numpy()[40:].tolist() == scored.entries.to_numpy()[40:].tolist()
+    assert not bool(scored.entries.to_numpy()[:40].any())
+
+
+def test_a_negative_scored_from_is_refused() -> None:
+    """A window cannot begin before its own data."""
+    data = oscillating_market(50)
+
+    with pytest.raises(CausalityViolationError, match="cannot begin"):
+        run_simulation(strategy_with(), data, scored_from=-1)

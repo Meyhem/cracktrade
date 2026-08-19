@@ -271,7 +271,7 @@ def _evaluate(strategy: Strategy, holdout: TestWindow) -> tuple[Metrics, pd.Seri
     The returns keep their index: the information ratio subtracts one return series from
     another, and on bare arrays that subtraction is positional rather than by date.
     """
-    simulation = run_simulation(strategy, holdout.data)
+    simulation = run_simulation(strategy, holdout.data, scored_from=holdout.offset)
     metrics = extract_metrics(
         simulation.portfolio,
         risk_free_rate=strategy.execution.risk_free_rate,
@@ -287,7 +287,7 @@ def _segment_results(
     """The winner measured on each segment it was selected over. In-sample by construction."""
     results: list[SegmentResult] = []
     for index, window in enumerate(segments):
-        simulation = run_simulation(strategy, window.data)
+        simulation = run_simulation(strategy, window.data, scored_from=window.offset)
         index_dates = window.data.index
         results.append(
             SegmentResult(
@@ -307,12 +307,14 @@ def _segment_results(
 
 
 def _holdout_trades(strategy: Strategy, holdout: TestWindow) -> tuple[Trade, ...]:
-    """Trades taken on the holdout, excluding any opened during its warm-up prefix."""
-    simulation = run_simulation(strategy, holdout.data)
-    index = holdout.data.index
-    cutoff = index[holdout.offset].date()
-    return tuple(
-        trade for trade in extract_trades(simulation.portfolio, index) if trade.entry_date >= cutoff
+    """Trades taken on the holdout.
+
+    No filtering is needed, and the intraday stamp is passed through: see
+    :func:`cracktrade.optimize.runner._test_trades`, which this mirrors.
+    """
+    simulation = run_simulation(strategy, holdout.data, scored_from=holdout.offset)
+    return extract_trades(
+        simulation.portfolio, holdout.data.index, intraday=holdout.data.interval.is_intraday
     )
 
 
@@ -387,7 +389,7 @@ def _capture_holdout_series(
     Capturing the evolution region too would draw a curve whose whole first stretch was selected
     on, presented beside numbers that were not.
     """
-    simulation = run_simulation(strategy, holdout.data)
+    simulation = run_simulation(strategy, holdout.data, scored_from=holdout.offset)
     return capture(
         portfolio=simulation.portfolio,
         benchmark=hold,

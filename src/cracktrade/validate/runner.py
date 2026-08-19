@@ -244,7 +244,9 @@ def _fold_performance_matrix(
 
     for column, outcome in enumerate(outcomes):
         for row, division in enumerate(splits):
-            simulation = run_simulation(outcome.optimized, division.test.data)
+            simulation = run_simulation(
+                outcome.optimized, division.test.data, scored_from=division.test.offset
+            )
             metrics = extract_metrics(
                 simulation.portfolio,
                 risk_free_rate=outcome.optimized.execution.risk_free_rate,

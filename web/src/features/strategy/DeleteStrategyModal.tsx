@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Alert, Button, Group, List, Modal, Stack, Text, TextInput } from '@mantine/core'
+import { useEffect } from 'react'
+import { Alert, Button, Group, Modal, Stack, Text } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useNavigate } from 'react-router'
@@ -11,18 +11,15 @@ import { useStrategyContext } from './context'
  * Deleting a strategy, permanently.
  *
  * The only destructive action in the application, and the only exception to the append-only
- * guarantee everything else is built on (spec §14.8). Everywhere else, the wording exists to
- * reassure — a restore deletes nothing, a fork leaves the parent alone. Here it exists to do
- * the opposite, and the dialog is deliberately the least convenient one in the app:
+ * guarantee everything else is built on (spec §14.8). So it does ask, and it says what goes:
+ * the version and run counts are the number most likely to change a mind, since a strategy
+ * accumulates runs quietly and the user may not have that figure to hand. It says
+ * "permanently" rather than "cannot be undone", which reads as boilerplate.
  *
- * - it lists what will be destroyed, counted, **before** anything is asked of the user. "3
- *   versions and 8 runs" is information a user may not have — a strategy accumulates runs
- *   quietly — and it is the number most likely to change their mind;
- * - it asks for the name to be typed. A confirm button is muscle memory by the second time,
- *   and this is an action there is no second time for. Typing the name also means the dialog
- *   cannot be dismissed correctly by someone who opened it on the wrong strategy, which is the
- *   actual failure mode: not "meant not to delete" but "meant to delete the other one";
- * - it says the word "permanently" rather than "cannot be undone", which reads as boilerplate.
+ * It is a plain confirm otherwise. An earlier version made the user type the strategy name;
+ * that was dropped as friction that bought nothing the counts and the named title do not
+ * already buy — the dialog is opened from inside the strategy it would delete, and names it
+ * in the title, so "opened on the wrong strategy" is already visible without a typing test.
  *
  * The two server-side refusals (a run still in flight, a fork or promotion descending from it)
  * are not pre-checked here. The client cannot know either without racing — a run can be
@@ -33,15 +30,11 @@ export function DeleteStrategyModal({ opened, onClose }: { opened: boolean; onCl
   const strategy = useStrategyContext()
   const navigate = useNavigate()
   const remove = useDeleteStrategy()
-  const [typed, setTyped] = useState('')
 
   useEffect(() => {
-    if (opened) {
-      setTyped('')
-      remove.reset()
-    }
-    // `remove` is a stable mutation object; re-running on its identity would clear the field
-    // mid-typing.
+    if (opened) remove.reset()
+    // `remove` is a stable mutation object; re-running on its identity would clear a refusal
+    // the user is still reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opened])
 
@@ -54,7 +47,6 @@ export function DeleteStrategyModal({ opened, onClose }: { opened: boolean; onCl
     (strategy.counts.backtest ?? 0) +
     (strategy.counts.optimize ?? 0) +
     (strategy.counts.walk_forward ?? 0)
-  const confirmed = typed.trim() === strategy.name
 
   const submit = () => {
     remove.mutate(strategy.id, {
@@ -76,45 +68,25 @@ export function DeleteStrategyModal({ opened, onClose }: { opened: boolean; onCl
         {remove.error && <ProblemAlert error={remove.error} />}
 
         <Alert color="red" icon={<IconAlertTriangle size={18} />} variant="light">
-          <Stack gap={4}>
-            <Text size="sm">
-              This deletes <strong>{strategy.name}</strong> permanently, along with everything
-              recorded about it:
-            </Text>
-            <List size="sm" withPadding>
-              <List.Item>
-                {plural(strategy.counts.versions ?? 0, 'configuration version')}, including every
-                earlier one
-              </List.Item>
-              <List.Item>
-                {plural(runs, 'run')} and every number they produced — backtests, optimizations and
-                walk-forwards alike
-              </List.Item>
-              <List.Item>the charts captured for those runs</List.Item>
-            </List>
-          </Stack>
+          <Text size="sm">
+            This deletes <strong>{strategy.name}</strong> permanently, with{' '}
+            {plural(strategy.counts.versions ?? 0, 'configuration version')}, {plural(runs, 'run')}{' '}
+            and every number and chart they produced.
+          </Text>
         </Alert>
 
         <Text c="dimmed" size="sm">
-          Nothing else in the app is affected: forks of this strategy are independent and are not
-          touched. If one exists, this deletion will be refused rather than orphaning it — delete
-          the fork first, or keep it.
+          Forks of this strategy are independent and are not touched. If one exists, this deletion
+          will be refused rather than orphaning it — delete the fork first, or keep it.
         </Text>
 
-        <TextInput
-          data-autofocus
-          description="Typed out, so this cannot be done to the wrong strategy by reflex."
-          label={`Type ${strategy.name} to confirm`}
-          onChange={(event) => setTyped(event.currentTarget.value)}
-          placeholder={strategy.name}
-          value={typed}
-        />
-
         <Group justify="flex-end">
-          <Button onClick={onClose} variant="default">
+          {/* Focus rests on Cancel, not on the destructive button: a reflexive Enter on the
+              dialog should do nothing. */}
+          <Button data-autofocus onClick={onClose} variant="default">
             Cancel
           </Button>
-          <Button color="red" disabled={!confirmed} loading={remove.isPending} onClick={submit}>
+          <Button color="red" loading={remove.isPending} onClick={submit}>
             Delete permanently
           </Button>
         </Group>

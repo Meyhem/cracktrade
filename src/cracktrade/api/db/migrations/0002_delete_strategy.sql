@@ -20,7 +20,8 @@
 --
 -- What this does NOT do is make deletion safe to reach for. The refusals live in the service
 -- layer (a strategy with descendants, or with a run still in flight, is not deletable) and the
--- interface asks the user to type the name. Those are in spec section 14.8.
+-- interface confirms first, naming the strategy and counting what goes. Those are in spec
+-- section 14.8.
 
 
 -- The strategy this transaction has declared it is purging, or NULL for every ordinary

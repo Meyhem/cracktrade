@@ -12,10 +12,9 @@ import type { StrategyDetail } from '../../api/types'
 /**
  * The one destructive dialog.
  *
- * These are almost entirely about what it refuses to do. Every other screen in the app is
- * tested for producing the right output; this one is tested for being hard to fire by
- * accident, because the failure it guards against is not "the delete did not work" but "the
- * delete worked on the wrong strategy".
+ * A plain confirm, so what is tested is what the user is told before they press it — the
+ * counts and the word "permanently" — and what happens to the two server refusals, which are
+ * the only outcomes the user can act on.
  */
 
 const DELETE_URL = '*/api/v1/strategies/:id'
@@ -35,12 +34,7 @@ function confirmButton() {
   return screen.getByRole('button', { name: 'Delete permanently' })
 }
 
-describe('before anything is typed', () => {
-  it('will not delete', () => {
-    open()
-    expect(confirmButton()).toBeDisabled()
-  })
-
+describe('what it says before the click', () => {
   it('counts what will be destroyed, so the decision is made against the number', () => {
     // The fixture carries 3 versions and 1 + 2 + 0 runs.
     open()
@@ -56,31 +50,10 @@ describe('before anything is typed', () => {
     expect(screen.getAllByText(/permanently/)).not.toHaveLength(0)
     expect(screen.queryByText(/cannot be undone/i)).not.toBeInTheDocument()
   })
-})
 
-describe('the typed confirmation', () => {
-  it('refuses a near miss rather than being helpful about it', async () => {
-    const user = userEvent.setup()
+  it('leaves focus on Cancel, so a reflexive Enter deletes nothing', async () => {
     open()
-
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullbac')
-    expect(confirmButton()).toBeDisabled()
-  })
-
-  it('enables only on the exact name', async () => {
-    const user = userEvent.setup()
-    open()
-
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullback')
-    expect(confirmButton()).toBeEnabled()
-  })
-
-  it('is not satisfied by another strategy name', async () => {
-    const user = userEvent.setup()
-    open({ name: 'momentum_v2' })
-
-    await user.type(screen.getByLabelText(/Type momentum_v2 to confirm/), 'rsi_pullback')
-    expect(confirmButton()).toBeDisabled()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
   })
 })
 
@@ -99,7 +72,6 @@ describe('when the server refuses', () => {
     )
     const { onClose } = open()
 
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullback')
     await user.click(confirmButton())
 
     expect(await screen.findByText(/momentum_v3 descends from it/)).toBeInTheDocument()
@@ -121,7 +93,6 @@ describe('when the server refuses', () => {
     )
     open()
 
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullback')
     await user.click(confirmButton())
 
     expect(await screen.findByText(/still queued or running/)).toBeInTheDocument()
@@ -139,7 +110,6 @@ describe('when it succeeds', () => {
     )
     const { onClose } = open()
 
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullback')
     await user.click(confirmButton())
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -157,7 +127,6 @@ describe('when it succeeds', () => {
     const { queryClient, strategy } = open()
     queryClient.setQueryData(['strategies', 'detail', strategy.id], strategy)
 
-    await user.type(screen.getByLabelText(/Type rsi_pullback to confirm/), 'rsi_pullback')
     await user.click(confirmButton())
 
     await waitFor(() =>

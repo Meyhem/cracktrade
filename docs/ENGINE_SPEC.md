@@ -3379,3 +3379,233 @@ The generated file goes through the same four enforcement layers as any other. I
 signal grammar rejects `Call`, `Attribute` and `Subscript`, so a look-ahead expression is not
 something a model could emit and have accepted — it is a string that is not a strategy. The brief
 says so explicitly, but the guarantee does not rest on the brief saying it.
+
+---
+
+## 19. Continuous prospecting
+
+**[NEW — decided 2026-08-20.]** A long-running search that sweeps many tickers, keeps the best
+candidates it finds, and runs until the user stops it. §16 evolves one strategy for one ticker on
+demand; this is that search placed on a loop and given a memory.
+
+The feature is easy to describe and easy to get catastrophically wrong, because a leaderboard is a
+**maximum** and §12 exists to punish maxima. Everything below follows from two measurements taken
+before any of it was designed.
+
+### 19.1 The two measurements
+
+**Compute does not buy better strategies.** Measured 2026-08-20: the same ticker, the same seed,
+the same settings, with the search budget scaled forty-fold.
+
+| Distinct configurations | 192 | 786 | 2,935 | 7,783 |
+| --- | --- | --- | --- | --- |
+| AMD, in-sample median | +12.9% | +11.2% | +8.1% | +10.8% |
+| AMD, holdout | +8.7% | +14.1% | +24.0% | +10.7% |
+| MSTR, in-sample median | +8.4% | +0.6% | +22.2% | +20.5% |
+| MSTR, holdout | −9.3% | +1.1% | +0.3% | −6.4% |
+
+In neither ticker is the largest budget the best result; MSTR's largest search is negative and
+worse than its smallest. This is not a trend with noise on it, it is noise. The binding constraint
+is **data, not compute** — the history is fixed, and past a few hundred candidates the search stops
+discovering and starts fitting. A prospector that answers "find me something better" with "search
+harder" is answering with a louder version of the wrong thing.
+
+This compounds with §9.3's arithmetic rather than merely sitting beside it: the deflation threshold
+is the expected maximum over the trial count, so a bigger search raises its own bar while, per the
+above, not raising its result. Both effects point the same way and the section is designed around
+them: **breadth, not depth.**
+
+**A strategy that looks excellent on its own ticker usually is not a strategy.** Measured
+2026-08-20: a genome evolved on AMD at 1h, then rendered and run *unchanged* across the tickers
+most correlated with it.
+
+| Run unchanged on | Return | Sharpe |
+| --- | --- | --- |
+| AMD — the ticker it was evolved on | +89.0% | 1.30 |
+| INTC | +10.9% | 0.18 |
+| NVDA | +1.0% | −0.08 |
+| AVGO | −1.0% | −0.15 |
+| SMH — the semiconductor ETF holding AMD | −12.9% | −0.64 |
+| MU | −34.6% | −0.95 |
+
+Median sibling Sharpe −0.49, negative on six of seven, and losing money on an ETF that contains the
+ticker it was fitted to. The same exercise on MSTR was negative on all five of its relatives. A
+Sharpe of 1.30 that does not survive the move to the next semiconductor was never measuring
+semiconductors.
+
+### 19.2 A candidate is not a result
+
+**Prospecting produces candidates. It never produces a verdict, and it never publishes a deflated
+Sharpe.**
+
+This is the section's central rule and it resolves the family-wise problem by declining to create
+it. A prospector that ran for a week would have to deflate by its own cumulative trial count —
+roughly nine million configurations, which §12.3's estimator turns into a required annualised
+Sharpe near 4.9. That figure is *correct*, and a leaderboard of results labelled "not credible,
+and here is a larger number saying so" helps nobody.
+
+The honest response is not to weaken the correction but to stop claiming the thing that needs it.
+`is_credible` is a property of a **strategy that has had its own walk-forward** (§17.2), and
+nothing in this section changes that. A prospector's output is a queue of things worth looking at.
+
+**Rejected: family-wise deflation on the leaderboard.** Statistically unimpeachable and practically
+inert, for the reason above. Rejected because a number nobody can act on is not a safeguard, it is
+a decoration on a screen that still shows a ranking.
+
+**Rejected: ranking on the holdout figure.** It is the noisiest number the search produces and the
+one the search has already selected on. See also §19.5's Goodhart rule.
+
+### 19.3 The ladder
+
+A candidate earns trust in four stages, each cheaper than the one below it, each discarding most of
+what reaches it.
+
+| Stage | When | Cost | Decides |
+| --- | --- | --- | --- |
+| Prospect | continuous | one small search | nothing — records a candidate |
+| Transfer | seconds later | one backtest per sibling | rejection |
+| Forward | nightly, as bars accrue | one backtest per candidate | ranking |
+| Walk-forward | once, on promotion | full §12 protocol | the verdict |
+
+The ordering is deliberate and is the whole design. Transfer is the only rung that is both
+immediate and decisive, so it does the bulk of the rejecting and the expensive rungs never see the
+candidates it kills. Without it, forward validation's weeks-long latency would make the leaderboard
+useless on day one; with it, the leaderboard is meaningful immediately and strengthens as calendar
+time accrues.
+
+Nothing skips the last rung. §17.2's asymmetry is unchanged: a promoted strategy's own walk-forward
+is the only thing that clears its uncredible warning, and neither a transfer result nor a forward
+result substitutes for it.
+
+### 19.4 Sibling transfer
+
+The candidate's rendered configuration is run, **with every parameter unchanged**, against each
+ticker in its family, over the same date range and interval. What is recorded is the distribution
+of sibling Sharpes, and the statistic that matters is the **median** — for §16.5's reason, that one
+spectacular member should not carry a candidate.
+
+**Families are hand-written, and are part of the configuration rather than derived.** A map from
+ticker to sibling set (semiconductors, crypto proxies, miners, broad indices) is small, auditable,
+and states an economic claim a reader can disagree with. **Rejected: deriving families from return
+correlation.** It is more elegant, and it fits an object — a correlation window, a threshold, a
+linkage rule — inside a system whose entire purpose is to not fit objects. A family that moved with
+the estimation window would silently change what transfer meant between runs.
+
+**Transfer rejects; it does not promote.** It is demonstrated above to be decisive at killing
+overfits and is unproven at identifying real edges, and those are different jobs. The reason is
+stated rather than left implicit: correlated names over one period share market-wide moves, so a
+candidate can transfer by riding beta rather than by carrying an edge. A transfer *failure* is
+strong evidence; a transfer *pass* is the absence of one particular kind of evidence against.
+
+**The control members are not optional.** Each family carries at least one unrelated instrument
+(a broad index, a commodity). A candidate that "transfers" to everything including instruments
+sharing no economic mechanism with it is detecting the market, not the ticker, and the control is
+what makes that visible.
+
+### 19.5 The leaderboard
+
+**Ranked on forward performance where it exists, on median sibling Sharpe before that.** The sort
+key is recorded on every row alongside the value, because a leaderboard whose meaning changes as it
+fills is one nobody can read.
+
+**Never a scalar.** A row carries its transfer distribution, its forward figure and its bar count,
+its backtest figures labelled as selection criteria, and the count of candidates searched before it
+was found. Sorting collapses these for display only.
+
+**The Goodhart rule.** Whatever the leaderboard ranks on, the loop optimises for — including in
+ways not intended. The concrete case, measured 2026-08-20: buy-and-hold over the preceding year
+returned −99.8% on SOXS, −73.2% on UVXY, −64.0% on TZA and −52.3% on SQQQ. §8's benchmark check
+asks a strategy to beat its instrument's buy-and-hold, so on SOXS the check is cleared by holding
+cash. **A leaderboard ranked on checks-passed will discover this and fill with certified nonsense.**
+
+Two consequences, both normative:
+
+- **Ranking on "checks passed" is forbidden.** The checks are a scorecard for a reader, not an
+  objective for a search.
+- **Structurally decaying instruments are benchmarked against cash**, not only against themselves,
+  and are ranked in their own bucket (§19.6). A leaderboard that ranked them against long
+  instruments on one scale would be sorting by instrument choice.
+
+### 19.6 The instrument universe
+
+Prospecting is configured with an explicit ticker list. The default list is screened on the two
+properties that decide whether this engine can work on an instrument at all, measured on daily bars
+over the trailing year: **median intraday range** as a percentage of close, and **median dollar
+volume**. The ratio of range to the configured round-trip cost is the figure of merit — an
+instrument whose typical day does not move several multiples of the friction is one where §9.3's
+trade floor and §12.7's cost sensitivity cannot both be satisfied.
+
+Measured 2026-08-20 across 43 candidates, with a 0.08% round trip: SOXL 91.7, MSTR 64.4, INTC 63.7,
+MU 59.5, AMD 52.7 — against **SPY 10.9 and QQQ 15.6**, the lowest in the screen. The instruments
+most associated with day trading are the ones where this engine has the least room, because a
+0.08% round trip consumes a tenth of SPY's entire median day. This is recorded because it is
+counter-intuitive and was arrived at by measurement.
+
+**Inverse and volatility ETFs occupy a separate bucket**, never the main ranking, for §19.5's
+reason. They are retained rather than excluded because §7.5 pins `direction='longonly'` and short
+signals are not expressible, so buying an inverse instrument is the only bearish position the
+engine can hold. That makes them genuinely useful and their benchmark check meaningless at the same
+time, and the bucket is how both facts are kept true.
+
+### 19.7 Lifecycle
+
+**The session is the long-lived record; each search is an ordinary run.** A prospecting session
+holds the ticker list, the schedule, the cursor and the candidate ledger. Every individual search
+it launches is a normal `evolve` run that starts, finishes and reaches a terminal state exactly as
+§14.5 describes.
+
+**Rejected: one immortal run row.** §14.2 freezes a run row on terminal status and §14.5 fails a
+run whose lease expires, so an indefinite run would have to heartbeat forever and be exempted from
+the lease sweep — a special case in the one mechanism that guarantees a dead worker is reported
+honestly. It would also make progress meaningless: a run that never ends has no percentage.
+
+Consequences of the session shape, all of which fall out rather than needing new machinery:
+
+- **Resume is the cursor.** A restarted session continues from the next ticker in rotation. Nothing
+  is recomputed and nothing is lost, because completed searches are already durable runs.
+- **Cancellation is per-layer.** Stopping a session stops the scheduling of new searches; the search
+  in flight ends through §11.2's existing cooperative path and records `cancelled`.
+- **A dead worker fails one search, not the session.** The session's next tick launches the next.
+
+**Rotation is round-robin.** **Rejected: bandit or greedy allocation**, giving more compute to
+tickers that have scored well. That is fitting the ticker choice to the sample, it is exactly the
+selection bias §12 is about, and unlike the genome count nothing in the engine would be counting
+it. A seed sweep over one ticker is permitted and is diagnostically the most useful thing the loop
+can do — the spread of winners across seeds measures how much of a result was structure and how
+much was the search finding noise.
+
+### 19.8 Holdout accounting
+
+§16.6 states that re-running evolution on a ticker and reading its holdout again spends it. A loop
+that revisits every ticker on rotation spends every holdout almost immediately, and the honest
+consequence is recorded here rather than left to be discovered:
+
+**A prospecting session's holdout figures are in-sample after the first pass, and are labelled as
+selection criteria from the second pass onward.** They are still shown — they are what the search
+chose on, and §17.5's reasoning for displaying segments applies unchanged — but they are never the
+ranking key and never a verdict. This is the second, independent reason the leaderboard ranks on
+transfer and forward performance: those are the only figures a repeated search does not degrade.
+
+### 19.9 What the web UI must keep separate
+
+- **The word is "candidates", never "results".** The screen states that nothing here has a verdict
+  and that promotion plus a walk-forward is what produces one.
+- **Backtest and forward columns sit side by side, both labelled.** The gap between them is the
+  most instructive number the product can show, and hiding either would waste it.
+- **Per-ticker, never pooled.** §12.9's rule against pooling folds applies with more force here:
+  candidates from different tickers are different strategies on different instruments, and a
+  combined equity curve or a pooled trade histogram would describe something that was never run.
+- **Live progress is the session's, not a search's.** Searches complete constantly; what the user
+  is watching is a sweep. Progress is stated as tickers covered and candidates surviving, never as
+  a percentage of something endless.
+
+### 19.10 Nothing here weakens §2 or §12
+
+Prospecting composes genomes through §16's library and renders them through §16.3, so every
+candidate passes the same four look-ahead layers as any other strategy — the loop introduces no new
+path to an expression. Transfer and forward scoring are ordinary backtests through §7, on windows
+carrying their own warm-up prefixes per §9.4.
+
+The selection-bias machinery is not relaxed anywhere in this section. It is stepped around in the
+only way that is honest: by refusing to publish, from a search this large, the kind of claim that
+would require correcting.

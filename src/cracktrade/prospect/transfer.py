@@ -1,0 +1,260 @@
+"""Sibling transfer -- spec section 19.4.
+
+The candidate's genome is rendered against each of its family's tickers and run **unchanged**.
+What is recorded is the distribution of sibling Sharpes; what matters is the median, for the
+reason section 16.5 gives for using a median segment rather than a mean -- one spectacular
+member must not carry a candidate.
+
+Measured 2026-08-20, a genome evolved on AMD at 1h: Sharpe 1.30 on AMD, median sibling Sharpe
+-0.49, negative on six of seven relatives, and losing money on SMH -- the ETF that holds AMD. A
+Sharpe of 1.30 that does not survive the move to the next semiconductor was never measuring
+semiconductors, and this module is how that is found out in seconds rather than in weeks.
+
+**Transfer rejects; it does not promote.** It is demonstrated to be decisive at killing overfits
+and is unproven at identifying real edges, and those are different jobs. Correlated names over
+one period share market-wide moves, so a candidate can transfer by riding beta rather than by
+carrying an edge -- which is what the controls in :class:`~cracktrade.prospect.families.Family`
+exist to expose. A transfer failure is strong evidence; a transfer pass is the absence of one
+particular kind of evidence against.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from statistics import median
+from typing import TYPE_CHECKING
+
+from cracktrade.backtest import extract_metrics, run_simulation
+from cracktrade.errors import CracktradeError
+from cracktrade.evolution.genome import render
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from cracktrade.data import MarketData
+    from cracktrade.evolution.genome import Chassis, Genome
+    from cracktrade.prospect.families import Family
+
+logger = logging.getLogger(__name__)
+
+#: Supplies the price history for one ticker. The library never fetches: a provider, a cache and
+#: a date range are the caller's, exactly as :class:`~cracktrade.control.RunControl` keeps queues
+#: and terminals out of the engine's vocabulary.
+DataFor = Callable[[str], "MarketData"]
+
+#: A candidate must make money on its relatives, not merely lose less than on unrelated ones.
+#: Zero rather than a tuned figure: this is a rejection rule, and a threshold fitted to make some
+#: particular candidate survive would be the search's bias moved into the validator.
+TRANSFER_FLOOR = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class SiblingResult:
+    """One ticker the candidate was moved to, and what happened.
+
+    Attributes:
+        ticker: the instrument the unchanged genome was run on.
+        is_control: whether this ticker is outside the family's economic mechanism.
+        sharpe: annualised Sharpe on that ticker.
+        total_return_pct: total return over the same window.
+        total_trades: closed trades, so a "result" from two trades is visible as such.
+    """
+
+    ticker: str
+    is_control: bool
+    sharpe: float
+    total_return_pct: float
+    total_trades: int
+
+
+@dataclass(frozen=True, slots=True)
+class TransferReport:
+    """How a candidate held up when moved off the ticker it was found on.
+
+    Attributes:
+        home: the ticker the candidate was evolved on.
+        family: that ticker's family name.
+        home_sharpe: the candidate's Sharpe on its own ticker, for the contrast.
+        results: every ticker it was moved to, members and controls alike.
+        failures: tickers whose backtest could not be run at all, with the reason. Unlike
+            section 16.6's ``failed_candidates`` this is not necessarily a defect -- a sibling
+            may simply have no history over the chassis's range -- so it is reported rather than
+            raised on.
+    """
+
+    home: str
+    family: str
+    home_sharpe: float
+    results: tuple[SiblingResult, ...]
+    failures: tuple[str, ...] = ()
+
+    @property
+    def members(self) -> tuple[SiblingResult, ...]:
+        """Results on tickers inside the family's mechanism."""
+        return tuple(r for r in self.results if not r.is_control)
+
+    @property
+    def controls(self) -> tuple[SiblingResult, ...]:
+        """Results on tickers outside it."""
+        return tuple(r for r in self.results if r.is_control)
+
+    @property
+    def median_sibling_sharpe(self) -> float:
+        """Median Sharpe across family members. Zero when there were none to measure."""
+        return _median_sharpe(self.members)
+
+    @property
+    def median_control_sharpe(self) -> float:
+        """Median Sharpe across controls. Zero when there were none to measure."""
+        return _median_sharpe(self.controls)
+
+    @property
+    def negative_members(self) -> int:
+        """How many family members the candidate lost money on."""
+        return sum(1 for r in self.members if r.sharpe < 0)
+
+    @property
+    def beats_controls(self) -> bool:
+        """Whether the family did better than instruments outside it.
+
+        False means the candidate performs as well on gold as on the semiconductors it was
+        evolved across, which is a description of the market rather than of the family.
+        """
+        return self.median_sibling_sharpe > self.median_control_sharpe
+
+    @property
+    def survives(self) -> bool:
+        """Whether the candidate is worth passing to the next rung of section 19.3's ladder.
+
+        Two conditions, and both are rejections rather than endorsements: it must make money on
+        its relatives, and it must do so by more than it does on instruments sharing none of
+        their mechanism. Surviving this is not evidence the candidate works -- it is the absence
+        of the cheapest available evidence that it does not.
+        """
+        if not self.members:
+            return False
+        return self.median_sibling_sharpe > TRANSFER_FLOOR and self.beats_controls
+
+
+def _median_sharpe(results: tuple[SiblingResult, ...]) -> float:
+    """Median Sharpe over ``results``, or zero when the sequence is empty."""
+    if not results:
+        return 0.0
+    return float(median(r.sharpe for r in results))
+
+
+def transfer_report(
+    genome: Genome,
+    chassis: Chassis,
+    family: Family,
+    data_for: DataFor,
+    *,
+    seed: int = 0,
+) -> TransferReport:
+    """Run ``genome`` unchanged across ``family`` and report how it travelled.
+
+    The genome is re-rendered per ticker rather than having its YAML rewritten: rendering is
+    total over the reachable space (section 16.3), so a chassis with a different ticker produces
+    a valid strategy by construction, whereas a textual substitution would be a second, weaker
+    way of building the same object.
+
+    Args:
+        genome: the candidate, exactly as the search left it.
+        chassis: the chassis it was found on. Only the ticker is varied; the date range,
+            interval and costs are held fixed, because a transfer that also changed the window
+            would not be measuring transfer.
+        family: the relatives and controls to move it to.
+        data_for: supplies each ticker's history.
+        seed: passed through to the simulation.
+    """
+    home = _score(genome, chassis, chassis.ticker, data_for, seed=seed)
+    results: list[SiblingResult] = []
+    failures: list[str] = []
+
+    targets = [(t, False) for t in family.siblings_of(chassis.ticker)]
+    targets += [(t, True) for t in family.controls if t != chassis.ticker]
+
+    for ticker, is_control in targets:
+        scored = _score(genome, chassis, ticker, data_for, seed=seed)
+        if scored is None:
+            failures.append(ticker)
+            continue
+        results.append(
+            SiblingResult(
+                ticker=ticker,
+                is_control=is_control,
+                sharpe=scored.sharpe,
+                total_return_pct=scored.total_return_pct,
+                total_trades=scored.total_trades,
+            )
+        )
+
+    report = TransferReport(
+        home=chassis.ticker,
+        family=family.name,
+        home_sharpe=home.sharpe if home is not None else 0.0,
+        results=tuple(results),
+        failures=tuple(failures),
+    )
+    logger.info(
+        "transfer for %s (%s): home %.2f, median sibling %.2f, controls %.2f -- %s",
+        report.home,
+        report.family,
+        report.home_sharpe,
+        report.median_sibling_sharpe,
+        report.median_control_sharpe,
+        "survives" if report.survives else "rejected",
+    )
+    return report
+
+
+@dataclass(frozen=True, slots=True)
+class _Scored:
+    """The three figures transfer reads off one simulation."""
+
+    sharpe: float
+    total_return_pct: float
+    total_trades: int
+
+
+def _score(
+    genome: Genome,
+    chassis: Chassis,
+    ticker: str,
+    data_for: DataFor,
+    *,
+    seed: int,
+) -> _Scored | None:
+    """Simulate ``genome`` on ``ticker``, or return None if that could not be done.
+
+    Every engine failure is caught and reported as a missing sibling rather than propagated. A
+    relative with no history over the chassis's range is a fact about the data, and letting it
+    abort the sweep would make the loop's progress depend on the least available instrument in
+    each family.
+    """
+    try:
+        strategy = render(genome, replace(chassis, ticker=ticker))
+        data = data_for(ticker)
+        simulation = run_simulation(strategy, data, seed=seed)
+        metrics = extract_metrics(
+            simulation.portfolio,
+            risk_free_rate=strategy.execution.risk_free_rate,
+            calendar=simulation.calendar,
+        )
+    except CracktradeError as exc:
+        logger.info("transfer to %s failed: %s: %s", ticker, type(exc).__name__, exc)
+        return None
+    return _Scored(
+        sharpe=metrics.sharpe_ratio,
+        total_return_pct=metrics.total_return_pct,
+        total_trades=metrics.total_trades,
+    )
+
+
+__all__ = [
+    "TRANSFER_FLOOR",
+    "DataFor",
+    "SiblingResult",
+    "TransferReport",
+    "transfer_report",
+]

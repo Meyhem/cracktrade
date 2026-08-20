@@ -141,6 +141,15 @@ class EvolutionError(OptimizationError):
     """
 
 
+class ProspectError(OptimizationError):
+    """A prospecting sweep could not be completed.
+
+    A subclass of :class:`OptimizationError` for :class:`EvolutionError`'s reason: to the caller
+    it is the same kind of failure -- a search that could not be completed -- and it maps onto
+    the same exit code without any interface learning a new branch.
+    """
+
+
 # --------------------------------------------------------------------------- authoring
 
 

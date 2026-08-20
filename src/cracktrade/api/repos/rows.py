@@ -11,7 +11,7 @@ type error rather than a query that quietly matches nothing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -204,3 +204,103 @@ class PurgeCounts:
     versions: int
     runs: int
     series: int
+
+
+class ProspectStatus(StrEnum):
+    """Where a prospecting session is in its lifecycle (spec section 19.7).
+
+    Three states, not five. A session is never *queued* -- it starts running the moment it is
+    created -- and never *succeeded*, because a search that has no end has nothing to succeed
+    at. ``stopped`` is what a session that did its job looks like.
+    """
+
+    RUNNING = "running"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether the session has finished and will claim no further ticks."""
+        return self in {ProspectStatus.STOPPED, ProspectStatus.FAILED}
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectSessionRow:
+    """A long-running sweep: its question, its cursor, and its lease.
+
+    ``cursor_index`` and ``passes_completed`` are the whole of what resume restores -- see
+    :class:`~cracktrade.prospect.Rotation`, which is a value for exactly this reason.
+    """
+
+    id: UUID
+    name: str
+    status: ProspectStatus
+    universe: tuple[str, ...]
+    params: dict[str, Any]
+    seed: int
+    cursor_index: int
+    passes_completed: int
+    ticks_completed: int
+    ticks_failed: int
+    created_at: datetime
+    stopped_at: datetime | None
+    claimed_by: str | None
+    heartbeat_at: datetime | None
+    stop_requested: bool
+    error: dict[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectCandidateRow:
+    """One tick's finding, stored verbatim.
+
+    ``candidate`` is :func:`cracktrade.serialize.to_dict` of a
+    :class:`~cracktrade.prospect.Candidate` and is returned unaltered. The three promoted
+    columns are the ones the leaderboard filters and sorts on; everything else -- the holdout
+    figures above all -- stays inside the document, where a query cannot casually rank by it.
+    """
+
+    id: UUID
+    session_id: UUID
+    ticker: str
+    discovered_at: datetime
+    last_bar_seen: date
+    seed: int
+    candidate: dict[str, Any]
+    strategy_yaml: str
+    survived_transfer: bool
+    transfer_median: float
+    transfer_control: float
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectForwardScoreRow:
+    """One measurement of a candidate on bars it was never shown.
+
+    Append-only: a score is a record of a measurement taken against the prices as they stood
+    that day, not a cache of the candidate's current worth.
+    """
+
+    id: UUID
+    candidate_id: UUID
+    scored_at: datetime
+    first_bar: date
+    last_bar: date
+    bars: int
+    return_pct: float
+    sharpe: float
+    trades: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectCandidateOverviewRow:
+    """A candidate beside its most recent forward score, which is what the leaderboard shows.
+
+    ``forward`` is ``None`` until enough bars have arrived to measure anything, and the UI is
+    required to say so rather than to render a blank as a zero (spec section 19.9).
+    """
+
+    candidate: ProspectCandidateRow
+    forward: ProspectForwardScoreRow | None
+    forward_scores: int

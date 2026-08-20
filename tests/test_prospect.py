@@ -17,24 +17,30 @@ from __future__ import annotations
 import random
 from datetime import UTC, date, datetime
 
+import pandas as pd
 import pytest
 
-from cracktrade.config import Strategy
+from cracktrade.config import Interval, Strategy
 from cracktrade.control import RunControl
-from cracktrade.data import MarketData
+from cracktrade.data import MarketData, StaticProvider
 from cracktrade.errors import DataUnavailableError, ProspectError, RunCancelled
 from cracktrade.evolution import Chassis, GaSettings, random_genome, render
 from cracktrade.prospect import (
+    DAILY_LOOKBACK_DAYS,
     DEFAULT_UNIVERSE,
     FAMILIES,
     INVERSE_BUCKET,
+    MIN_FORWARD_BARS,
     PROSPECT_SETTINGS,
     Candidate,
     Family,
     Rotation,
     SiblingResult,
+    SweepHistory,
+    SweepParams,
     TransferReport,
     family_of,
+    forward_score,
     is_inverse,
     prospect_once,
     retarget,
@@ -351,3 +357,127 @@ def test_prospect_once_is_cancellable() -> None:
 def test_the_default_search_is_small_on_purpose() -> None:
     """Section 19.1: forty times the budget bought nothing, so the default does not spend it."""
     assert PROSPECT_SETTINGS.population * PROSPECT_SETTINGS.generations <= 400
+
+
+# --------------------------------------------------------------------------- the question
+
+
+def test_a_sessions_question_survives_a_round_trip_through_storage() -> None:
+    """Resume restores the question exactly, or the leaderboard is comparing two questions."""
+    params = SweepParams(
+        interval=Interval.M15,
+        population=12,
+        generations=3,
+        objective="sharpe",
+        segments=6,
+        holdout_fraction=0.25,
+        min_trades=5,
+        min_trades_per_year=1.5,
+        slippage_pct=0.05,
+        lookback_days=45,
+    )
+    assert SweepParams.from_dict(params.to_dict()) == params
+
+
+def test_a_stored_question_missing_a_later_setting_still_resumes() -> None:
+    """A session written before a field existed took days to accumulate. It is not discarded."""
+    restored = SweepParams.from_dict({"interval": "1d"})
+    assert restored.interval is Interval.D1
+    assert restored.population == SweepParams().population
+
+
+def test_the_window_comes_from_the_intervals_own_reach() -> None:
+    """The provider serves about 726 days of hourly bars and 58 of 15-minute ones, and that is
+    a cliff rather than a taper. Asking for more does not fail -- it silently returns what
+    exists -- so the window is taken from the interval rather than guessed."""
+    today = date(2026, 8, 20)
+    assert SweepParams(interval=Interval.H1).window(now=today)[0] == date(2024, 8, 25)
+    assert SweepParams(interval=Interval.M15).window(now=today)[0] == date(2026, 6, 23)
+    # Daily bars have no provider limit, so the figure there is a deliberate choice.
+    assert SweepParams(interval=Interval.D1).window_days == DAILY_LOOKBACK_DAYS
+
+
+def test_the_window_rolls_forward_rather_than_being_frozen_at_creation() -> None:
+    """A sweep runs for days. A window fixed when it started would still be searching last
+    month's bars a fortnight later, while the leaderboard claimed to be current."""
+    params = SweepParams(interval=Interval.H1)
+    monday, friday = params.window(now=date(2026, 8, 17)), params.window(now=date(2026, 8, 21))
+    assert friday[1] > monday[1]
+    assert friday[0] > monday[0]
+
+
+def test_every_ticker_in_a_sweep_is_charged_the_same() -> None:
+    params = SweepParams(slippage_pct=0.25, commission_pct=0.15, initial_capital=50_000.0)
+    for ticker in ("AMD", "GLD"):
+        chassis = params.chassis_for(ticker, now=date(2026, 8, 20))
+        assert chassis.ticker == ticker
+        assert (chassis.slippage_pct, chassis.commission_pct) == (0.25, 0.15)
+        assert chassis.initial_capital == 50_000.0
+
+
+def test_the_history_probe_is_a_valid_strategy() -> None:
+    """It exists only to carry a ticker and a window into ``load_history``, and it is never
+    evaluated -- which is exactly why a schema change could break it unnoticed. Building it
+    here fails fast instead of failing inside a sweep at three in the morning."""
+    history = SweepHistory(params=SweepParams(interval=Interval.D1), provider=StaticProvider())
+    probe = history._probe("AMD")
+    assert probe.universe.ticker == "AMD"
+    assert probe.universe.interval is Interval.D1
+
+
+def test_a_ticker_is_fetched_once_per_tick() -> None:
+    """One tick asks for the same controls repeatedly. A second fetch would not only be slow --
+    it could return different bars, making the transfer report an average over two histories."""
+    fetches: list[str] = []
+
+    class Counting(StaticProvider):
+        def fetch(
+            self, ticker: str, start: date, end: date, interval: Interval = Interval.D1
+        ) -> pd.DataFrame:
+            fetches.append(ticker)
+            return super().fetch(ticker, start, end, interval)
+
+    frame = make_ohlcv(bars=BARS, start="2016-01-01", seed=1)
+    history = SweepHistory(
+        params=SweepParams(interval=Interval.D1, lookback_days=4000),
+        provider=Counting({"SPY": frame}),
+        now=date(2020, 1, 1),
+    )
+    assert history("SPY") is history("SPY")
+    assert fetches == ["SPY"]
+
+
+# --------------------------------------------------------------------------- forward scoring
+
+
+def test_a_short_forward_window_is_not_scored_at_all() -> None:
+    """Section 19.3 prefers "not yet" to a Sharpe from nine bars, which would sort above one
+    computed from a year."""
+    data = a_market("AMD")
+    strategy = a_strategy("AMD")
+    nearly_the_end = data.index[-(MIN_FORWARD_BARS - 5)].date()
+
+    assert forward_score(strategy, data, since=nearly_the_end) is None
+
+
+def test_a_window_without_a_warm_up_prefix_is_not_scored_either() -> None:
+    """The indicators would be cold and the strategy would trade differently, so the figure
+    would measure the truncation rather than the candidate."""
+    data = a_market("AMD")
+    strategy = a_strategy("AMD")
+
+    assert forward_score(strategy, data, since=data.index[3].date(), warmup=50) is None
+
+
+def test_a_forward_score_covers_only_the_bars_after_discovery() -> None:
+    data = a_market("AMD")
+    strategy = a_strategy("AMD")
+    discovered = data.index[len(data) // 2].date()
+
+    score = forward_score(strategy, data, since=discovered, warmup=30)
+
+    assert score is not None
+    assert score.first_bar > discovered
+    assert score.last_bar == data.index[-1].date()
+    assert score.bars == len(data) - len(data) // 2 - 1
+    assert score.trades >= 0

@@ -21,7 +21,7 @@ import yaml
 
 from cracktrade.config import Strategy
 from cracktrade.control import NO_CONTROL, RunControl
-from cracktrade.evolution import GaSettings, evolve
+from cracktrade.evolution import DEFAULT_HOLDOUT_FRACTION, DEFAULT_SEGMENTS, GaSettings, evolve
 from cracktrade.optimize import DEFAULT_OBJECTIVE, DEFAULT_TRADE_FLOOR, TradeFloor
 from cracktrade.prospect.families import family_of
 from cracktrade.prospect.transfer import DataFor, TransferReport, transfer_report
@@ -100,6 +100,8 @@ def prospect_once(
     workers: int = 1,
     objective_name: str = DEFAULT_OBJECTIVE,
     trade_floor: TradeFloor = DEFAULT_TRADE_FLOOR,
+    segments: int = DEFAULT_SEGMENTS,
+    holdout_fraction: float = DEFAULT_HOLDOUT_FRACTION,
     control: RunControl = NO_CONTROL,
     now: datetime | None = None,
 ) -> Candidate:
@@ -125,6 +127,8 @@ def prospect_once(
         workers=workers,
         objective_name=objective_name,
         trade_floor=trade_floor,
+        segments=segments,
+        holdout_fraction=holdout_fraction,
         control=control,
     )
 

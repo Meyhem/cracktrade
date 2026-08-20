@@ -11,9 +11,10 @@ and a half-applied promotion would leave a strategy the UI cannot render.
 from __future__ import annotations
 
 from cracktrade.api.repos.base import Repository
+from cracktrade.api.repos.prospect import ProspectRepo
 from cracktrade.api.repos.run import RunRepo
 from cracktrade.api.repos.series import SeriesRepo
 from cracktrade.api.repos.strategy import StrategyRepo
 from cracktrade.api.repos.version import VersionRepo
 
-__all__ = ["Repository", "RunRepo", "SeriesRepo", "StrategyRepo", "VersionRepo"]
+__all__ = ["ProspectRepo", "Repository", "RunRepo", "SeriesRepo", "StrategyRepo", "VersionRepo"]

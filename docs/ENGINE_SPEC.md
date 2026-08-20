@@ -3477,6 +3477,28 @@ Nothing skips the last rung. §17.2's asymmetry is unchanged: a promoted strateg
 is the only thing that clears its uncredible warning, and neither a transfer result nor a forward
 result substitutes for it.
 
+**The forward rung refuses twice, and records nothing when it does — decided 2026-08-20.** A
+candidate is scored only on bars strictly after its `last_bar_seen`, and only when two conditions
+hold:
+
+- **at least 30 such bars exist.** Not a threshold at which a Sharpe becomes trustworthy — there
+  is none — but a floor beneath which the figure is certainly meaningless, and a meaningless
+  figure would sort *above* a real one on a leaderboard ordered by forward return.
+- **enough history precedes them to warm the indicators.** Otherwise the strategy trades
+  differently than it does, and the result measures the truncation rather than the candidate.
+
+When either fails, **nothing is written**. The candidate stays due and is scored once the bars
+exist. Writing a zero, or a Sharpe from nine bars, would be indistinguishable downstream from a
+candidate that was measured and found flat. The scored window carries its warm-up as a prefix and
+excludes it from every statistic, exactly as §9.4's test window does, so a forward figure cannot
+report a return earned by a trade its own trade count does not contain.
+
+Forward scoring is attempted **one candidate at a time, between ticks**, taking the never-scored
+first and then the stalest, and only for candidates that survived transfer. A candidate that
+failed transfer will not be ranked, so scoring it would spend the sweep's compute on a row nobody
+reads. A score older than 24 hours is refreshed: that is the granularity at which the question
+"has this held up?" can change, and scoring more often would redraw the same point.
+
 ### 19.4 Sibling transfer
 
 The candidate's rendered configuration is run, **with every parameter unchanged**, against each
@@ -3549,10 +3571,11 @@ time, and the bucket is how both facts are kept true.
 
 ### 19.7 Lifecycle
 
-**The session is the long-lived record; each search is an ordinary run.** A prospecting session
-holds the ticker list, the schedule, the cursor and the candidate ledger. Every individual search
-it launches is a normal `evolve` run that starts, finishes and reaches a terminal state exactly as
-§14.5 describes.
+**The session is the long-lived record; each tick is an ordinary, terminating unit of work.** A
+prospecting session holds the ticker list, the cursor and the candidate ledger. A *tick* is one
+ticker: evolve, transfer-test, store the candidate, advance the cursor. It is not a `run` row —
+see the table decision below — but it has a run's shape, in that it starts, finishes, and leaves
+a durable record whatever happened to it.
 
 **Rejected: one immortal run row.** §14.2 freezes a run row on terminal status and §14.5 fails a
 run whose lease expires, so an indefinite run would have to heartbeat forever and be exempted from
@@ -3562,10 +3585,51 @@ honestly. It would also make progress meaningless: a run that never ends has no 
 Consequences of the session shape, all of which fall out rather than needing new machinery:
 
 - **Resume is the cursor.** A restarted session continues from the next ticker in rotation. Nothing
-  is recomputed and nothing is lost, because completed searches are already durable runs.
-- **Cancellation is per-layer.** Stopping a session stops the scheduling of new searches; the search
-  in flight ends through §11.2's existing cooperative path and records `cancelled`.
-- **A dead worker fails one search, not the session.** The session's next tick launches the next.
+  is recomputed and nothing is lost, because completed ticks are already durable. `cursor_index`
+  and `passes_completed` are the whole of what resume restores, which is why the rotation is a
+  value rather than an iterator: an iterator's position cannot be written to a row.
+- **Cancellation is per-layer.** Stopping a session stops the scheduling of new ticks; a tick in
+  flight ends through §11.2's existing cooperative path, and its cursor is deliberately *not*
+  advanced — nothing was measured for that ticker, so resuming retries it rather than skipping it.
+- **A dead worker loses one tick, not the session.** This is the one place prospecting inverts
+  §14.5. A run whose worker dies is failed and never re-queued, because re-running refetches
+  retroactively adjusted prices and so measures something else. A *session* whose worker dies is
+  simply claimable again once its lease lapses: each tick is its own measurement, the completed
+  ones are already durable, and the cursor says where to carry on. Picking a sweep back up
+  continues one sweep; it does not repeat a different one.
+- **A failed tick is counted, not fatal.** A ticker the provider will not serve advances the
+  cursor and increments `ticks_failed`. One delisting must not end a sweep working on the other
+  nineteen.
+
+**The window rolls forward; only the question is frozen — decided 2026-08-20.** A session's
+universe, costs, bar interval and search size are fixed at creation and there is no way to edit
+them: a sweep whose question changed partway would make its own leaderboard incomparable with
+itself, and the ranking would then be reading the difference between the questions. The **date
+range is deliberately not part of that**. A sweep runs for days; a window fixed at creation would
+have it still searching last month's bars a fortnight later while the leaderboard claimed to be
+current. Each tick therefore computes its own window from the interval's reach — §4.2's roughly
+726 days of hourly bars, 58 of 15- and 30-minute — because asking a provider for more than it
+keeps does not fail, it silently returns what exists, and a stated window that describes
+something never received is exactly the kind of authoritative-looking wrong number this engine
+exists to avoid.
+
+**A tick writes its candidate and its cursor in one transaction, and only if the worker still
+owns the session.** A search holds the main thread for minutes, so a heartbeat connection that
+is down long enough for the lease to lapse lets another worker take the session over while the
+first is still computing. Without the ownership check both would advance the same cursor —
+skipping a ticker and counting the tick twice. The write is refused instead, and because the
+candidate insert shares the transaction, a refused tick leaves nothing behind: half a tick, a
+candidate with no tick counted against it in a session whose cursor says that ticker was never
+reached, would be worse than none. The new owner simply prospects that ticker itself.
+
+**One worker, runs first — decided 2026-08-20.** Prospecting shares the run worker's process and
+its loop checks a queued run before every prospecting tick. A session is claimed for **one tick
+and then released**, not held for the life of the sweep, so a user who launches a backtest waits
+at most one search for it. **Rejected: a second worker process for sweeps.** Both halves are
+CPU-bound on the same cores, so two processes would compete for them with nothing arbitrating,
+and it would double the deployment surface for no isolation that matters. A tick's seed is the
+session's seed plus the cursor index, so a tick is exactly reproducible and two tickers in one
+pass are not handed the same starting point.
 
 **Prospecting has its own tables — decided 2026-08-20.** `prospect_session`,
 `prospect_candidate` and `prospect_forward_score`, rather than any reuse of `run`. The reason is

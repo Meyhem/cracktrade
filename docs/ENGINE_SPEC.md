@@ -3567,6 +3567,42 @@ Consequences of the session shape, all of which fall out rather than needing new
   in flight ends through §11.2's existing cooperative path and records `cancelled`.
 - **A dead worker fails one search, not the session.** The session's next tick launches the next.
 
+**Prospecting has its own tables — decided 2026-08-20.** `prospect_session`,
+`prospect_candidate` and `prospect_forward_score`, rather than any reuse of `run`. The reason is
+structural: `run.strategy_id` is `NOT NULL` and `run_version_exists` ties the pair to a real
+`strategy_version` row, while a prospecting tick's ticker comes from the session's universe and
+not from a configuration anybody wrote. §17.1's "the chassis is a strategy" does not describe it.
+
+Two alternatives were considered. **Auto-creating a chassis strategy per universe ticker** would
+make each tick an ordinary `evolve` run and inherit the lifecycle, progress, cancellation and run
+views unchanged — at the price of twenty-odd machine-authored strategies in the list screen, which
+§14.8's delete semantics would then apply to. **Making `strategy_id` nullable** would weaken a
+constraint every existing query and view relies on, to save one table. The tables cost more code;
+neither alternative was worth what it spent.
+
+There is deliberately **no `is_credible` column** on any of them, and `strategy_overview` is not
+touched. §19.2 is a rule the schema is arranged to make unexpressible rather than one the
+application is trusted to observe. The holdout return is likewise **not** promoted out of the
+candidate's `jsonb`: it is the figure §19.5 forbids ranking on, and leaving it inside the document
+means a leaderboard query cannot casually order by it.
+
+**Forward scores are appended, never overwritten.** One row per scoring, with the same
+append-only trigger §14.2 puts on `strategy_version` and `run_series`. Overwriting is the obvious
+design and is wrong for §14.1's own reason: prices are retroactively adjusted on every dividend
+and split (§4.1), so the same candidate scored today and next month is scored against different
+prices for the same bars. A stored score is a record of a measurement, not a cache of one.
+Keeping the series is also what lets a leaderboard say "this has been degrading for six weeks",
+which is most of what a forward-validated ranking is for. The ranking reads the most recent row
+per candidate, by the lateral join `strategy_overview` already uses for its verdict.
+
+**Forward scoring runs on the prospecting worker, between search ticks — decided 2026-08-20.**
+Not as a separate scheduled job and not lazily when a leaderboard is opened. One process is one
+deployment surface, and scoring naturally yields to the sweep rather than competing with it;
+scoring on read would make the first page load after a quiet week arbitrarily slow and would
+repeat the work per viewer. The cost is that forward scores stop accruing while no session is
+running, which is the correct behaviour rather than a limitation: a leaderboard nobody is
+prospecting into is not gathering evidence either.
+
 **Rotation is round-robin.** **Rejected: bandit or greedy allocation**, giving more compute to
 tickers that have scored well. That is fitting the ticker choice to the sample, it is exactly the
 selection bias §12 is about, and unlike the genome count nothing in the engine would be counting

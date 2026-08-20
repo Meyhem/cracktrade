@@ -1,6 +1,6 @@
 """Sibling transfer -- spec section 19.4.
 
-The candidate's genome is rendered against each of its family's tickers and run **unchanged**.
+The candidate is re-targeted at each of its family's tickers and run **unchanged**.
 What is recorded is the distribution of sibling Sharpes; what matters is the median, for the
 reason section 16.5 gives for using a median segment rather than a mean -- one spectacular
 member must not carry a candidate.
@@ -9,6 +9,13 @@ Measured 2026-08-20, a genome evolved on AMD at 1h: Sharpe 1.30 on AMD, median s
 -0.49, negative on six of seven relatives, and losing money on SMH -- the ETF that holds AMD. A
 Sharpe of 1.30 that does not survive the move to the next semiconductor was never measuring
 semiconductors, and this module is how that is found out in seconds rather than in weeks.
+
+The unit is a :class:`~cracktrade.config.Strategy` rather than an evolved genome, which
+costs nothing and buys two things: a hand-written strategy can be transfer-tested exactly like a
+composed one, and this module needs no import from :mod:`cracktrade.evolution`. Re-targeting goes
+through :func:`~cracktrade.config.dump_strategy` and full validation rather than a textual
+substitution on the YAML -- the round trip is contractual, so a re-targeted strategy is built by
+the same path as any other and cannot be malformed in a way only this module could produce.
 
 **Transfer rejects; it does not promote.** It is demonstrated to be decisive at killing overfits
 and is unproven at identifying real edges, and those are different jobs. Correlated names over
@@ -22,17 +29,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from statistics import median
 from typing import TYPE_CHECKING
 
+import yaml
+
 from cracktrade.backtest import extract_metrics, run_simulation
+from cracktrade.config import dump_strategy
 from cracktrade.errors import CracktradeError
-from cracktrade.evolution.genome import render
+from cracktrade.strategy import build_strategy
 
 if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from cracktrade.config import Strategy
     from cracktrade.data import MarketData
-    from cracktrade.evolution.genome import Chassis, Genome
     from cracktrade.prospect.families import Family
 
 logger = logging.getLogger(__name__)
@@ -143,39 +153,48 @@ def _median_sharpe(results: tuple[SiblingResult, ...]) -> float:
     return float(median(r.sharpe for r in results))
 
 
+def retarget(strategy: Strategy, ticker: str) -> Strategy:
+    """The same strategy pointed at a different instrument.
+
+    Built through the serialisation round trip and full validation rather than by mutating the
+    model, so the result is constructed by exactly the path every other strategy takes. Only the
+    ticker moves: the date range, interval, costs and every rule are the strategy's own, because
+    a transfer that also changed the window would not be measuring transfer.
+
+    Raises:
+        StrategyValidationError: the re-targeted strategy is not valid, which would be a defect
+            in the round trip rather than anything about ``ticker``.
+    """
+    payload = yaml.safe_load(dump_strategy(strategy))
+    payload["universe"]["ticker"] = ticker
+    return build_strategy(payload)
+
+
 def transfer_report(
-    genome: Genome,
-    chassis: Chassis,
+    strategy: Strategy,
     family: Family,
     data_for: DataFor,
     *,
     seed: int = 0,
 ) -> TransferReport:
-    """Run ``genome`` unchanged across ``family`` and report how it travelled.
-
-    The genome is re-rendered per ticker rather than having its YAML rewritten: rendering is
-    total over the reachable space (section 16.3), so a chassis with a different ticker produces
-    a valid strategy by construction, whereas a textual substitution would be a second, weaker
-    way of building the same object.
+    """Run ``strategy`` unchanged across ``family`` and report how it travelled.
 
     Args:
-        genome: the candidate, exactly as the search left it.
-        chassis: the chassis it was found on. Only the ticker is varied; the date range,
-            interval and costs are held fixed, because a transfer that also changed the window
-            would not be measuring transfer.
+        strategy: the candidate, exactly as the search left it. Its own ticker is the home.
         family: the relatives and controls to move it to.
         data_for: supplies each ticker's history.
         seed: passed through to the simulation.
     """
-    home = _score(genome, chassis, chassis.ticker, data_for, seed=seed)
+    home_ticker = strategy.universe.ticker
+    home = _score(strategy, home_ticker, data_for, seed=seed)
     results: list[SiblingResult] = []
     failures: list[str] = []
 
-    targets = [(t, False) for t in family.siblings_of(chassis.ticker)]
-    targets += [(t, True) for t in family.controls if t != chassis.ticker]
+    targets = [(t, False) for t in family.siblings_of(home_ticker)]
+    targets += [(t, True) for t in family.controls if t != home_ticker]
 
     for ticker, is_control in targets:
-        scored = _score(genome, chassis, ticker, data_for, seed=seed)
+        scored = _score(strategy, ticker, data_for, seed=seed)
         if scored is None:
             failures.append(ticker)
             continue
@@ -190,7 +209,7 @@ def transfer_report(
         )
 
     report = TransferReport(
-        home=chassis.ticker,
+        home=home_ticker,
         family=family.name,
         home_sharpe=home.sharpe if home is not None else 0.0,
         results=tuple(results),
@@ -218,27 +237,26 @@ class _Scored:
 
 
 def _score(
-    genome: Genome,
-    chassis: Chassis,
+    strategy: Strategy,
     ticker: str,
     data_for: DataFor,
     *,
     seed: int,
 ) -> _Scored | None:
-    """Simulate ``genome`` on ``ticker``, or return None if that could not be done.
+    """Simulate ``strategy`` on ``ticker``, or return None if that could not be done.
 
     Every engine failure is caught and reported as a missing sibling rather than propagated. A
-    relative with no history over the chassis's range is a fact about the data, and letting it
+    relative with no history over the strategy's range is a fact about the data, and letting it
     abort the sweep would make the loop's progress depend on the least available instrument in
     each family.
     """
     try:
-        strategy = render(genome, replace(chassis, ticker=ticker))
+        targeted = retarget(strategy, ticker)
         data = data_for(ticker)
-        simulation = run_simulation(strategy, data, seed=seed)
+        simulation = run_simulation(targeted, data, seed=seed)
         metrics = extract_metrics(
             simulation.portfolio,
-            risk_free_rate=strategy.execution.risk_free_rate,
+            risk_free_rate=targeted.execution.risk_free_rate,
             calendar=simulation.calendar,
         )
     except CracktradeError as exc:
@@ -256,5 +274,6 @@ __all__ = [
     "DataFor",
     "SiblingResult",
     "TransferReport",
+    "retarget",
     "transfer_report",
 ]

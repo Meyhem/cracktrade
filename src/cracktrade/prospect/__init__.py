@@ -34,11 +34,18 @@ from cracktrade.prospect.families import (
     family_of,
     is_inverse,
 )
+from cracktrade.prospect.sweep import (
+    PROSPECT_SETTINGS,
+    Candidate,
+    Rotation,
+    prospect_once,
+)
 from cracktrade.prospect.transfer import (
     TRANSFER_FLOOR,
     DataFor,
     SiblingResult,
     TransferReport,
+    retarget,
     transfer_report,
 )
 
@@ -46,12 +53,17 @@ __all__ = [
     "DEFAULT_UNIVERSE",
     "FAMILIES",
     "INVERSE_BUCKET",
+    "PROSPECT_SETTINGS",
     "TRANSFER_FLOOR",
+    "Candidate",
     "DataFor",
     "Family",
+    "Rotation",
     "SiblingResult",
     "TransferReport",
     "family_of",
     "is_inverse",
+    "prospect_once",
+    "retarget",
     "transfer_report",
 ]

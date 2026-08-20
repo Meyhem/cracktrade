@@ -15,22 +15,29 @@ Two things carry this package and each has tests here.
 from __future__ import annotations
 
 import random
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
+from cracktrade.config import Strategy
+from cracktrade.control import RunControl
 from cracktrade.data import MarketData
-from cracktrade.errors import DataUnavailableError, ProspectError
-from cracktrade.evolution import Chassis, random_genome
+from cracktrade.errors import DataUnavailableError, ProspectError, RunCancelled
+from cracktrade.evolution import Chassis, GaSettings, random_genome, render
 from cracktrade.prospect import (
     DEFAULT_UNIVERSE,
     FAMILIES,
     INVERSE_BUCKET,
+    PROSPECT_SETTINGS,
+    Candidate,
     Family,
+    Rotation,
     SiblingResult,
     TransferReport,
     family_of,
     is_inverse,
+    prospect_once,
+    retarget,
     transfer_report,
 )
 from tests.factories import make_ohlcv
@@ -54,6 +61,11 @@ def a_chassis(ticker: str = "AMD") -> Chassis:
         start_date=date(2016, 1, 1),
         end_date=date(2020, 1, 1),
     )
+
+
+def a_strategy(ticker: str = "AMD", *, seed: int = 7) -> Strategy:
+    """An evolved strategy, which is what a candidate actually is by the time it reaches here."""
+    return render(random_genome(random.Random(seed)), a_chassis(ticker))
 
 
 def a_sibling(ticker: str, sharpe: float, *, is_control: bool = False) -> SiblingResult:
@@ -158,8 +170,8 @@ def test_controls_are_never_counted_among_members() -> None:
 # --------------------------------------------------------------------------- running it
 
 
-def test_transfer_runs_the_same_genome_across_the_family() -> None:
-    genome = random_genome(random.Random(7))
+def test_transfer_runs_the_same_strategy_across_the_family() -> None:
+    strategy = a_strategy("AMD")
     family = Family(name="test", members=("AMD", "MU", "INTC"), controls=("GLD",))
     seen: list[str] = []
 
@@ -167,7 +179,7 @@ def test_transfer_runs_the_same_genome_across_the_family() -> None:
         seen.append(ticker)
         return a_market(ticker, seed=len(ticker))
 
-    report = transfer_report(genome, a_chassis("AMD"), family, data_for)
+    report = transfer_report(strategy, family, data_for)
 
     # Home, both siblings and the control -- and the home ticker never appears as a sibling.
     assert set(seen) == {"AMD", "MU", "INTC", "GLD"}
@@ -179,7 +191,7 @@ def test_transfer_runs_the_same_genome_across_the_family() -> None:
 
 def test_an_unavailable_sibling_is_recorded_not_raised() -> None:
     """A relative with no history is a fact about the data, not a reason to abort the sweep."""
-    genome = random_genome(random.Random(7))
+    strategy = a_strategy("AMD")
     family = Family(name="test", members=("AMD", "MU"), controls=("GLD",))
 
     def data_for(ticker: str) -> MarketData:
@@ -188,40 +200,47 @@ def test_an_unavailable_sibling_is_recorded_not_raised() -> None:
             raise DataUnavailableError(msg)
         return a_market(ticker)
 
-    report = transfer_report(genome, a_chassis("AMD"), family, data_for)
+    report = transfer_report(strategy, family, data_for)
 
     assert report.failures == ("MU",)
     assert {r.ticker for r in report.members} == set()
     assert not report.survives
 
 
-def test_transfer_varies_only_the_ticker() -> None:
-    """A transfer that also moved the window would not be measuring transfer."""
-    genome = random_genome(random.Random(3))
-    chassis = a_chassis("AMD")
-    family = Family(name="test", members=("AMD", "MU"), controls=("GLD",))
-    windows: list[tuple[date, date]] = []
-
-    def data_for(ticker: str) -> MarketData:
-        windows.append((chassis.start_date, chassis.end_date))
-        return a_market(ticker)
-
-    transfer_report(genome, chassis, family, data_for)
-
-    assert len(set(windows)) == 1
-
-
 def test_transfer_is_deterministic() -> None:
-    genome = random_genome(random.Random(11))
+    strategy = a_strategy("AMD")
     family = Family(name="test", members=("AMD", "MU"), controls=("GLD",))
 
     def data_for(ticker: str) -> MarketData:
         return a_market(ticker, seed=len(ticker))
 
-    first = transfer_report(genome, a_chassis("AMD"), family, data_for)
-    second = transfer_report(genome, a_chassis("AMD"), family, data_for)
+    assert transfer_report(strategy, family, data_for) == transfer_report(
+        strategy, family, data_for
+    )
 
-    assert first == second
+
+# --------------------------------------------------------------------------- retargeting
+
+
+def test_retarget_moves_only_the_ticker() -> None:
+    """A transfer that also changed the window would not be measuring transfer."""
+    strategy = a_strategy("AMD")
+    moved = retarget(strategy, "MU")
+
+    assert moved.universe.ticker == "MU"
+    assert moved.universe.start_date == strategy.universe.start_date
+    assert moved.universe.end_date == strategy.universe.end_date
+    assert moved.universe.interval == strategy.universe.interval
+    assert moved.execution == strategy.execution
+    assert moved.entry == strategy.entry
+    assert moved.exit == strategy.exit
+    assert moved.indicators == strategy.indicators
+
+
+def test_retarget_round_trips_through_validation() -> None:
+    """Re-targeting builds by the same path as any other strategy, so it cannot be malformed."""
+    strategy = a_strategy("AMD")
+    assert retarget(retarget(strategy, "MU"), "AMD") == strategy
 
 
 def _family_or_none(ticker: str) -> Family | None:
@@ -229,3 +248,106 @@ def _family_or_none(ticker: str) -> Family | None:
         return family_of(ticker)
     except ProspectError:
         return None
+
+
+# --------------------------------------------------------------------------- rotation
+
+
+def test_rotation_visits_every_ticker_before_repeating() -> None:
+    rotation = Rotation(("A", "B", "C"))
+    seen = []
+    for _ in range(3):
+        seen.append(rotation.current)
+        rotation = rotation.advance()
+    assert seen == ["A", "B", "C"]
+    assert rotation.passes == 1
+    assert rotation.current == "A"
+
+
+def test_rotation_counts_completed_passes() -> None:
+    rotation = Rotation(("A", "B"))
+    for _ in range(5):
+        rotation = rotation.advance()
+    assert rotation.passes == 2
+    assert rotation.current == "B"
+
+
+def test_rotation_is_a_value_so_a_session_can_persist_it() -> None:
+    """Resuming a sweep is restoring this; an iterator's position is not writable to a row."""
+    rotation = Rotation(("A", "B", "C"), index=2, passes=4)
+    assert Rotation(("A", "B", "C"), index=2, passes=4) == rotation
+    assert rotation.advance() == Rotation(("A", "B", "C"), index=0, passes=5)
+
+
+def test_rotation_refuses_an_empty_universe() -> None:
+    with pytest.raises(ValueError, match="at least one ticker"):
+        Rotation(())
+
+
+def test_rotation_refuses_an_index_outside_the_universe() -> None:
+    with pytest.raises(ValueError, match="within the universe"):
+        Rotation(("A",), index=3)
+
+
+# --------------------------------------------------------------------------- a whole tick
+
+
+def test_prospect_once_produces_a_candidate_carrying_its_transfer() -> None:
+    """The two rungs arrive together: a holdout figure alone is what section 19.2 forbids."""
+    candidate = prospect_once(
+        a_chassis("AMD"),
+        lambda ticker: a_market(ticker, seed=len(ticker)),
+        settings=GaSettings(population=4, generations=2),
+    )
+
+    assert isinstance(candidate, Candidate)
+    assert candidate.ticker == "AMD"
+    assert candidate.strategy_yaml
+    assert candidate.transfer.home == "AMD"
+    assert candidate.transfer.family == "semiconductors"
+    assert candidate.distinct_configurations > 0
+
+
+def test_prospect_once_records_what_the_search_could_see() -> None:
+    """Forward validation starts after the last bar read, not after the wall clock."""
+    market = a_market("AMD")
+    candidate = prospect_once(
+        a_chassis("AMD"),
+        lambda _: market,
+        settings=GaSettings(population=4, generations=2),
+        now=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+    )
+
+    assert candidate.discovered_at == datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+    assert candidate.last_bar_seen == market.index[-1].date()
+
+
+def test_prospect_once_refuses_a_ticker_with_no_family_before_searching() -> None:
+    """Paying for a search and then discarding it is worse than refusing up front."""
+    searched = False
+
+    def data_for(ticker: str) -> MarketData:
+        nonlocal searched
+        searched = True
+        return a_market(ticker)
+
+    with pytest.raises(ProspectError, match="belongs to no family"):
+        prospect_once(a_chassis("NOT_A_TICKER"), data_for)
+
+    assert not searched
+
+
+def test_prospect_once_is_cancellable() -> None:
+    control = RunControl(should_stop=lambda: True)
+    with pytest.raises(RunCancelled):
+        prospect_once(
+            a_chassis("AMD"),
+            lambda ticker: a_market(ticker),
+            settings=GaSettings(population=4, generations=2),
+            control=control,
+        )
+
+
+def test_the_default_search_is_small_on_purpose() -> None:
+    """Section 19.1: forty times the budget bought nothing, so the default does not spend it."""
+    assert PROSPECT_SETTINGS.population * PROSPECT_SETTINGS.generations <= 400

@@ -74,6 +74,9 @@ export function AppShell() {
             </Text>
           </Group>
           <Group gap="md">
+            <Anchor component={Link} size="sm" to="/prospect">
+              Prospecting
+            </Anchor>
             <Anchor component={Link} size="sm" to="/glossary">
               Glossary
             </Anchor>

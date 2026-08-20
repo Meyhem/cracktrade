@@ -316,6 +316,31 @@ class ProspectRepo(Repository):
             raise ConflictError(f"prospecting session {session_id} has already finished")
         return _session(row)
 
+    def stop_idle_session(
+        self, session_id: UUID, *, lease_seconds: float
+    ) -> ProspectSessionRow | None:
+        """End a session immediately if no live worker holds it. ``None`` if one does.
+
+        Stopping is otherwise the worker's job -- it observes ``stop_requested`` between ticks
+        and lands the terminal row, so a sweep never stops mid-search. But a session nobody is
+        working on has no worker to observe anything, and a user who presses stop while the
+        worker is down would watch a "stopping..." state that never resolves. The lease is what
+        distinguishes the two cases, and reading it inside the same statement is what stops a
+        worker claiming the session between the check and the write.
+        """
+        row = self._fetch_one(
+            f"""
+            UPDATE prospect_session SET
+              status = 'stopped', stopped_at = clock_timestamp(), stop_requested = true,
+              claimed_by = NULL, heartbeat_at = NULL
+            WHERE id = %s AND status = 'running'
+              AND (claimed_by IS NULL OR heartbeat_at < clock_timestamp() - %s::interval)
+            RETURNING {_SESSION_COLUMNS}
+            """,
+            (session_id, timedelta(seconds=lease_seconds)),
+        )
+        return _session(row) if row else None
+
     def stop_session(self, session_id: UUID) -> ProspectSessionRow:
         """End a sweep cleanly. Its candidates stay exactly as they are."""
         row = self._fetch_one(

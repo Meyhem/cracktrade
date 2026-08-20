@@ -34,6 +34,7 @@ RACE_CONSTRAINTS: dict[str, str] = {
     "strategy_version_number_unique": "the strategy was modified concurrently; reload and retry",
     "strategy_version_pair_idx": "the strategy was modified concurrently; reload and retry",
     "run_number_unique": "a run was launched concurrently; retry",
+    "prospect_session_name_unique": "a prospecting session with that name already exists",
 }
 
 

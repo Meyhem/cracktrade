@@ -3524,6 +3524,21 @@ strong evidence; a transfer *pass* is the absence of one particular kind of evid
 sharing no economic mechanism with it is detecting the market, not the ticker, and the control is
 what makes that visible.
 
+**A sibling with no usable Sharpe is a failure, not a measurement — decided 2026-08-20.** A
+Sharpe is a mean over a standard deviation, so a sibling whose returns have no spread (a handful
+of trades, or none) yields an infinity rather than a figure. The median of two values is their
+mean, so a single infinity carries the whole median to infinity — and both halves of the
+rejection rule then answer a question about a degenerate statistic rather than about the
+candidate. Such a sibling is therefore recorded in `failures` and excluded from `results`, and
+`_median_sharpe` drops non-finite values as defence in depth.
+
+Found by running a real sweep: an AMD candidate's TLT control produced an infinite Sharpe over
+seven trades, carrying the control median to infinity and rejecting the candidate. Rejection was
+the harmless direction. The same arithmetic on a *member* would have carried the sibling median
+to infinity and passed the candidate on a number that means nothing, which is the direction that
+matters. When every sibling is degenerate the median is zero, and zero does not clear the floor
+— the comparison is a strict inequality.
+
 ### 19.5 The leaderboard
 
 **Ranked on forward performance where it exists, on median sibling Sharpe before that.** The sort
@@ -3667,6 +3682,14 @@ repeat the work per viewer. The cost is that forward scores stop accruing while 
 running, which is the correct behaviour rather than a limitation: a leaderboard nobody is
 prospecting into is not gathering evidence either.
 
+**A tick's seed is the session's seed plus the tick's ordinal across the whole sweep** — its
+pass number times the universe size, plus its index — and never the cursor index alone. Found by
+running a real sweep on 2026-08-20: with the index alone, the seed repeats every lap, so the
+second pass re-ran the first pass's searches and stored bit-identical candidates. Nine ticks
+over five tickers produced four exact duplicates. That is the whole value of leaving a sweep
+running overnight, spent rediscovering what it already knew. The ordinal is a pure function of
+the two integers the session stores, so a tick stays exactly reproducible across a resume.
+
 **Rotation is round-robin.** **Rejected: bandit or greedy allocation**, giving more compute to
 tickers that have scored well. That is fitting the ticker choice to the sample, it is exactly the
 selection bias §12 is about, and unlike the genome count nothing in the engine would be counting
@@ -3697,7 +3720,23 @@ transfer and forward performance: those are the only figures a repeated search d
   combined equity curve or a pooled trade histogram would describe something that was never run.
 - **Live progress is the session's, not a search's.** Searches complete constantly; what the user
   is watching is a sweep. Progress is stated as tickers covered and candidates surviving, never as
-  a percentage of something endless.
+  a percentage of something endless. The one progress bar on the screen covers the *current lap*,
+  which has a denominator; the sweep as a whole gets counts.
+
+Three further rules, added 2026-08-20 when the screens were built:
+
+- **The holdout figure is not a column.** It is the number the search selected on, the number most
+  likely to be large, and the number a reader scanning a table will believe. §19.5 forbids ranking
+  on it, and the enforcement is that the leaderboard has no such column and the endpoint takes no
+  `sort` parameter. It appears only in the candidate detail, *below* transfer and forward, under a
+  heading that says it is what the search selected on and beside the count of configurations
+  tried.
+- **Unmeasured is not zero.** A candidate with no forward score yet renders as "not yet", never as
+  `0.0%`. "We have not measured this" and "we measured this and it was flat" are different
+  statements and a reader ranking a list cannot recover the difference from a zero.
+- **"Stopping" is its own state.** A sweep asked to stop while a worker holds it stays running
+  until that worker finishes its current search. Rendering that as "running" makes the button look
+  broken; rendering it as "stopped" is a claim about a search still in progress.
 
 ### 19.10 Nothing here weakens §2 or §12
 

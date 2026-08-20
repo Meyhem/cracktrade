@@ -61,6 +61,20 @@ _EXPOSED_PROPERTIES: dict[str, tuple[str, ...]] = {
         "fragile_parameters",
     ),
     "CostSensitivity": ("survives_double_costs", "break_even_multiple"),
+    # Prospecting (section 19). Every one of these is a *rejection reason*, and all of them are
+    # computed rather than stored -- so without this declaration a stored candidate would carry
+    # its holdout figures, which section 19.2 says decide nothing, and not the transfer verdict,
+    # which is the only thing that does. ``members`` and ``controls`` are deliberately omitted:
+    # they are partitions of ``results``, which is already serialised, and repeating them would
+    # write every sibling twice into a document that is stored verbatim.
+    "TransferReport": (
+        "median_sibling_sharpe",
+        "median_control_sharpe",
+        "negative_members",
+        "beats_controls",
+        "survives",
+    ),
+    "Candidate": ("survives_transfer",),
     "Interval": ("excludes_zero",),
     "Check": (),
     "ValidationReport": (

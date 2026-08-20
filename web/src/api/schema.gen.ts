@@ -493,6 +493,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prospect/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sessions
+         * @description Every sweep, newest first.
+         */
+        get: operations["get_sessions_api_v1_prospect_sessions_get"];
+        put?: never;
+        /**
+         * Post Session
+         * @description Begin a sweep. 201: the session exists and is running from this moment.
+         *
+         *     Unlike a run this is not 202. There is nothing queued and nothing to wait for -- the record
+         *     is complete as soon as it is written, and the worker joins a sweep that has already begun.
+         */
+        post: operations["post_session_api_v1_prospect_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prospect/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session
+         * @description One sweep: where its cursor is, and how much it has found.
+         */
+        get: operations["get_session_api_v1_prospect_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prospect/sessions/{session_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Stop
+         * @description Ask a sweep to stop.
+         *
+         *     It ends now if no worker holds it, and after the current tick if one does -- a sweep never
+         *     stops mid-search, because that search's compute would be paid for and its result thrown
+         *     away. The response says which happened: ``stopped`` if it is over, ``running`` with
+         *     ``stop_requested`` if the worker still has to land it.
+         */
+        post: operations["post_stop_api_v1_prospect_sessions__session_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prospect/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidates
+         * @description The leaderboard.
+         *
+         *     Ranked as section 19.5 permits: survivors first, then by forward return where any has
+         *     accrued, then by transfer median. There is no ``sort`` parameter, and that is the point --
+         *     the holdout return is the figure a reader most wants to sort by and the one the search
+         *     selected on, so the ordering is not a client's to choose.
+         *
+         *     ``survivors_only`` defaults true because that is the leaderboard. Passing false is for the
+         *     session screen, where seeing what was rejected is the whole value.
+         */
+        get: operations["get_candidates_api_v1_prospect_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prospect/candidates/{candidate_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidate
+         * @description One candidate, its strategy, and its whole forward series.
+         */
+        get: operations["get_candidate_api_v1_prospect_candidates__candidate_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events": {
         parameters: {
             query?: never;
@@ -517,6 +637,108 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * CandidateDetailOut
+         * @description A candidate and its whole forward series.
+         *
+         *     The series rather than the latest point: a candidate that has decayed for six weeks and one
+         *     found last Tuesday can show the same latest figure, and only the sequence tells them apart.
+         */
+        CandidateDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * Discovered At
+             * Format: date-time
+             */
+            discovered_at: string;
+            /**
+             * Last Bar Seen
+             * Format: date
+             */
+            last_bar_seen: string;
+            /** Seed */
+            seed: number;
+            /** Composition */
+            composition: string;
+            /** Blocks */
+            blocks: string[];
+            /** Strategy Yaml */
+            strategy_yaml: string;
+            /** Survived Transfer */
+            survived_transfer: boolean;
+            selected_on: components["schemas"]["SelectedOn"];
+            transfer: components["schemas"]["TransferOut"];
+            forward: components["schemas"]["ForwardScoreOut"] | null;
+            /** Forward Scores */
+            forward_scores: number;
+            /** Forward History */
+            forward_history: components["schemas"]["ForwardScoreOut"][];
+        };
+        /** CandidateList */
+        CandidateList: {
+            /** Candidates */
+            candidates: components["schemas"]["CandidateOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * CandidateOut
+         * @description One candidate, with its three kinds of number kept apart.
+         *
+         *     ``forward`` is ``None`` until enough bars have arrived to measure anything. A client must
+         *     render that as "not yet", never as a zero: the difference between unmeasured and measured-
+         *     and-flat is the whole point of the rung.
+         */
+        CandidateOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * Discovered At
+             * Format: date-time
+             */
+            discovered_at: string;
+            /**
+             * Last Bar Seen
+             * Format: date
+             */
+            last_bar_seen: string;
+            /** Seed */
+            seed: number;
+            /** Composition */
+            composition: string;
+            /** Blocks */
+            blocks: string[];
+            /** Strategy Yaml */
+            strategy_yaml: string;
+            /** Survived Transfer */
+            survived_transfer: boolean;
+            selected_on: components["schemas"]["SelectedOn"];
+            transfer: components["schemas"]["TransferOut"];
+            forward: components["schemas"]["ForwardScoreOut"] | null;
+            /** Forward Scores */
+            forward_scores: number;
+        };
         /**
          * ChangeOut
          * @description One leaf that differs between two configurations.
@@ -649,6 +871,35 @@ export interface components {
             name: string;
             /** Version */
             version?: number | null;
+        };
+        /**
+         * ForwardScoreOut
+         * @description One measurement on bars the candidate was never shown.
+         */
+        ForwardScoreOut: {
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /**
+             * First Bar
+             * Format: date
+             */
+            first_bar: string;
+            /**
+             * Last Bar
+             * Format: date
+             */
+            last_bar: string;
+            /** Bars */
+            bars: number;
+            /** Return Pct */
+            return_pct: number;
+            /** Sharpe */
+            sharpe: number;
+            /** Trades */
+            trades: number;
         };
         /**
          * GenerateConfigRequest
@@ -1039,6 +1290,28 @@ export interface components {
             consequence: string | null;
         };
         /**
+         * SelectedOn
+         * @description The figures the search chose this candidate by. **Not evidence.**
+         *
+         *     Nested under their own name rather than sitting beside the forward figures as peers,
+         *     because a reader scanning a row will believe whatever the biggest number says and these are
+         *     the numbers most likely to be large and least likely to mean anything. Section 19.5 forbids
+         *     ranking on them and the storage layer does not promote them to a column; this is the same
+         *     rule applied to the wire shape.
+         */
+        SelectedOn: {
+            /** Holdout Return Pct */
+            holdout_return_pct: number;
+            /** Holdout Sharpe */
+            holdout_sharpe: number;
+            /** Holdout Trades */
+            holdout_trades: number;
+            /** Median Segment Return Pct */
+            median_segment_return_pct: number;
+            /** Distinct Configurations */
+            distinct_configurations: number;
+        };
+        /**
          * SeriesCatalog
          * @description Which chart series a run captured, and for which folds.
          */
@@ -1061,6 +1334,91 @@ export interface components {
             points: {
                 [key: string]: unknown;
             };
+        };
+        /** SessionList */
+        SessionList: {
+            /** Sessions */
+            sessions: components["schemas"]["SessionOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * SessionOut
+         * @description A sweep as the list and the header render it.
+         *
+         *     ``progress`` is deliberately absent. Section 19.9: a search with no end has no percentage,
+         *     and the honest statement of where a sweep has got to is how many tickers it has covered and
+         *     how many candidates survived -- both of which are here as counts.
+         */
+        SessionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Universe */
+            universe: string[];
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Seed */
+            seed: number;
+            /** Current Ticker */
+            current_ticker: string;
+            /** Cursor Index */
+            cursor_index: number;
+            /** Passes Completed */
+            passes_completed: number;
+            /** Ticks Completed */
+            ticks_completed: number;
+            /** Ticks Failed */
+            ticks_failed: number;
+            /** Candidates */
+            candidates: number;
+            /** Survivors */
+            survivors: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Stopped At */
+            stopped_at: string | null;
+            /** Claimed By */
+            claimed_by: string | null;
+            /** Heartbeat At */
+            heartbeat_at: string | null;
+            /** Stop Requested */
+            stop_requested: boolean;
+            /** Error */
+            error: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * StartSessionRequest
+         * @description Begin a sweep.
+         *
+         *     Every field is optional except the name: the defaults are the twenty instruments section
+         *     19.6 screened and the small search section 19.1 measured, and a user who has no opinion
+         *     should get the configuration that was actually tested rather than an empty form.
+         */
+        StartSessionRequest: {
+            /** Name */
+            name: string;
+            /** Universe */
+            universe?: string[] | null;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+            /** Seed */
+            seed?: number | null;
         };
         /**
          * StrategyDetail
@@ -1161,6 +1519,30 @@ export interface components {
             last_run_status: string | null;
             /** Last Run At */
             last_run_at: string | null;
+        };
+        /**
+         * TransferOut
+         * @description How the candidate travelled across its family, and why that was or was not enough.
+         */
+        TransferOut: {
+            /** Family */
+            family: string;
+            /** Home Sharpe */
+            home_sharpe: number;
+            /** Median Sibling Sharpe */
+            median_sibling_sharpe: number;
+            /** Median Control Sharpe */
+            median_control_sharpe: number;
+            /** Members */
+            members: number;
+            /** Negative Members */
+            negative_members: number;
+            /** Beats Controls */
+            beats_controls: boolean;
+            /** Survives */
+            survives: boolean;
+            /** Failures */
+            failures: string[];
         };
         /**
          * ValidateRequest
@@ -2096,6 +2478,200 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SeriesPoints"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sessions_api_v1_prospect_sessions_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_session_api_v1_prospect_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_api_v1_prospect_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_stop_api_v1_prospect_sessions__session_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_candidates_api_v1_prospect_candidates_get: {
+        parameters: {
+            query?: {
+                session_id?: string | null;
+                ticker?: string | null;
+                survivors_only?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_candidate_api_v1_prospect_candidates__candidate_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateDetailOut"];
                 };
             };
             /** @description Validation Error */

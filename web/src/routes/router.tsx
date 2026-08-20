@@ -8,6 +8,8 @@ import { ConfigTab } from '../features/config/ConfigTab'
 import { ChartsTab } from '../features/charts/ChartsTab'
 import { HistoryTab } from '../features/history/HistoryTab'
 import { GlossaryPage } from '../features/glossary/GlossaryPage'
+import { ProspectPage } from '../features/prospect/ProspectPage'
+import { SessionPage } from '../features/prospect/SessionPage'
 
 /**
  * Routes.
@@ -24,6 +26,8 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate replace to="/strategies" /> },
       { path: 'strategies', Component: StrategyListPage },
       { path: 'glossary', Component: GlossaryPage },
+      { path: 'prospect', Component: ProspectPage },
+      { path: 'prospect/:sessionId', Component: SessionPage },
       {
         path: 'strategies/:strategyId',
         Component: StrategyLayout,

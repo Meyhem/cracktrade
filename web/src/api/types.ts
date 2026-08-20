@@ -37,6 +37,30 @@ export type PromotedStrategy = Schemas['PromotedStrategy']
 export type SeriesCatalog = Schemas['SeriesCatalog']
 export type SeriesPoints = Schemas['SeriesPoints']
 
+export type ProspectSession = Schemas['SessionOut']
+export type ProspectSessionList = Schemas['SessionList']
+export type ProspectCandidate = Schemas['CandidateOut']
+export type ProspectCandidateDetail = Schemas['CandidateDetailOut']
+export type ProspectCandidateList = Schemas['CandidateList']
+export type ForwardScore = Schemas['ForwardScoreOut']
+export type SelectedOn = Schemas['SelectedOn']
+export type TransferResult = Schemas['TransferOut']
+
+/**
+ * What a sweep can be.
+ *
+ * Three states, not five. A session is never queued — it runs the moment it is created — and
+ * never *succeeded*, because a search with no end has nothing to succeed at. `stopped` is what
+ * a session that did its job looks like.
+ */
+export const PROSPECT_STATUSES = ['running', 'stopped', 'failed'] as const
+export type ProspectStatus = (typeof PROSPECT_STATUSES)[number]
+
+export type ProspectSessionRow = Omit<ProspectSession, 'status' | 'params'> & {
+  status: ProspectStatus
+  params: Record<string, unknown>
+}
+
 export type ValidateResponse = Schemas['ValidateResponse']
 export type GenerateConfigResponse = Schemas['GenerateConfigResponse']
 export type ConfigDiffResponse = Schemas['ConfigDiffResponse']

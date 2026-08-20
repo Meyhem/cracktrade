@@ -23,7 +23,7 @@ from cracktrade.api.errors import ApiError, InvariantViolationError, ValidationF
 from cracktrade.api.events import sse
 from cracktrade.api.middleware import HEADER as REQUEST_ID_HEADER
 from cracktrade.api.middleware import RequestContext, request_id
-from cracktrade.api.routes import authoring, meta, runs, strategies, versions
+from cracktrade.api.routes import authoring, meta, prospect, runs, strategies, versions
 from cracktrade.api.settings import ApiSettings, load_api_settings
 from cracktrade.log import get_logger
 
@@ -112,5 +112,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(authoring.router, prefix=API_PREFIX)
     app.include_router(versions.router, prefix=API_PREFIX)
     app.include_router(runs.router, prefix=API_PREFIX)
+    app.include_router(prospect.router, prefix=API_PREFIX)
     app.include_router(sse.router, prefix=API_PREFIX)
     return app

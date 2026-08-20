@@ -481,3 +481,71 @@ def test_a_forward_score_covers_only_the_bars_after_discovery() -> None:
     assert score.last_bar == data.index[-1].date()
     assert score.bars == len(data) - len(data) // 2 - 1
     assert score.trades >= 0
+
+
+# --------------------------------------------------------------------------- degenerate figures
+
+
+def test_a_sibling_with_no_usable_sharpe_is_a_failure_not_a_measurement() -> None:
+    """Measured on a real sweep, 2026-08-20.
+
+    A Sharpe is a mean over a standard deviation, so a sibling whose returns have no spread
+    produces an infinity rather than a figure. The median of two values is their mean, so one
+    infinity carries the whole median to infinity -- and both halves of the rejection rule then
+    answer a question about a degenerate statistic instead of about the candidate.
+
+    On the real sweep it was a *control* (AMD's TLT, seven trades), which pushed the control
+    median to infinity and rejected the candidate. That direction is harmless. The same
+    arithmetic on a member would carry the sibling median to infinity and let the candidate
+    through on a number that means nothing, which is the direction this test exists for.
+    """
+    report = TransferReport(
+        home="AMD",
+        family="semiconductors",
+        home_sharpe=1.2,
+        results=(
+            a_sibling("MU", float("inf")),
+            a_sibling("INTC", -0.4),
+            a_sibling("GLD", -1.1, is_control=True),
+        ),
+    )
+
+    assert report.median_sibling_sharpe == -0.4
+    assert not report.survives
+
+
+def test_every_sibling_being_degenerate_is_not_a_pass() -> None:
+    """Zero, not infinity -- and zero does not clear the floor, which is a strict inequality."""
+    report = TransferReport(
+        home="AMD",
+        family="semiconductors",
+        home_sharpe=1.2,
+        results=(a_sibling("MU", float("inf")), a_sibling("INTC", float("nan"))),
+    )
+
+    assert report.median_sibling_sharpe == 0.0
+    assert not report.survives
+
+
+# --------------------------------------------------------------------------- the rotation
+
+
+def test_a_second_pass_does_not_replay_the_first() -> None:
+    """The defect a real sweep exposed on 2026-08-20: with the seed taken from the cursor
+    index, every lap re-ran the previous lap's searches and stored bit-identical candidates.
+    Nine ticks over five tickers produced four exact duplicates."""
+    rotation = Rotation(("AMD", "NVDA", "SOXL"))
+    ordinals = []
+    for _ in range(7):
+        ordinals.append(rotation.ordinal)
+        rotation = rotation.advance()
+
+    assert ordinals == [0, 1, 2, 3, 4, 5, 6]
+    assert len(set(ordinals)) == len(ordinals)
+
+
+def test_a_ticks_ordinal_is_a_pure_function_of_the_cursor() -> None:
+    """Which is what keeps a tick reproducible after a resume: the session stores two integers
+    and the ordinal follows from them, so the same position always gets the same search."""
+    assert Rotation(("AMD", "NVDA"), index=1, passes=3).ordinal == 7
+    assert Rotation(("AMD", "NVDA"), index=1, passes=3).ordinal == 7

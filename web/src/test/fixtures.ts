@@ -202,3 +202,71 @@ export function run(overrides: Partial<Run> = {}): Run {
     ...overrides,
   }
 }
+
+/** A prospecting session, mid-sweep. */
+export function sweep(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '55555555-5555-5555-5555-555555555555',
+    name: 'overnight semis',
+    status: 'running',
+    universe: ['AMD', 'NVDA', 'SOXL', 'MU'],
+    params: { interval: '1h', population: 30, generations: 10 },
+    seed: 42,
+    current_ticker: 'SOXL',
+    cursor_index: 2,
+    passes_completed: 1,
+    ticks_completed: 6,
+    ticks_failed: 1,
+    candidates: 6,
+    survivors: 2,
+    created_at: '2026-08-20T19:45:44Z',
+    stopped_at: null,
+    claimed_by: 'host:1234',
+    heartbeat_at: '2026-08-20T20:01:00Z',
+    stop_requested: false,
+    error: null,
+    ...overrides,
+  }
+}
+
+/**
+ * A candidate as the leaderboard receives one.
+ *
+ * The holdout figures are large and the transfer figure is small, deliberately: that is the
+ * shape a real candidate has, and it is what the screen has to stop a reader misreading.
+ */
+export function candidate(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '66666666-6666-6666-6666-666666666666',
+    session_id: '55555555-5555-5555-5555-555555555555',
+    ticker: 'MU',
+    discovered_at: '2026-08-20T19:58:00Z',
+    last_bar_seen: '2026-08-19',
+    seed: 45,
+    composition: 'entry: momentum_below_level & zscore_below_level; exit: trailing stop 21.20',
+    blocks: ['momentum_below_level', 'zscore_below_level'],
+    strategy_yaml: 'strategy:\n  name: found_mu\n',
+    survived_transfer: true,
+    selected_on: {
+      holdout_return_pct: 23.9,
+      holdout_sharpe: 1.24,
+      holdout_trades: 18,
+      median_segment_return_pct: 11.5,
+      distinct_configurations: 302,
+    },
+    transfer: {
+      family: 'semiconductors',
+      home_sharpe: 1.31,
+      median_sibling_sharpe: 0.46,
+      median_control_sharpe: -1.32,
+      members: 7,
+      negative_members: 2,
+      beats_controls: true,
+      survives: true,
+      failures: [],
+    },
+    forward: null,
+    forward_scores: 0,
+    ...overrides,
+  }
+}

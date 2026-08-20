@@ -122,9 +122,10 @@ def tick(
                 max_filled_fraction=resolved.max_filled_fraction,
             ),
             settings=sweep_settings(params),
-            # Derived from the session's seed and the ticker, so a tick is reproducible and two
-            # tickers in one pass are not handed the same search.
-            seed=session.seed + rotation.index,
+            # The session's seed plus the tick's ordinal across the whole sweep -- not its
+            # position in the universe, which repeats every lap and would make each pass a
+            # bit-identical replay of the one before it.
+            seed=session.seed + rotation.ordinal,
             workers=resolved.workers,
             objective_name=params.objective,
             trade_floor=TradeFloor(minimum=params.min_trades, per_year=params.min_trades_per_year),

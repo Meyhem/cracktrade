@@ -56,6 +56,10 @@ export function renderWithProviders(
 
   const router = createMemoryRouter(
     [
+      // Param-carrying paths come first: a screen that reads `useParams` gets nothing from
+      // the catch-all, and the failure looks like an unmatched request rather than a route
+      // that never bound its parameter.
+      { path: '/prospect/:sessionId', element: <Wrapper>{ui}</Wrapper> },
       { path: '*', element: <Wrapper>{ui}</Wrapper> },
       { path: '/strategies/:id', element: <div>strategy detail</div> },
     ],

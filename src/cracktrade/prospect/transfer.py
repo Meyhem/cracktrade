@@ -28,6 +28,7 @@ particular kind of evidence against.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from statistics import median
@@ -147,10 +148,22 @@ class TransferReport:
 
 
 def _median_sharpe(results: tuple[SiblingResult, ...]) -> float:
-    """Median Sharpe over ``results``, or zero when the sequence is empty."""
-    if not results:
+    """Median Sharpe over ``results``, or zero when the sequence is empty.
+
+    Non-finite values are dropped, as defence in depth: nothing should reach here carrying one,
+    because :func:`transfer_report` records such a sibling as a failure instead. But the median
+    of two values is their mean, so a single infinity is enough to make the whole figure
+    infinite -- and the two comparisons in :attr:`TransferReport.survives` would then be
+    answering a question about a degenerate statistic rather than about the candidate. Measured
+    on a real sweep 2026-08-20: an AMD candidate's TLT control produced an infinite Sharpe over
+    seven trades, which carried the control median to infinity and rejected the candidate.
+    Rejection was the harmless direction; the same arithmetic on a *member* would have carried
+    the sibling median to infinity and passed the candidate on a statistic that means nothing.
+    """
+    finite = [result.sharpe for result in results if math.isfinite(result.sharpe)]
+    if not finite:
         return 0.0
-    return float(median(r.sharpe for r in results))
+    return float(median(finite))
 
 
 def retarget(strategy: Strategy, ticker: str) -> Strategy:
@@ -197,6 +210,14 @@ def transfer_report(
         scored = _score(strategy, ticker, data_for, seed=seed)
         if scored is None:
             failures.append(ticker)
+            continue
+        if not math.isfinite(scored.sharpe):
+            # A Sharpe is a mean divided by a standard deviation, so a run whose returns have
+            # no spread -- a handful of trades, or none -- produces an infinity rather than a
+            # measurement. Recorded as a failure, which is what it is: this sibling did not
+            # answer the question. Averaging it in would let one degenerate instrument decide
+            # a verdict about eight.
+            failures.append(f"{ticker} (no usable Sharpe over {scored.total_trades} trades)")
             continue
         results.append(
             SiblingResult(

@@ -19,6 +19,18 @@ export type StrategyListFilters = {
   verdict?: string
 }
 
+export type ProspectSessionFilters = {
+  status?: string
+  limit?: number
+}
+
+export type ProspectCandidateFilters = {
+  sessionId?: string
+  ticker?: string
+  survivorsOnly?: boolean
+  limit?: number
+}
+
 export const queryKeys = {
   meta: ['meta'] as const,
   health: ['health'] as const,
@@ -47,6 +59,15 @@ export const queryKeys = {
     seriesCatalog: (runId: string) => ['runs', 'series', runId] as const,
     series: (runId: string, name: string, fold: number) =>
       ['runs', 'series', runId, name, fold] as const,
+  },
+
+  prospect: {
+    all: ['prospect'] as const,
+    sessions: (filters: ProspectSessionFilters = {}) => ['prospect', 'sessions', filters] as const,
+    session: (id: string) => ['prospect', 'session', id] as const,
+    candidates: (filters: ProspectCandidateFilters = {}) =>
+      ['prospect', 'candidates', filters] as const,
+    candidate: (id: string) => ['prospect', 'candidate', id] as const,
   },
 
   /**

@@ -200,6 +200,22 @@ class Rotation:
         """The ticker to prospect next."""
         return self.universe[self.index]
 
+    @property
+    def ordinal(self) -> int:
+        """How many ticks this sweep has run before this one.
+
+        What a tick's seed is derived from, and it must be this rather than :attr:`index`.
+        Deriving from the index alone makes the seed repeat every lap, so the second pass
+        re-runs the first pass's searches exactly and stores bit-identical candidates -- which
+        is the whole value of leaving a sweep running overnight, spent on rediscovering what it
+        already knew. Measured on a real sweep 2026-08-20: nine ticks over five tickers
+        produced four exact duplicates.
+
+        The ordinal is unique across the whole sweep and is a pure function of the cursor, so a
+        tick stays exactly reproducible from the session's seed and its position.
+        """
+        return self.passes * len(self.universe) + self.index
+
     def advance(self) -> Rotation:
         """The rotation after prospecting :attr:`current`."""
         following = self.index + 1

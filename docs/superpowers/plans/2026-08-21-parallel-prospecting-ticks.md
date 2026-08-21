@@ -124,7 +124,7 @@ uv run python "/tmp/claude-1000/-home-meyhem-dev-cracktrade/bb629d42-d9d3-43f0-a
 
 Expected: four timing lines and a `deterministic:` line.
 
-- [ ] **Step 3: If `deterministic: False`, pin thread counts and re-run**
+- [ ] **Step 3: If `deterministic: False`, pin thread counts and re-run** *(not needed — it came back True)*
 
 Add to the top of `one_tick`, before the import of anything numeric takes effect — set the environment in the child initializer instead if this does not take:
 
@@ -1117,7 +1117,7 @@ Then delete `sweep_settings` from `api/worker/prospect.py` and update its one ca
 `test_the_search_size_comes_from_the_sessions_frozen_question` in
 `tests/api/test_prospect_worker.py` to call `params.ga_settings()`.
 
-If Task 1 found determinism required pinned threads, add a pool initializer here that sets `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`/`MKL_NUM_THREADS` to `1`, and reference Task 1's measurement in its docstring.
+Task 1 measured determinism as intact at P=4 and P=12 with threads left unpinned, so **no pool initializer and no `threadpoolctl` dependency**. Do not add thread pinning speculatively; Task 8 is what would catch it if that ever changes.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -1160,13 +1160,13 @@ In `src/cracktrade/api/settings.py`, after `worker_poll_seconds`:
     #: ``docs/superpowers/specs/2026-08-21-prospecting-parallelism-design.md`` section 8. A tick
     #: is single-core by construction -- the GA pool inside it is deliberately not used, because
     #: nesting one would oversubscribe the machine by this factor.
-    prospect_parallelism: int = Field(default=8, ge=1)
+    prospect_parallelism: int = Field(default=12, ge=1)
 
     #: How long the parent may reuse a fetched history before fetching it again.
     prospect_prefetch_ttl_seconds: float = Field(default=60.0, gt=0)
 ```
 
-Set the `prospect_parallelism` default to the value Task 1 measured, not to 8 if the measurement disagrees.
+12 is Task 1's measured knee: wall time is flat from P=4 to P=12 and climbs steeply after, because the box has 16 physical cores behind its 32 threads. See section 8 of the design document for the full curve.
 
 - [ ] **Step 2: Write the failing tests**
 

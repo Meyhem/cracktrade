@@ -193,26 +193,59 @@ process boundary unchanged. The `causality` suite and the truncation-equivalence
 green without modification, and the repo test asserting no other module calls `.shift` still
 applies.
 
-## 8. Open questions the measurement settles
+## 8. Measured 2026-08-21
 
-Before implementation, run N concurrent single-tick processes at N = 1, 4, 8, 16 and record wall
-time per tick.
+Run on the target machine: AMD Ryzen 9 9950X, **16 physical cores with SMT for 32 threads**,
+123 GB RAM. N concurrent single-tick processes, population 50 x 10 generations over 700 daily
+bars, `StaticProvider` so no network variance enters the numbers.
+
+| P | wall for P ticks | per-tick | throughput vs P=1 | efficiency |
+| --- | --- | --- | --- | --- |
+| 1 | 16.4s | 16.36s | 1.00x | 100% |
+| 4 | 23.0s | 5.76s | 2.84x | 71% |
+| 8 | 24.0s | 3.00s | 5.45x | 68% |
+| **12** | **24.3s** | **2.02s** | **8.10x** | **67%** |
+| 16 | 28.6s | 1.79s | 9.14x | 57% |
+| 24 | 34.6s | 1.44s | 11.36x | 47% |
+| 32 | 41.0s | 1.28s | 12.78x | 40% |
+
+**`DEFAULT_PARALLELISM = 12`**, and the curve says why rather than the core count. Wall time is
+nearly flat from P=4 to P=12 -- twelve ticks cost 1.3 seconds more than four -- and then climbs
+steeply. Marginal throughput per added process is 0.66 up to P=12 and 0.26 immediately after it,
+a 60% drop at one step. The knee sits just below the 16 physical cores, which is what it should
+do: the parent, its heartbeat thread, the prefetch threads and Postgres all need somewhere to
+run, and past 16 the only capacity left is SMT siblings sharing an execution unit with work
+already in flight.
+
+Twelve is not a ceiling anyone must respect -- 32 still delivers 12.8x -- but it buys 63% of the
+best throughput on the box for 37% of it, and leaves the machine responsive for the runs that
+have priority over the sweep.
+
+**Against the real baseline.** Recorded sessions ran 22.2s per tick serially. At 8.10x that is
+2.7s effective: a 12-ticker pass falls from 4.4 minutes to about 33 seconds, and the 58-minute
+session that produced 156 ticks becomes roughly 7 minutes.
+
+### Determinism survives, and no thread pinning is needed
+
+Twelve ticks run through a P=1 pool and through a P=12 pool produced **bit-identical**
+`strategy_yaml` for every seed. The same held at P=4. BLAS and numba thread counts are left
+unpinned exactly as `parallel.py` leaves them, and `threadpoolctl` does **not** become a
+dependency.
+
+This is the probe's result, not a substitute for Task 8's test. Section 7's requirement stands:
+the property must be pinned by a test in the suite, because a library upgrade is exactly the
+kind of thing that would break it silently.
+
+### Still open
 
 1. **What TTL does the prefetch horizon need?** Long enough that consecutive ordinals in a family
    reuse their fetches, short enough that no search runs against visibly stale bars. The default
    of 60s is a starting point, not a measurement.
-2. **Does throughput scale?** 10-12x is extrapolated from single-process timings. Twelve
-   concurrent numba/vectorbt processes may contend on memory bandwidth in a way one process never
-   shows. If the answer is 5x, P is 6, not 12, and nothing else in this design changes.
-3. **Does determinism survive?** BLAS and numba thread counts are deliberately unpinned;
-   `parallel.py` records that pinning was perf-neutral but determinism was never checked. If
-   bit-identity fails at P>1, `threadpoolctl` becomes a dependency and pinning becomes part of the
-   child initializer.
-4. **What is the search/transfer split within a tick?** Not isolated. It decides whether
+2. **What is the search/transfer split within a tick?** Not isolated. It decides whether
    parallelizing the sibling loop is worth anything on top, which this design otherwise leaves
    alone.
 
-Memory is not expected to bind: ~0.5 GB per vectorbt process against 115 GB free.
+Memory did not bind and was never close to binding.
 
 ## 9. What this design deliberately does not do
 

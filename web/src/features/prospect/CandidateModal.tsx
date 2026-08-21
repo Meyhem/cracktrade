@@ -141,10 +141,17 @@ function CandidateBody({ candidateId }: { candidateId: string }) {
                     {dateOnly(score.first_bar)} → {dateOnly(score.last_bar)}
                   </Table.Td>
                   <Table.Td ta="right">{score.bars}</Table.Td>
-                  <Table.Td c={score.return_pct > 0 ? 'teal' : 'red'} ta="right">
+                  {/* A window without trades is flat because nothing happened, not because a
+                      trade lost nothing. Colouring it red would report a loss that was never
+                      taken. */}
+                  <Table.Td c={idleReturnColour(score)} ta="right">
                     {percent(score.return_pct, { signed: true })}
                   </Table.Td>
-                  <Table.Td ta="right">{ratio(score.sharpe)}</Table.Td>
+                  {/* `ratio` renders null as "n/a": no trades means no return variance, so the
+                      Sharpe is undefined rather than zero or infinite. */}
+                  <Table.Td c={score.sharpe === null ? 'dimmed' : 'inherit'} ta="right">
+                    {ratio(score.sharpe)}
+                  </Table.Td>
                   <Table.Td ta="right">{score.trades}</Table.Td>
                 </Table.Tr>
               ))}
@@ -200,6 +207,17 @@ function CandidateBody({ candidateId }: { candidateId: string }) {
       </div>
     </Stack>
   )
+}
+
+/** Colour for a forward window's return.
+ *
+ * A window in which the candidate never traded is flat because nothing happened. Red would
+ * report a loss it did not take, and green would credit it with holding its ground on purpose;
+ * neither is what the row measured.
+ */
+function idleReturnColour(score: { return_pct: number; trades: number }): string {
+  if (score.trades === 0) return 'dimmed'
+  return score.return_pct > 0 ? 'teal' : 'red'
 }
 
 function rejectionReason(transfer: {

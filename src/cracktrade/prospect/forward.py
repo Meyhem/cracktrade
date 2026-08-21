@@ -14,10 +14,16 @@ Two refusals, both deliberate, and both preferring "not yet" to a number:
 * **A window without a full warm-up prefix is not scored either.** The indicators would be
   cold, the strategy would trade differently than it does, and the resulting figure would be a
   measurement of the truncation rather than of the candidate.
+
+And one figure withheld rather than the whole score: a Sharpe over a window the candidate never
+traded is ``+Infinity``, not a number, and it would sort and read as the best result on the
+board. The window is still reported -- the return and the trade count are honest measurements
+of a strategy that sat out -- but the ratio is ``None``.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 
@@ -49,7 +55,9 @@ class ForwardScore:
         last_bar: last scored bar.
         bars: how many bars the figures cover, so a result from thirty-one is visible as such.
         return_pct: total return over the window.
-        sharpe: annualised Sharpe over the window.
+        sharpe: annualised Sharpe over the window, or ``None`` where it is undefined --
+            a window without trades has no return variance to divide by. Distinct from a
+            Sharpe of zero, and distinct again from the absence of a score.
         trades: closed trades in the window.
     """
 
@@ -57,7 +65,7 @@ class ForwardScore:
     last_bar: date
     bars: int
     return_pct: float
-    sharpe: float
+    sharpe: float | None
     trades: int
 
 
@@ -126,7 +134,7 @@ def forward_score(
         last_bar=index[-1].date(),
         bars=scored,
         return_pct=metrics.total_return_pct,
-        sharpe=metrics.sharpe_ratio,
+        sharpe=metrics.sharpe_ratio if math.isfinite(metrics.sharpe_ratio) else None,
         trades=metrics.total_trades,
     )
 

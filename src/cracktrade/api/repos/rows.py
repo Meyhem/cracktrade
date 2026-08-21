@@ -289,7 +289,9 @@ class ProspectForwardScoreRow:
     last_bar: date
     bars: int
     return_pct: float
-    sharpe: float
+    #: ``None`` where the ratio is undefined -- a window without trades has no return variance
+    #: to divide by. Not the same fact as a zero, nor as the absence of a score.
+    sharpe: float | None
     trades: int
 
 

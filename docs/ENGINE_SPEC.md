@@ -3493,6 +3493,32 @@ candidate that was measured and found flat. The scored window carries its warm-u
 excludes it from every statistic, exactly as §9.4's test window does, so a forward figure cannot
 report a return earned by a trade its own trade count does not contain.
 
+**An undefined forward Sharpe is withheld; the rest of the window is not — decided 2026-08-21.**
+A candidate that made no trades over its forward window has no return variance, so its Sharpe is
+`+inf` rather than a number. Stored, it renders as the best figure on the leaderboard, earned by a
+strategy that sat out — the exact inversion this section exists to prevent, on the one rung whose
+evidence the search could not influence.
+
+This is §19.4's degenerate-Sharpe defect one rung up, and it does *not* get §19.4's remedy. There
+the infinity was excluded from a median, because the aggregate had other members to stand on. Here
+there is no aggregate, and the measurement is real: the window elapsed, the return is honestly
+0.00%, the trade count is honestly zero. Only the ratio is undefined. So the score is recorded with
+a **null Sharpe**, and the column is nullable to hold it.
+
+Three states, three representations, and they must not collapse into each other:
+
+| State | Representation | Means |
+| --- | --- | --- |
+| not scored yet | no row | too few bars, or no warm-up — the candidate is still due |
+| scored, no trades | row with null Sharpe | measured; the strategy did nothing |
+| scored, traded | row with a Sharpe | measured; this is the figure |
+
+The refusal lives in the library, not in a database constraint. A `CHECK (isfinite(sharpe))` would
+reject the whole write, costing the sweep an honest return and trade count to be rid of one
+meaningless ratio, and turning a routine measurement into a worker error. Any non-finite ratio —
+`nan` as well as either infinity — becomes null before it reaches the table. A client renders null
+as "not applicable", never as zero.
+
 Forward scoring is attempted **one candidate at a time, between ticks**, taking the never-scored
 first and then the stalest, and only for candidates that survived transfer. A candidate that
 failed transfer will not be ranked, so scoring it would spend the sweep's compute on a row nobody

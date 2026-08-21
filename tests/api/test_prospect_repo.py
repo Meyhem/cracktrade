@@ -337,6 +337,38 @@ def test_the_leaderboard_filters_by_ticker(db: psycopg.Connection[TupleRow]) -> 
 # --------------------------------------------------------------------------- forward scores
 
 
+def test_a_forward_score_can_record_an_undefined_sharpe(db: psycopg.Connection[TupleRow]) -> None:
+    """Section 19.3: a window the candidate never traded has no Sharpe, and the column takes a
+    NULL rather than the ``+inf`` the metric would otherwise carry.
+
+    The return and the trade count are still recorded: the measurement happened, and "it stopped
+    trading" is forward evidence worth showing. Only the ratio is missing.
+    """
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    candidate_id = _candidate(db, session_id)
+
+    stored = repo.append_forward_score(
+        candidate_id=candidate_id,
+        first_bar=date(2026, 8, 20),
+        last_bar=date(2026, 8, 29),
+        bars=70,
+        return_pct=0.0,
+        sharpe=None,
+        trades=0,
+    )
+    db.commit()
+
+    assert stored.sharpe is None
+    assert stored.return_pct == 0.0
+    assert stored.trades == 0
+
+    # And it reaches the leaderboard as a scored candidate, not an unscored one.
+    board = repo.leaderboard(session_id=session_id)
+    assert board[0].forward is not None
+    assert board[0].forward.sharpe is None
+
+
 def test_forward_scores_accumulate_as_a_series(db: psycopg.Connection[TupleRow]) -> None:
     repo = ProspectRepo(db)
     session_id = _session(db)

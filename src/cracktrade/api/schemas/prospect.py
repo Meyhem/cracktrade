@@ -107,7 +107,10 @@ class ForwardScoreOut(BaseModel):
     last_bar: date
     bars: int
     return_pct: float
-    sharpe: float
+    #: ``None`` where the ratio is undefined: the candidate did not trade over this window, so
+    #: there is no return variance to divide by. A client renders it as "not applicable", never
+    #: as zero and never as a missing score -- the window itself was measured.
+    sharpe: float | None
     trades: int
 
     @classmethod

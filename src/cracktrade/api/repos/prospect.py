@@ -524,7 +524,7 @@ class ProspectRepo(Repository):
         last_bar: date,
         bars: int,
         return_pct: float,
-        sharpe: float,
+        sharpe: float | None,
         trades: int,
     ) -> ProspectForwardScoreRow:
         """Append one measurement on bars the candidate was never shown.

@@ -107,6 +107,31 @@ describe('CandidateModal', () => {
     expect(screen.getByText('-1.2%')).toBeInTheDocument()
   })
 
+  it('reports an untraded forward window as n/a, never as a Sharpe', async () => {
+    // A window with no trades has no return variance, so the engine sends a null rather than
+    // the +Infinity the ratio would otherwise be. Rendered as a number it would be the best
+    // figure on the board, earned by a strategy that did nothing.
+    open({
+      forward_history: [
+        {
+          scored_at: '2026-08-27T00:00:00Z',
+          first_bar: '2026-08-20',
+          last_bar: '2026-08-26',
+          bars: 147,
+          return_pct: 0.0,
+          sharpe: null,
+          trades: 0,
+        },
+      ],
+    })
+
+    expect(await screen.findByText('n/a')).toBeInTheDocument()
+    // The window itself was measured, so its bars and flat return are still shown. Flat is
+    // unsigned: there is no gain to mark, and '+0.0%' would read as one.
+    expect(screen.getByText('147')).toBeInTheDocument()
+    expect(screen.getByText('0.0%')).toBeInTheDocument()
+  })
+
   it('names the siblings that could not be measured at all', async () => {
     open({
       transfer: {

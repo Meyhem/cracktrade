@@ -897,7 +897,7 @@ export interface components {
             /** Return Pct */
             return_pct: number;
             /** Sharpe */
-            sharpe: number;
+            sharpe: number | null;
             /** Trades */
             trades: number;
         };

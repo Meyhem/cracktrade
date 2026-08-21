@@ -14,6 +14,7 @@ Two things carry this package and each has tests here.
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import UTC, date, datetime
 
@@ -46,6 +47,7 @@ from cracktrade.prospect import (
     retarget,
     transfer_report,
 )
+from cracktrade.strategy import build_strategy
 from tests.factories import make_ohlcv
 
 BARS = 900
@@ -72,6 +74,29 @@ def a_chassis(ticker: str = "AMD") -> Chassis:
 def a_strategy(ticker: str = "AMD", *, seed: int = 7) -> Strategy:
     """An evolved strategy, which is what a candidate actually is by the time it reaches here."""
     return render(random_genome(random.Random(seed)), a_chassis(ticker))
+
+
+def a_strategy_that_never_trades(ticker: str = "AMD") -> Strategy:
+    """A strategy whose entry cannot fire, which is what a rarely-trading candidate looks like
+    over a short forward window."""
+    return build_strategy(
+        {
+            "strategy": {"name": "inert"},
+            "universe": {
+                "ticker": ticker,
+                "start_date": "2016-01-01",
+                "end_date": "2020-01-01",
+            },
+            "execution": {
+                "initial_capital": 10_000.0,
+                "slippage_pct": 0.0,
+                "commission_pct": 0.0,
+            },
+            "indicators": [{"name": "fast", "type": "sma", "window": 5}],
+            "entry": {"signal": "close < 0"},
+            "exit": {"signal": "close < 0"},
+        }
+    )
 
 
 def a_sibling(ticker: str, sharpe: float, *, is_control: bool = False) -> SiblingResult:
@@ -484,6 +509,44 @@ def test_a_forward_score_covers_only_the_bars_after_discovery() -> None:
 
 
 # --------------------------------------------------------------------------- degenerate figures
+
+
+def test_a_forward_window_without_trades_reports_no_sharpe_rather_than_infinity() -> None:
+    """Measured on a real sweep, 2026-08-21.
+
+    A Sharpe is a mean over a standard deviation, so a window in which the candidate never
+    traded has no spread to divide by and ``extract_metrics`` returns ``+inf``. Postgres stores
+    it, the API serialises it, and the leaderboard then shows an infinite Sharpe beside a
+    strategy that did nothing at all -- the best-looking figure on the board earned by sitting
+    out. Section 19.3.
+
+    The window is still reported. A candidate that stopped trading is a real and useful forward
+    result; only the ratio is undefined.
+    """
+    data = a_market("AMD")
+    strategy = a_strategy_that_never_trades()
+    discovered = data.index[len(data) // 2].date()
+
+    score = forward_score(strategy, data, since=discovered, warmup=30)
+
+    assert score is not None
+    assert score.trades == 0
+    assert score.sharpe is None
+    assert score.bars >= MIN_FORWARD_BARS
+
+
+def test_a_forward_sharpe_that_is_a_number_is_kept() -> None:
+    """The refusal above must not swallow ordinary results."""
+    data = a_market("AMD")
+    strategy = a_strategy("AMD")
+    discovered = data.index[len(data) // 2].date()
+
+    score = forward_score(strategy, data, since=discovered, warmup=30)
+
+    assert score is not None
+    if score.trades > 0:
+        assert score.sharpe is not None
+        assert math.isfinite(score.sharpe)
 
 
 def test_a_sibling_with_no_usable_sharpe_is_a_failure_not_a_measurement() -> None:

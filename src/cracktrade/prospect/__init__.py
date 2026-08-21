@@ -35,6 +35,11 @@ from cracktrade.prospect.families import (
     is_inverse,
 )
 from cracktrade.prospect.forward import MIN_FORWARD_BARS, ForwardScore, forward_score
+from cracktrade.prospect.prefetch import (
+    DEFAULT_MAX_THREADS,
+    DEFAULT_TTL_SECONDS,
+    PrefetchHorizon,
+)
 from cracktrade.prospect.session import (
     DAILY_LOOKBACK_DAYS,
     WARMUP_MARGIN,
@@ -59,6 +64,8 @@ from cracktrade.prospect.transfer import (
 
 __all__ = [
     "DAILY_LOOKBACK_DAYS",
+    "DEFAULT_MAX_THREADS",
+    "DEFAULT_TTL_SECONDS",
     "DEFAULT_UNIVERSE",
     "FAMILIES",
     "INVERSE_BUCKET",
@@ -70,6 +77,7 @@ __all__ = [
     "DataFor",
     "Family",
     "ForwardScore",
+    "PrefetchHorizon",
     "Reservation",
     "Rotation",
     "SiblingResult",

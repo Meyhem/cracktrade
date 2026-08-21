@@ -642,3 +642,49 @@ def test_a_ticks_ordinal_is_a_pure_function_of_the_cursor() -> None:
     and the ordinal follows from them, so the same position always gets the same search."""
     assert Rotation(("AMD", "NVDA"), index=1, passes=3).ordinal == 7
     assert Rotation(("AMD", "NVDA"), index=1, passes=3).ordinal == 7
+
+
+def test_a_reservation_hands_out_consecutive_ordinals() -> None:
+    rotation = Rotation(("AMD", "NVDA", "SOXL"))
+
+    reserved, after = rotation.reserve(2)
+
+    assert [(r.ticker, r.ordinal) for r in reserved] == [("AMD", 0), ("NVDA", 1)]
+    assert (after.index, after.passes) == (2, 0)
+
+
+def test_a_reservation_wraps_the_universe_and_counts_the_pass() -> None:
+    rotation = Rotation(("AMD", "NVDA", "SOXL"), index=2)
+
+    reserved, after = rotation.reserve(3)
+
+    assert [(r.ticker, r.ordinal) for r in reserved] == [("SOXL", 2), ("AMD", 3), ("NVDA", 4)]
+    assert (after.index, after.passes) == (2, 1)
+
+
+def test_every_reserved_ordinal_is_distinct_across_two_passes() -> None:
+    """The ordinal is what a tick's seed derives from, so a repeat inside one reservation would
+    hand two concurrent ticks the same search -- the 2026-08-20 duplicate defect, but within a
+    single pool rather than across laps."""
+    reserved, _ = Rotation(("AMD", "NVDA")).reserve(4)
+
+    assert [r.ordinal for r in reserved] == [0, 1, 2, 3]
+    assert len({r.ordinal for r in reserved}) == 4
+
+
+def test_a_reservation_leaves_the_rotation_where_a_walk_would_have() -> None:
+    """Reserving N and advancing N times must agree, because both are used: the pool reserves,
+    and Rotation.advance is what every existing caller and the spec describe."""
+    start = Rotation(("AMD", "NVDA", "SOXL"), index=1, passes=2)
+
+    _, reserved_to = start.reserve(5)
+    walked = start
+    for _ in range(5):
+        walked = walked.advance()
+
+    assert reserved_to == walked
+
+
+def test_a_reservation_of_nothing_is_refused() -> None:
+    with pytest.raises(ValueError, match="positive count"):
+        Rotation(("AMD",)).reserve(0)

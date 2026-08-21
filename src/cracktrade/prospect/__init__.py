@@ -44,6 +44,7 @@ from cracktrade.prospect.session import (
 from cracktrade.prospect.sweep import (
     PROSPECT_SETTINGS,
     Candidate,
+    Reservation,
     Rotation,
     prospect_once,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "DataFor",
     "Family",
     "ForwardScore",
+    "Reservation",
     "Rotation",
     "SiblingResult",
     "SweepHistory",

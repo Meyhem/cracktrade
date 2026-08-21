@@ -166,6 +166,28 @@ def prospect_once(
 
 
 @dataclass(frozen=True, slots=True)
+class Reservation:
+    """One tick's claim on a position in the sweep.
+
+    Handed out *before* the search runs (section 19.7). That ordering is what lets several ticks
+    be in flight at once: the cursor advance becomes one cheap statement taken up front, rather
+    than something a multi-minute search has to hold a transaction open across.
+
+    The ordinal is what the tick's seed derives from, so it has to survive the round trip through
+    the database unchanged -- two ticks holding the same ordinal would run the same search twice
+    and store it twice, which is the duplicate-candidate defect a real sweep exposed on
+    2026-08-20, reappearing inside one pool rather than across laps.
+
+    Attributes:
+        ticker: the instrument to prospect.
+        ordinal: this tick's position across the whole sweep.
+    """
+
+    ticker: str
+    ordinal: int
+
+
+@dataclass(frozen=True, slots=True)
 class Rotation:
     """Where a sweep has got to in its universe.
 
@@ -223,10 +245,37 @@ class Rotation:
             return Rotation(self.universe, following, self.passes)
         return Rotation(self.universe, 0, self.passes + 1)
 
+    def reserve(self, count: int) -> tuple[tuple[Reservation, ...], Rotation]:
+        """``count`` consecutive positions, and the rotation that follows them.
+
+        What a pool of concurrent ticks takes before it dispatches: each reservation carries the
+        ticker to prospect and the ordinal its seed comes from, so P ticks running at once are
+        still exactly the P searches a serial sweep would have run, in the same order.
+
+        Built by repeated :meth:`advance` rather than by arithmetic on the ordinal, so the
+        wrap-around is defined in exactly one place.
+        :meth:`~cracktrade.api.repos.ProspectRepo.reserve_ordinals` performs the same advance in
+        SQL because it has to be atomic across workers, and a test asserts the two agree across a
+        wrap.
+
+        Raises:
+            ValueError: ``count`` is not positive.
+        """
+        if count < 1:
+            msg = f"a reservation needs a positive count, got {count}"
+            raise ValueError(msg)
+        reserved: list[Reservation] = []
+        rotation = self
+        for _ in range(count):
+            reserved.append(Reservation(ticker=rotation.current, ordinal=rotation.ordinal))
+            rotation = rotation.advance()
+        return tuple(reserved), rotation
+
 
 __all__ = [
     "PROSPECT_SETTINGS",
     "Candidate",
+    "Reservation",
     "Rotation",
     "prospect_once",
 ]

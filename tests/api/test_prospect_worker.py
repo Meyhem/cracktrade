@@ -489,3 +489,40 @@ def test_a_sweep_yields_when_the_session_is_asked_to_stop(
 
 def test_a_sweep_yields_for_a_session_that_has_gone(db: psycopg.Connection[TupleRow]) -> None:
     assert should_yield(db, uuid4())
+
+
+def test_a_sweep_produces_the_same_candidates_however_wide_it_runs(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The central claim of section 19.7 as amended: P is a throughput knob, not an input.
+
+    A tick's seed is the session's plus its reservation's ordinal, so the same ordinal must
+    produce the same candidate whether it ran alone or beside three others. If this ever fails,
+    the engine is reporting numbers that depend on how busy the machine was -- which is the one
+    kind of output this project exists to prevent.
+    """
+    repo = ProspectRepo(db)
+    universe = (HOME, "NVDA", "MU", "INTC")
+    _queue_a_run(db)  # keeps each sweep to exactly one window of ticks
+
+    def sweep(parallelism: int) -> dict[int, str]:
+        session = _session(db, universe=universe, name=f"p{parallelism}")
+        while True:
+            current = repo.require_session(session.id)
+            if current.ticks_completed + current.ticks_failed >= len(universe):
+                break
+            claim_and_sweep(db, _settings(parallelism=parallelism), provider=_provider())
+        repo.stop_session(session.id)
+        db.commit()
+        return {
+            row.candidate.seed: row.candidate.strategy_yaml
+            for row in repo.leaderboard(session_id=session.id, survivors_only=False)
+        }
+
+    serial = sweep(1)
+    parallel = sweep(4)
+
+    assert len(serial) == len(universe)
+    assert set(serial) == set(parallel)
+    for seed, strategy_yaml in serial.items():
+        assert parallel[seed] == strategy_yaml, f"seed {seed} differs between P=1 and P=4"

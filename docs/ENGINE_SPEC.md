@@ -3655,22 +3655,32 @@ honestly. It would also make progress meaningless: a run that never ends has no 
 
 Consequences of the session shape, all of which fall out rather than needing new machinery:
 
-- **Resume is the cursor.** A restarted session continues from the next ticker in rotation. Nothing
-  is recomputed and nothing is lost, because completed ticks are already durable. `cursor_index`
-  and `passes_completed` are the whole of what resume restores, which is why the rotation is a
-  value rather than an iterator: an iterator's position cannot be written to a row.
-- **Cancellation is per-layer.** Stopping a session stops the scheduling of new ticks; a tick in
-  flight ends through §11.2's existing cooperative path, and its cursor is deliberately *not*
-  advanced — nothing was measured for that ticker, so resuming retries it rather than skipping it.
-- **A dead worker loses one tick, not the session.** This is the one place prospecting inverts
-  §14.5. A run whose worker dies is failed and never re-queued, because re-running refetches
-  retroactively adjusted prices and so measures something else. A *session* whose worker dies is
-  simply claimable again once its lease lapses: each tick is its own measurement, the completed
-  ones are already durable, and the cursor says where to carry on. Picking a sweep back up
-  continues one sweep; it does not repeat a different one.
-- **A failed tick is counted, not fatal.** A ticker the provider will not serve advances the
-  cursor and increments `ticks_failed`. One delisting must not end a sweep working on the other
-  nineteen.
+- **Resume is the cursor.** A restarted session continues from the next unreserved position.
+  Nothing is recomputed, and nothing *measured* is lost, because completed ticks are already
+  durable — positions reserved by a worker that died are the exception, and are skipped rather
+  than retried (see below). `cursor_index` and `passes_completed` are the whole of what resume
+  restores, which is why the rotation is a value rather than an iterator: an iterator's position
+  cannot be written to a row.
+- **Cancellation is per-layer.** Stopping a session stops the scheduling of new ticks; ticks in
+  flight are allowed to finish and are written, because their compute is already paid for and
+  their positions are already spent. The sweep reads `stop_requested` after every completed tick
+  rather than only at claim time — a sweep holding its session across many ticks would otherwise
+  ignore the request until it ran out of unrelated reasons to halt.
+- **A dead worker loses up to P in-flight ticks, not the session — amended 2026-08-21.** This is
+  the one place prospecting inverts §14.5. A run whose worker dies is failed and never re-queued,
+  because re-running refetches retroactively adjusted prices and so measures something else. A
+  *session* whose worker dies is simply claimable again once its lease lapses: each tick is its
+  own measurement, the completed ones are already durable, and the cursor says where to carry on.
+  Because the cursor is advanced at reservation rather than at completion (below), a dead worker
+  abandons the positions it had reserved — those tickers are **skipped for the current pass
+  rather than retried**, and round-robin returns to them roughly P ticks later. Nothing measured
+  is lost; the cost is bounded and self-healing, which is what makes reservation acceptable in
+  place of a per-position lease. **Rejected: cursor positions as a leased work queue**, which
+  would preserve the original "loses one tick" exactly — rejected on cost, a schema change and a
+  second lease mechanism against a failure mode round-robin already heals.
+- **A failed tick is counted, not fatal.** A ticker the provider will not serve increments
+  `ticks_failed`; its position was already spent when it was reserved. One delisting must not end
+  a sweep working on the other nineteen.
 
 **The window rolls forward; only the question is frozen — decided 2026-08-20.** A session's
 universe, costs, bar interval and search size are fixed at creation and there is no way to edit
@@ -3684,23 +3694,56 @@ keeps does not fail, it silently returns what exists, and a stated window that d
 something never received is exactly the kind of authoritative-looking wrong number this engine
 exists to avoid.
 
-**A tick writes its candidate and its cursor in one transaction, and only if the worker still
-owns the session.** A search holds the main thread for minutes, so a heartbeat connection that
-is down long enough for the lease to lapse lets another worker take the session over while the
-first is still computing. Without the ownership check both would advance the same cursor —
-skipping a ticker and counting the tick twice. The write is refused instead, and because the
-candidate insert shares the transaction, a refused tick leaves nothing behind: half a tick, a
-candidate with no tick counted against it in a session whose cursor says that ticker was never
-reached, would be worse than none. The new owner simply prospects that ticker itself.
+**A tick reserves its position before it searches, and writes its candidate and its count in one
+transaction — decided 2026-08-21.** `reserve_ordinals` advances the cursor before the work
+starts and hands back the `(ticker, ordinal)` pairs it took. That inversion is what allows
+several ticks to be in flight: reservation becomes the serialisation point and is one cheap
+statement, so a multi-minute search no longer holds a transaction open across itself. Two workers
+reserving at once are serialised by `FOR UPDATE` in the reserving statement, so a position is
+never issued twice.
 
-**One worker, runs first — decided 2026-08-20.** Prospecting shares the run worker's process and
-its loop checks a queued run before every prospecting tick. A session is claimed for **one tick
-and then released**, not held for the life of the sweep, so a user who launches a backtest waits
-at most one search for it. **Rejected: a second worker process for sweeps.** Both halves are
-CPU-bound on the same cores, so two processes would compete for them with nothing arbitrating,
-and it would double the deployment surface for no isolation that matters. A tick's seed is the
-session's seed plus the cursor index, so a tick is exactly reproducible and two tickers in one
-pass are not handed the same starting point.
+Landing a result still checks ownership, and the candidate insert still shares that transaction.
+A search holds a child process for minutes, so a heartbeat connection that is down long enough
+for the lease to lapse lets another worker take the session over while the first is still
+computing; the write is refused instead, and a refused tick leaves nothing behind. Half a tick —
+a candidate with no tick counted against it — would be worse than none.
+
+The arithmetic that advances the cursor therefore exists twice, in SQL because it must be atomic
+and in `Rotation.reserve` because that is where wrap-around is defined. Neither can be expressed
+as the other; a test reserves across a pass boundary and asserts the two land in the same place.
+
+**One worker, runs first, P ticks wide — decided 2026-08-20, widened 2026-08-21.** Prospecting
+shares the run worker's process. The worker keeps `prospect_parallelism` ticks in flight in a
+process pool, refilling one position at a time rather than in waves, and stops reserving as soon
+as a run is queued — draining what is in flight. A user who launches a backtest therefore still
+waits at most one search.
+
+That guarantee used to be free and no longer is, which is the part worth recording. When a
+session was claimed for exactly one tick, the worker loop's ordering gave a queued run its turn
+and the next claim re-read `stop_requested` from the row. A sweep that holds its session across
+many ticks gets neither for nothing, so it asks the database after every completed tick.
+
+**Rejected, still: a second worker process for sweeps.** It would double the deployment surface
+for no isolation that matters. Note that `claim_session`'s `FOR UPDATE SKIP LOCKED` already means
+N worker processes each take a *different* session, so that arrangement works today; it remains
+an operational option and is not a design.
+
+The 2026-08-20 form of this decision was one tick at a time, justified by both halves being
+CPU-bound on the same cores. **Measured 2026-08-21: there was nothing to contend for.**
+Prospecting used one core of thirty-two at a 100% duty cycle and 22.2s per tick, because
+`plan_workers` sizes the GA pool from the search budget rather than the core count and a
+prospecting search never clears the threshold. Wall time for P concurrent ticks is flat from P=4
+to P=12 and climbs steeply after — the machine has sixteen physical cores behind thirty-two
+threads — so `prospect_parallelism` defaults to 12 for 8.1× throughput at 67% efficiency.
+
+A tick's seed is the session's seed plus its reservation's **ordinal**, not its index in the
+universe, so a tick is exactly reproducible and no two positions in a pool share a starting
+point. **P is a throughput knob that changes no result**, and that is pinned by a test which
+sweeps one universe at P=1 and P=4 and compares the stored strategies bit for bit.
+
+**The GA pool inside a tick stays off.** The process pool around the tick is the parallelism;
+nesting one would oversubscribe the machine by a factor of P, and §19.1 already measured that
+larger searches produce no better strategies.
 
 **Prospecting has its own tables — decided 2026-08-20.** `prospect_session`,
 `prospect_candidate` and `prospect_forward_score`, rather than any reuse of `run`. The reason is

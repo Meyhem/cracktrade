@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from cracktrade.config import Interval, PositionSizing
 from cracktrade.data import FrameCache, MarketData, MarketDataProvider, load_history
-from cracktrade.evolution import Chassis, library_warmup
+from cracktrade.evolution import Chassis, GaSettings, library_warmup
 from cracktrade.strategy import build_strategy
 
 if TYPE_CHECKING:  # pragma: no cover - imported for typing only
@@ -100,6 +100,15 @@ class SweepParams:
         """The date range for a tick starting now."""
         end = now or datetime.now(UTC).date()
         return end - timedelta(days=self.window_days), end
+
+    def ga_settings(self) -> GaSettings:
+        """The search one tick runs, from this session's frozen question.
+
+        Here rather than in the worker because a pool child needs it and cannot import from the
+        worker module without a cycle -- and because it is a property of the question, which is
+        what this class is.
+        """
+        return GaSettings(population=self.population, generations=self.generations)
 
     def chassis_for(self, ticker: str, *, now: date | None = None) -> Chassis:
         """The chassis a tick evolves against for one ticker.

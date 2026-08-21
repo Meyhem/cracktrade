@@ -27,7 +27,7 @@ from cracktrade.api.errors import ConflictError
 from cracktrade.api.repos import ProspectRepo
 from cracktrade.api.repos.rows import ProspectStatus
 from cracktrade.api.settings import ApiSettings
-from cracktrade.api.worker.prospect import claim_and_tick, score_due, sweep_settings, tick
+from cracktrade.api.worker.prospect import claim_and_tick, score_due, tick
 from cracktrade.config import Interval
 from cracktrade.data import StaticProvider
 from cracktrade.indicators.catalogue import install
@@ -185,7 +185,7 @@ def test_each_ticker_in_a_pass_gets_its_own_seed(db: psycopg.Connection[TupleRow
 
 
 def test_the_search_size_comes_from_the_sessions_frozen_question() -> None:
-    settings = sweep_settings(PARAMS)
+    settings = PARAMS.ga_settings()
     assert (settings.population, settings.generations) == (4, 2)
 
 

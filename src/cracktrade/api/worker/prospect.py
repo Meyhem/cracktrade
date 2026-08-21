@@ -31,7 +31,6 @@ from cracktrade.api.worker import worker_name
 from cracktrade.control import RunControl
 from cracktrade.data import MarketDataProvider, YFinanceProvider
 from cracktrade.errors import CracktradeError, RunCancelled
-from cracktrade.evolution import GaSettings
 from cracktrade.log import get_logger
 from cracktrade.optimize import TradeFloor
 from cracktrade.prospect import (
@@ -78,11 +77,6 @@ class TickOutcome:
         return self.error is not None
 
 
-def sweep_settings(params: SweepParams) -> GaSettings:
-    """The search one tick runs, from the session's frozen question."""
-    return GaSettings(population=params.population, generations=params.generations)
-
-
 def tick(
     connection: psycopg.Connection[TupleRow],
     session: ProspectSessionRow,
@@ -123,7 +117,7 @@ def tick(
                 provider=provider or YFinanceProvider(),
                 max_filled_fraction=resolved.max_filled_fraction,
             ),
-            settings=sweep_settings(params),
+            settings=params.ga_settings(),
             # The session's seed plus the tick's ordinal across the whole sweep -- not its
             # position in the universe, which repeats every lap and would make each pass a
             # bit-identical replay of the one before it.
@@ -383,6 +377,5 @@ __all__ = [
     "TickOutcome",
     "claim_and_tick",
     "score_due",
-    "sweep_settings",
     "tick",
 ]

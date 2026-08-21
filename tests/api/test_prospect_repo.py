@@ -24,6 +24,7 @@ from psycopg.rows import TupleRow
 from cracktrade.api.errors import ConflictError, InvariantViolationError, NotFoundError
 from cracktrade.api.repos import ProspectRepo
 from cracktrade.api.repos.rows import ProspectStatus
+from cracktrade.prospect import Rotation
 
 pytestmark = pytest.mark.db
 
@@ -473,3 +474,89 @@ def test_a_tick_from_a_worker_that_lost_the_session_is_refused(
     assert repo.require_session(session_id).cursor_index == 0
     advanced = repo.record_tick(session_id, cursor_index=1, passes_completed=0, worker="worker-b")
     assert advanced.cursor_index == 1
+
+
+# --------------------------------------------------------------------------- reservations
+
+
+def test_a_reservation_advances_the_cursor_past_what_it_handed_out(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+
+    reserved, after = repo.reserve_ordinals(session_id, count=2)
+
+    assert [(r.ticker, r.ordinal) for r in reserved] == [("AMD", 0), ("NVDA", 1)]
+    assert (after.cursor_index, after.passes_completed) == (2, 0)
+
+
+def test_the_sql_advance_agrees_with_the_rotation_over_a_wraparound(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The advance exists twice -- in SQL because it must be atomic across workers, and in
+    Rotation because that is where wrap-around is defined. This is what stops them drifting."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.reserve_ordinals(session_id, count=2)
+
+    reserved, after = repo.reserve_ordinals(session_id, count=4)
+
+    expected, rotation = Rotation(UNIVERSE, index=2, passes=0).reserve(4)
+    assert reserved == expected
+    assert (after.cursor_index, after.passes_completed) == (rotation.index, rotation.passes)
+
+
+def test_two_concurrent_reservations_never_share_an_ordinal(db_url: str) -> None:
+    """The whole reason the advance is one statement rather than a read then a write."""
+    with psycopg.connect(db_url) as one, psycopg.connect(db_url) as two:
+        session_id = (
+            ProspectRepo(one)
+            .create_session(name="race", universe=UNIVERSE, params=PARAMS, seed=7)
+            .id
+        )
+        one.commit()
+
+        first, _ = ProspectRepo(one).reserve_ordinals(session_id, count=3)
+        one.commit()
+        second, _ = ProspectRepo(two).reserve_ordinals(session_id, count=3)
+        two.commit()
+
+    assert sorted(r.ordinal for r in (*first, *second)) == [0, 1, 2, 3, 4, 5]
+
+
+def test_an_abandoned_reservation_skips_its_tickers_and_the_next_pass_recovers_them(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """Section 19.7 as amended: a dead worker's reserved positions are not retried. What keeps
+    that from being data loss is round-robin -- the tickers are skipped for one pass, not
+    dropped from the sweep."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+
+    abandoned, _ = repo.reserve_ordinals(session_id, count=2)  # nothing ever lands for these
+    following, _ = repo.reserve_ordinals(session_id, count=3)
+
+    assert [r.ticker for r in abandoned] == ["AMD", "NVDA"]
+    assert [r.ordinal for r in following] == [2, 3, 4]
+    assert {"AMD", "NVDA"} <= {r.ticker for r in following}
+
+
+def test_a_reservation_is_refused_once_the_session_has_moved_on(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.claim_session("worker-b", lease_seconds=60.0)
+    db.commit()
+
+    with pytest.raises(ConflictError, match="no longer held by worker-a"):
+        repo.reserve_ordinals(session_id, count=1, worker="worker-a")
+    db.rollback()
+
+    assert repo.require_session(session_id).cursor_index == 0
+
+
+def test_a_reservation_of_nothing_is_refused(db: psycopg.Connection[TupleRow]) -> None:
+    with pytest.raises(ValueError, match="positive count"):
+        ProspectRepo(db).reserve_ordinals(_session(db), count=0)

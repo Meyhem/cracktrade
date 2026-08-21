@@ -37,11 +37,18 @@ from cracktrade.api.repos.rows import (
     ProspectSessionRow,
     ProspectStatus,
 )
+from cracktrade.prospect import Reservation, Rotation
 
 _SESSION_COLUMNS = """
   id, name, status, universe, params, seed, cursor_index, passes_completed, ticks_completed,
   ticks_failed, created_at, stopped_at, claimed_by, heartbeat_at, stop_requested, error
 """
+
+#: The same columns qualified with the ``s`` alias, for statements that join another relation
+#: and so cannot use a bare column list in ``RETURNING``.
+_SESSION_COLUMNS_QUALIFIED = ", ".join(
+    f"s.{column.strip()}" for column in _SESSION_COLUMNS.replace("\n", " ").split(",")
+)
 
 _CANDIDATE_COLUMNS = """
   id, session_id, ticker, discovered_at, last_bar_seen, seed, candidate, strategy_yaml,
@@ -224,6 +231,68 @@ class ProspectRepo(Repository):
             (session_id, worker),
         )
         return affected == 1
+
+    def reserve_ordinals(
+        self, session_id: UUID, *, count: int, worker: str | None = None
+    ) -> tuple[tuple[Reservation, ...], ProspectSessionRow]:
+        """Take the next ``count`` positions in the sweep, advancing the cursor past them.
+
+        The cursor moves *before* the work rather than after it, and that inversion is what lets
+        several ticks be in flight at once: reservation becomes the serialisation point, and it
+        is one cheap statement, so a multi-minute search no longer holds a transaction open
+        across itself.
+
+        The consequence is section 19.7's amended invariant. A worker that dies abandons the
+        positions it reserved, and those tickers are *skipped for the current pass* rather than
+        retried -- round-robin brings them back on the next one. Nothing measured is lost,
+        because a completed tick is already durable in its own transaction.
+
+        The advance is arithmetic on the flattened ordinal and is done in SQL because it has to
+        be atomic across workers; ``FOR UPDATE`` in the CTE is what serialises two workers
+        reserving at once. :meth:`~cracktrade.prospect.Rotation.reserve` performs the same
+        advance as a value, and a test asserts the two agree across a wrap-around.
+
+        Raises:
+            ValueError: ``count`` is not positive.
+            ConflictError: the session is not running, or is no longer held by ``worker``.
+        """
+        if count < 1:
+            msg = f"a reservation needs a positive count, got {count}"
+            raise ValueError(msg)
+        row = self._fetch_one(
+            f"""
+            WITH before AS (
+              SELECT id,
+                     passes_completed * cardinality(universe) + cursor_index AS start_ordinal,
+                     cardinality(universe) AS size
+              FROM prospect_session
+              WHERE id = %s AND status = 'running'
+                AND (%s::text IS NULL OR claimed_by = %s)
+              FOR UPDATE
+            )
+            UPDATE prospect_session s SET
+              cursor_index = (before.start_ordinal + %s) %% before.size,
+              passes_completed = (before.start_ordinal + %s) / before.size,
+              heartbeat_at = clock_timestamp()
+            FROM before
+            WHERE s.id = before.id
+            RETURNING before.start_ordinal, {_SESSION_COLUMNS_QUALIFIED}
+            """,
+            (session_id, worker, worker, count, count),
+        )
+        if row is None:
+            raise ConflictError(
+                f"prospecting session {session_id} is not running, or is no longer held by "
+                f"{worker or 'this worker'}"
+            )
+        start_ordinal = int(row[0])
+        session = _session(row[1:])
+        size = len(session.universe)
+        rotation = Rotation(
+            session.universe, index=start_ordinal % size, passes=start_ordinal // size
+        )
+        reserved, _ = rotation.reserve(count)
+        return reserved, session
 
     def record_tick(
         self,

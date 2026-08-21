@@ -565,6 +565,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prospect/sessions/{session_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Resume
+         * @description Put a stopped or failed sweep back to work.
+         *
+         *     It continues from its cursor with its candidate ledger intact -- a sweep's compute is cheap
+         *     to redo and its forward scores, which accumulate over days, are not. 200 rather than 202:
+         *     nothing is queued, the row is running the moment this returns, and the next worker pass
+         *     picks it up.
+         */
+        post: operations["post_resume_api_v1_prospect_sessions__session_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/prospect/candidates": {
         parameters: {
             query?: never;
@@ -2589,6 +2614,37 @@ export interface operations {
         };
     };
     post_stop_api_v1_prospect_sessions__session_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_resume_api_v1_prospect_sessions__session_id__resume_post: {
         parameters: {
             query?: never;
             header?: never;

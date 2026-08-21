@@ -303,6 +303,36 @@ def test_stopping_a_finished_sweep_is_a_conflict(client: TestClient) -> None:
     assert client.post(f"{BASE}/sessions/{session['id']}/stop").status_code == 409
 
 
+def test_a_stopped_sweep_can_be_resumed_where_it_left_off(
+    client: TestClient, db: psycopg.Connection[TupleRow]
+) -> None:
+    """A sweep's compute can be rebought in minutes; its forward scores accrue over days and
+    cannot be. Resume keeps the ledger rather than starting a replacement."""
+    session = _start(client)
+    # Three positions over a two-ticker universe: one full pass, then one into the next.
+    ProspectRepo(db).reserve_ordinals(UUID(session["id"]), count=3)
+    db.commit()
+    client.post(f"{BASE}/sessions/{session['id']}/stop")
+
+    body = client.post(f"{BASE}/sessions/{session['id']}/resume").json()
+
+    assert body["status"] == "running"
+    assert body["stopped_at"] is None
+    assert body["stop_requested"] is False
+    assert body["cursor_index"] == 1
+    assert body["passes_completed"] == 1
+
+
+def test_resuming_a_running_sweep_is_a_conflict(client: TestClient) -> None:
+    session = _start(client)
+
+    assert client.post(f"{BASE}/sessions/{session['id']}/resume").status_code == 409
+
+
+def test_resuming_a_sweep_that_does_not_exist_is_not_found(client: TestClient) -> None:
+    assert client.post(f"{BASE}/sessions/{uuid4()}/resume").status_code == 404
+
+
 def test_there_is_no_route_that_edits_a_running_sweep(client: TestClient) -> None:
     """A sweep whose question changed partway would make its own candidate list incomparable
     with itself, and the ranking would read the difference between the questions."""

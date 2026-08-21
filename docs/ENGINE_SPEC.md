@@ -3681,6 +3681,31 @@ Consequences of the session shape, all of which fall out rather than needing new
 - **A failed tick is counted, not fatal.** A ticker the provider will not serve increments
   `ticks_failed`; its position was already spent when it was reserved. One delisting must not end
   a sweep working on the other nineteen.
+- **Stopping is not terminal — decided 2026-08-21.** `POST /sessions/{id}/resume` puts a stopped
+  or failed session back to `running`, continuing from its cursor with its universe, seed, frozen
+  question and whole candidate ledger untouched. This is the same reasoning the dead-worker bullet
+  above already applies to a lapsed lease, extended to a deliberate stop: picking a sweep back up
+  continues one sweep rather than repeating a different one. It is the one place a session
+  inverts §14.2's rule that a terminal row is frozen, and the asymmetry is the point — a run
+  cannot be resumed because re-running refetches retroactively adjusted prices and so measures
+  something else, whereas a sweep's next tick is simply its next measurement.
+
+  What makes resume worth a route rather than a "start a new one": a sweep's **compute** is cheap
+  to redo — 679 ticks is about seven minutes at `prospect_parallelism` — but its **forward
+  scores** accrue at 24-hour granularity and cannot be bought back at any speed. §19.5 ranks on
+  those. Starting a replacement also cannot reuse the name, which is `UNIQUE`.
+
+  Resume clears `stop_requested`, and must: the worker reads that flag after every tick, so a
+  resumed session that kept it would be stopped again on the first check and the button would
+  appear to do nothing. It clears `error` too, because `prospect_session_error_iff_failed`
+  requires it to be NULL on a running row.
+
+  **Failed sessions are resumable, with a caveat that is recorded rather than solved.** A session
+  that failed *structurally* — no ticker in its universe has a family — will fail again on its
+  next tick, because the universe is frozen at creation. Resume is worth having for the
+  outage-shaped failures; it cannot repair a question that was never answerable. Deliberately not
+  distinguished in code: there is no evidence yet about which kind of failure is common, and a
+  guess encoded as a refusal would be harder to remove than to add.
 
 **The window rolls forward; only the question is frozen — decided 2026-08-20.** A session's
 universe, costs, bar interval and search size are fixed at creation and there is no way to edit

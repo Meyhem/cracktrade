@@ -415,6 +415,54 @@ class ProspectRepo(Repository):
             raise ConflictError(f"prospecting session {session_id} has already finished")
         return _session(row)
 
+    def resume_session(self, session_id: UUID) -> ProspectSessionRow:
+        """Put a finished sweep back to work, continuing from its cursor.
+
+        The session row *is* the resume record -- §19.7's "resume is the cursor" -- so this
+        writes nothing except the status fields. The cursor, the passes, the universe, the seed,
+        the frozen question and every candidate are left exactly as they are, which is the whole
+        reason resuming beats starting a replacement: a sweep's compute can be rebought in
+        minutes, but its forward scores accumulate at 24-hour granularity and cannot be.
+
+        This is the one place a session differs from a run and it follows the reasoning §19.7
+        already gives for a lapsed lease. A run is frozen on a terminal status because re-running
+        refetches retroactively adjusted prices and so measures something else; picking a *sweep*
+        back up continues one sweep rather than repeating a different one, whether it stopped
+        because its worker died or because somebody pressed the button.
+
+        ``stop_requested`` is cleared, and must be: the worker reads it after every tick, so a
+        resumed session that kept the flag would be stopped again on the first check and resume
+        would look like it had silently done nothing.
+
+        ``error`` is cleared too, because ``prospect_session_error_iff_failed`` requires it to be
+        NULL once the row is running. Note that a session which failed *structurally* -- no
+        ticker in its universe has a family -- will fail again on its next tick, since the
+        universe is frozen at creation. Resuming a failure is worth it for the outage-shaped
+        ones; it cannot repair a question that was never answerable.
+
+        Raises:
+            ConflictError: the session is already running, or does not exist.
+        """
+        row = self._fetch_one(
+            f"""
+            UPDATE prospect_session SET
+              status = 'running',
+              stopped_at = NULL,
+              stop_requested = false,
+              error = NULL,
+              claimed_by = NULL,
+              heartbeat_at = NULL
+            WHERE id = %s AND status IN ('stopped', 'failed')
+            RETURNING {_SESSION_COLUMNS}
+            """,
+            (session_id,),
+        )
+        if row is None:
+            raise ConflictError(
+                f"prospecting session {session_id} is already running, or does not exist"
+            )
+        return _session(row)
+
     def fail_session(self, session_id: UUID, *, message: str) -> ProspectSessionRow:
         """End a sweep because it could not continue at all.
 

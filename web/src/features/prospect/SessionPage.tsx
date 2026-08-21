@@ -18,12 +18,12 @@ import {
   Tooltip,
   UnstyledButton,
 } from '@mantine/core'
-import { IconAlertTriangle, IconPlayerStop } from '@tabler/icons-react'
+import { IconAlertTriangle, IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react'
 import { Link, useParams } from 'react-router'
 import { ProblemAlert } from '../../components/ProblemAlert'
 import { EmptyState } from '../../components/EmptyState'
 import { percent, ratio, relative } from '../../lib/format'
-import { useProspectCandidates, useProspectSession, useStopSweep } from './queries'
+import { useProspectCandidates, useProspectSession, useResumeSweep, useStopSweep } from './queries'
 import { SessionStatusBadge } from './SessionStatusBadge'
 import { CandidateModal } from './CandidateModal'
 import type { ProspectCandidate } from '../../api/types'
@@ -49,6 +49,7 @@ export function SessionPage() {
   const live = session.data?.status === 'running'
   const candidates = useProspectCandidates({ sessionId, survivorsOnly, limit: 50 }, live ?? false)
   const stop = useStopSweep()
+  const resume = useResumeSweep()
 
   if (session.error) return <ProblemAlert error={session.error} />
   if (session.isPending) {
@@ -77,7 +78,7 @@ export function SessionPage() {
             {row.universe.join(' · ')}
           </Text>
         </div>
-        {row.status === 'running' && (
+        {row.status === 'running' ? (
           <Button
             color="red"
             disabled={row.stop_requested}
@@ -88,10 +89,20 @@ export function SessionPage() {
           >
             {row.stop_requested ? 'Stopping…' : 'Stop'}
           </Button>
+        ) : (
+          <Button
+            leftSection={<IconPlayerPlay size={16} />}
+            loading={resume.isPending}
+            onClick={() => resume.mutate(sessionId)}
+            variant="light"
+          >
+            Resume
+          </Button>
         )}
       </Group>
 
       {stop.error && <ProblemAlert error={stop.error} />}
+      {resume.error && <ProblemAlert error={resume.error} />}
       {row.error && (
         <Alert color="red" icon={<IconAlertTriangle size={16} />} title="The sweep stopped">
           {String(row.error.message ?? 'No reason was recorded.')}

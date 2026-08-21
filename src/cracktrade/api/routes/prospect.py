@@ -35,6 +35,7 @@ from cracktrade.api.services.prospect import (
     list_sessions,
     parse_statuses,
     require_session,
+    resume,
     start,
     stop,
 )
@@ -84,6 +85,18 @@ def post_stop(session_id: UUID, work: Work, settings: Settings) -> SessionOut:
     ``stop_requested`` if the worker still has to land it.
     """
     return SessionOut.of(stop(work, session_id, lease_seconds=settings.worker_lease_seconds))
+
+
+@router.post("/sessions/{session_id}/resume", response_model=SessionOut)
+def post_resume(session_id: UUID, work: Work) -> SessionOut:
+    """Put a stopped or failed sweep back to work.
+
+    It continues from its cursor with its candidate ledger intact -- a sweep's compute is cheap
+    to redo and its forward scores, which accumulate over days, are not. 200 rather than 202:
+    nothing is queued, the row is running the moment this returns, and the next worker pass
+    picks it up.
+    """
+    return SessionOut.of(resume(work, session_id))
 
 
 @router.get("/candidates", response_model=CandidateList)

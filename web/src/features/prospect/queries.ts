@@ -133,3 +133,27 @@ export function useStopSweep() {
     },
   })
 }
+
+/**
+ * Resuming a stopped or failed sweep.
+ *
+ * The session row is the resume record: it keeps its cursor, its universe, its seed and every
+ * candidate, so this restarts one sweep rather than beginning a replacement. That matters
+ * because a sweep's compute is cheap to redo and its forward scores, which accumulate over
+ * days, are not.
+ */
+export function useResumeSweep() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (sessionId: string): Promise<ProspectSession> => {
+      const result = await api.POST('/api/v1/prospect/sessions/{session_id}/resume', {
+        params: { path: { session_id: sessionId } },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.prospect.all })
+    },
+  })
+}

@@ -600,3 +600,96 @@ def test_counting_is_refused_once_the_session_has_moved_on(
     db.rollback()
 
     assert repo.require_session(session_id).ticks_completed == 0
+
+
+# --------------------------------------------------------------------------- resume
+
+
+def test_a_resumed_session_keeps_its_cursor_and_its_ledger(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The whole point. A session's compute can be rebought in minutes; its forward scores
+    accumulate at 24h granularity and cannot be. Resume exists to keep the ledger."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.reserve_ordinals(session_id, count=5)
+    repo.count_tick(session_id)
+    _candidate(db, session_id, ticker="AMD")
+    before = repo.require_session(session_id)
+    repo.stop_session(session_id)
+    db.commit()
+
+    resumed = repo.resume_session(session_id)
+
+    assert resumed.status is ProspectStatus.RUNNING
+    assert resumed.stopped_at is None
+    assert (resumed.cursor_index, resumed.passes_completed) == (
+        before.cursor_index,
+        before.passes_completed,
+    )
+    assert (resumed.universe, resumed.seed, resumed.params) == (
+        before.universe,
+        before.seed,
+        before.params,
+    )
+    assert resumed.ticks_completed == before.ticks_completed
+    assert repo.count_candidates(session_id=session_id) == 1
+
+
+def test_resuming_clears_the_stop_request(db: psycopg.Connection[TupleRow]) -> None:
+    """Without this the worker sees stop_requested on its first check and stops the session
+    again immediately -- resume would look like it silently did nothing."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.request_stop(session_id)
+    repo.stop_session(session_id)
+    db.commit()
+    assert repo.require_session(session_id).stop_requested
+
+    resumed = repo.resume_session(session_id)
+
+    assert not resumed.stop_requested
+
+
+def test_a_resumed_session_is_claimable_again(db: psycopg.Connection[TupleRow]) -> None:
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.stop_session(session_id)
+    db.commit()
+    assert repo.claim_session("worker", lease_seconds=60.0) is None
+
+    repo.resume_session(session_id)
+    db.commit()
+
+    claimed = repo.claim_session("worker", lease_seconds=60.0)
+    assert claimed is not None
+    assert claimed.id == session_id
+
+
+def test_a_failed_session_can_be_resumed_and_loses_its_error(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """``prospect_session_error_iff_failed`` requires error to be NULL once it is running, so
+    resuming a failure has to clear it or the constraint refuses the write."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.fail_session(session_id, message="the provider refused every ticker")
+    db.commit()
+
+    resumed = repo.resume_session(session_id)
+
+    assert resumed.status is ProspectStatus.RUNNING
+    assert resumed.error is None
+    assert resumed.stopped_at is None
+
+
+def test_resuming_a_running_session_is_a_conflict(db: psycopg.Connection[TupleRow]) -> None:
+    with pytest.raises(ConflictError, match="already running"):
+        ProspectRepo(db).resume_session(_session(db))
+
+
+def test_resuming_something_that_does_not_exist_is_a_conflict(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    with pytest.raises(ConflictError):
+        ProspectRepo(db).resume_session(uuid4())

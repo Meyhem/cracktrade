@@ -309,6 +309,17 @@ def stop(work: UnitOfWork, session_id: UUID, *, lease_seconds: float) -> Session
     return view_of(work, stopped if stopped is not None else repo.request_stop(session_id))
 
 
+def resume(work: UnitOfWork, session_id: UUID) -> SessionView:
+    """Put a finished sweep back to work, continuing from where it stopped.
+
+    Unlike :func:`stop` there is no worker to coordinate with: a session that is not running is
+    held by nobody, so the row can be flipped directly and the next claim picks it up.
+    """
+    repo = ProspectRepo(work.connection)
+    repo.require_session(session_id)
+    return view_of(work, repo.resume_session(session_id))
+
+
 def leaderboard(
     work: UnitOfWork,
     *,

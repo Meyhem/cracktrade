@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '../../test/render'
 import { server } from '../../test/server'
@@ -105,6 +106,46 @@ describe('SessionPage', () => {
 
     expect(await screen.findByText('Stopping')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Stopping/ })).toBeDisabled()
+  })
+
+  it('offers resume on a stopped sweep, not stop', async () => {
+    serve(sweep({ status: 'stopped', stopped_at: '2026-08-21T09:33:17Z', claimed_by: null }), [])
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /Resume/ })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /Stop/ })).not.toBeInTheDocument()
+  })
+
+  it('offers resume on a failed sweep too, so an outage is recoverable', async () => {
+    serve(
+      sweep({
+        status: 'failed',
+        stopped_at: '2026-08-21T09:33:17Z',
+        claimed_by: null,
+        error: { message: 'the provider refused every ticker' },
+      }),
+      [],
+    )
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /Resume/ })).toBeEnabled()
+    expect(screen.getByText('the provider refused every ticker')).toBeInTheDocument()
+  })
+
+  it('resumes the sweep it is showing when resume is pressed', async () => {
+    let resumed: string | null = null
+    serve(sweep({ status: 'stopped', stopped_at: '2026-08-21T09:33:17Z', claimed_by: null }), [])
+    server.use(
+      http.post('*/api/v1/prospect/sessions/:id/resume', ({ params }) => {
+        resumed = String(params.id)
+        return HttpResponse.json(sweep())
+      }),
+    )
+    renderPage()
+
+    await userEvent.click(await screen.findByRole('button', { name: /Resume/ }))
+
+    await waitFor(() => expect(resumed).toBe(SESSION_ID))
   })
 
   it('says a sweep is waiting when no worker has picked it up', async () => {

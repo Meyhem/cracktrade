@@ -196,37 +196,62 @@ def test_a_session_asked_to_stop_is_still_claimable(db: psycopg.Connection[Tuple
 # --------------------------------------------------------------------------- the cursor
 
 
-def test_a_tick_advances_the_cursor_and_counts_itself(db: psycopg.Connection[TupleRow]) -> None:
+def test_a_tick_reserves_a_position_then_counts_itself(db: psycopg.Connection[TupleRow]) -> None:
+    """The two halves a tick now writes, in the order it writes them. The cursor moves when the
+    position is taken; the tally moves when the work comes back."""
     repo = ProspectRepo(db)
     session_id = _session(db)
 
-    after = repo.record_tick(session_id, cursor_index=1, passes_completed=0)
+    _, reserved = repo.reserve_ordinals(session_id, count=1)
+    db.commit()
+    assert (reserved.cursor_index, reserved.ticks_completed) == (1, 0)
+
+    after = repo.count_tick(session_id)
     db.commit()
     assert (after.cursor_index, after.ticks_completed, after.ticks_failed) == (1, 1, 0)
 
-    failed = repo.record_tick(session_id, cursor_index=2, passes_completed=0, failed=True)
+    repo.reserve_ordinals(session_id, count=1)
+    failed = repo.count_tick(session_id, failed=True)
     db.commit()
     assert (failed.cursor_index, failed.ticks_completed, failed.ticks_failed) == (2, 1, 1)
 
-    wrapped = repo.record_tick(session_id, cursor_index=0, passes_completed=1)
+    wrapped, _ = repo.reserve_ordinals(session_id, count=1)
     db.commit()
-    assert (wrapped.cursor_index, wrapped.passes_completed) == (0, 1)
+    assert wrapped[0].ticker == "SOXL"
+    assert repo.require_session(session_id).passes_completed == 1
 
 
 def test_a_cursor_outside_the_universe_is_refused(db: psycopg.Connection[TupleRow]) -> None:
-    """The check that makes resume safe: a restored cursor always names a real ticker."""
-    with pytest.raises(InvariantViolationError):
-        ProspectRepo(db).record_tick(_session(db), cursor_index=len(UNIVERSE), passes_completed=0)
+    """The check that makes resume safe: a restored cursor always names a real ticker.
+
+    Asserted against the database directly rather than through a repository method. Since
+    positions are handed out by ``reserve_ordinals``, which takes the ordinal modulo the universe
+    size, no method here can produce an out-of-range cursor any more -- so what is worth pinning
+    is that the constraint still refuses one whatever writes it.
+    """
+    session_id = _session(db)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(
+            "UPDATE prospect_session SET cursor_index = %s WHERE id = %s",
+            (len(UNIVERSE), session_id),
+        )
+    db.rollback()
 
 
 def test_a_finished_session_accepts_no_further_ticks(db: psycopg.Connection[TupleRow]) -> None:
+    """Both halves refuse, so a stopped session can neither hand out new work nor accept the
+    result of work already in flight."""
     repo = ProspectRepo(db)
     session_id = _session(db)
     repo.stop_session(session_id)
     db.commit()
 
     with pytest.raises(ConflictError):
-        repo.record_tick(session_id, cursor_index=1, passes_completed=0)
+        repo.reserve_ordinals(session_id, count=1)
+    db.rollback()
+    with pytest.raises(ConflictError):
+        repo.count_tick(session_id)
 
 
 def test_stopping_twice_is_a_conflict_not_a_second_stop(db: psycopg.Connection[TupleRow]) -> None:
@@ -452,30 +477,6 @@ def test_scoring_takes_the_never_scored_first_then_the_stalest(
     assert [row.id for row in fresh] == [never_scored]
 
 
-def test_a_tick_from_a_worker_that_lost_the_session_is_refused(
-    db: psycopg.Connection[TupleRow],
-) -> None:
-    """The race the ownership clause exists for.
-
-    A search holds the main thread for minutes. If the heartbeat connection is down long enough
-    for the lease to lapse, another worker takes the session over while this one is still
-    computing -- and without this both would advance the same cursor, skipping a ticker and
-    counting the tick twice.
-    """
-    repo = ProspectRepo(db)
-    session_id = _session(db)
-    repo.claim_session("worker-b", lease_seconds=60.0)
-    db.commit()
-
-    with pytest.raises(ConflictError, match="no longer held by worker-a"):
-        repo.record_tick(session_id, cursor_index=1, passes_completed=0, worker="worker-a")
-    db.rollback()
-
-    assert repo.require_session(session_id).cursor_index == 0
-    advanced = repo.record_tick(session_id, cursor_index=1, passes_completed=0, worker="worker-b")
-    assert advanced.cursor_index == 1
-
-
 # --------------------------------------------------------------------------- reservations
 
 
@@ -560,3 +561,42 @@ def test_a_reservation_is_refused_once_the_session_has_moved_on(
 def test_a_reservation_of_nothing_is_refused(db: psycopg.Connection[TupleRow]) -> None:
     with pytest.raises(ValueError, match="positive count"):
         ProspectRepo(db).reserve_ordinals(_session(db), count=0)
+
+
+def test_counting_a_tick_does_not_move_the_cursor(db: psycopg.Connection[TupleRow]) -> None:
+    """Other ticks are in flight against positions already reserved. Writing a cursor here
+    would rewind past them and hand those tickers out a second time."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.reserve_ordinals(session_id, count=3)
+
+    after = repo.count_tick(session_id)
+
+    assert (after.cursor_index, after.passes_completed) == (0, 1)
+    assert (after.ticks_completed, after.ticks_failed) == (1, 0)
+
+
+def test_a_failed_tick_is_counted_separately(db: psycopg.Connection[TupleRow]) -> None:
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+
+    after = repo.count_tick(session_id, failed=True)
+
+    assert (after.ticks_completed, after.ticks_failed) == (0, 1)
+
+
+def test_counting_is_refused_once_the_session_has_moved_on(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """The takeover race, unchanged by the split: a candidate insert shares this transaction,
+    so a refused count leaves nothing behind."""
+    repo = ProspectRepo(db)
+    session_id = _session(db)
+    repo.claim_session("worker-b", lease_seconds=60.0)
+    db.commit()
+
+    with pytest.raises(ConflictError, match="no longer held by worker-a"):
+        repo.count_tick(session_id, worker="worker-a")
+    db.rollback()
+
+    assert repo.require_session(session_id).ticks_completed == 0

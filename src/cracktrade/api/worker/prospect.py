@@ -37,7 +37,7 @@ from cracktrade.optimize import TradeFloor
 from cracktrade.prospect import (
     Candidate,
     ForwardScore,
-    Rotation,
+    Reservation,
     SweepHistory,
     SweepParams,
     forward_score,
@@ -86,29 +86,31 @@ def sweep_settings(params: SweepParams) -> GaSettings:
 def tick(
     connection: psycopg.Connection[TupleRow],
     session: ProspectSessionRow,
+    reservation: Reservation,
     *,
     provider: MarketDataProvider | None = None,
     engine_settings: Settings | None = None,
     control: RunControl | None = None,
     owner: str | None = None,
 ) -> TickOutcome:
-    """Prospect one ticker and record what came of it.
+    """Prospect the ticker in ``reservation`` and record what came of it.
 
-    The cursor advances whether the search succeeded or not, and the two outcomes are counted
-    separately. A ticker the provider cannot serve is a fact about that ticker, not about the
-    sweep, and stopping on it would let one delisting end a session that is otherwise working.
+    The position is already spent when this is called -- the caller reserved it, which is what
+    lets several ticks run at once -- so a failed search costs the sweep that position either
+    way. The two outcomes are counted separately. A ticker the provider cannot serve is a fact
+    about that ticker, not about the sweep, and stopping on it would let one delisting end a
+    session that is otherwise working.
 
     ``owner`` is this worker's name. When given, the write is refused if the session has been
     taken over mid-search, and nothing is stored -- see
-    :meth:`~cracktrade.api.repos.prospect.ProspectRepo.record_tick`.
+    :meth:`~cracktrade.api.repos.prospect.ProspectRepo.count_tick`.
 
     Never raises for a failed search. It raises only if the *database* refuses the write --
     including that ownership refusal -- which is the caller's problem rather than the tick's.
     """
     resolved = engine_settings or load_settings()
     params = SweepParams.from_dict(session.params)
-    rotation = Rotation(session.universe, session.cursor_index, session.passes_completed)
-    ticker = rotation.current
+    ticker = reservation.ticker
     guard = control or RunControl()
 
     candidate: Candidate | None = None
@@ -125,7 +127,7 @@ def tick(
             # The session's seed plus the tick's ordinal across the whole sweep -- not its
             # position in the universe, which repeats every lap and would make each pass a
             # bit-identical replay of the one before it.
-            seed=session.seed + rotation.ordinal,
+            seed=session.seed + reservation.ordinal,
             workers=resolved.workers,
             objective_name=params.objective,
             trade_floor=TradeFloor(minimum=params.min_trades, per_year=params.min_trades_per_year),
@@ -134,8 +136,10 @@ def tick(
             control=guard,
         )
     except RunCancelled:
-        # The cursor is deliberately not advanced: nothing was measured for this ticker, and
-        # resuming should retry it rather than skip it.
+        # Nothing is counted: nothing was measured for this ticker. The position is spent all
+        # the same, because it was reserved before the search began -- so resuming skips this
+        # ticker for the current pass rather than retrying it, and round-robin returns to it
+        # (section 19.7, as amended 2026-08-21).
         logger.info("session %s: tick on %s cancelled", session.id, ticker)
         return TickOutcome(ticker=ticker, candidate=None, error=None)
     except CracktradeError as failure:
@@ -148,7 +152,6 @@ def tick(
         logger.exception("session %s: %s raised an unexpected error", session.id, ticker)
         error = f"{type(failure).__name__}: {failure}"
 
-    advanced = rotation.advance()
     with unit_of_work_on(connection) as work:
         repo = ProspectRepo(work.connection)
         if candidate is not None:
@@ -164,13 +167,7 @@ def tick(
                 transfer_median=candidate.transfer.median_sibling_sharpe,
                 transfer_control=candidate.transfer.median_control_sharpe,
             )
-        repo.record_tick(
-            session.id,
-            cursor_index=advanced.index,
-            passes_completed=advanced.passes,
-            failed=candidate is None,
-            worker=owner,
-        )
+        repo.count_tick(session.id, failed=candidate is None, worker=owner)
     return TickOutcome(ticker=ticker, candidate=candidate, error=error)
 
 
@@ -294,9 +291,14 @@ def claim_and_tick(
             should_stop=lambda: beat.cancelled or (stop is not None and stop.is_set())
         )
         try:
+            with unit_of_work_on(connection) as work:
+                reserved, _ = ProspectRepo(work.connection).reserve_ordinals(
+                    claimed.id, count=1, worker=worker_name()
+                )
             outcome = tick(
                 connection,
                 claimed,
+                reserved[0],
                 provider=provider,
                 engine_settings=engine_settings,
                 control=control,

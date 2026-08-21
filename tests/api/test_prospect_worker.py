@@ -105,13 +105,15 @@ def _session(
 # --------------------------------------------------------------------------- one tick
 
 
-def test_a_tick_stores_what_it_found_and_advances_the_cursor(
+def test_a_tick_stores_what_it_found_against_its_reservation(
     db: psycopg.Connection[TupleRow],
 ) -> None:
     repo = ProspectRepo(db)
     session = _session(db)
 
-    outcome = tick(db, session, provider=_provider())
+    reserved, taken = repo.reserve_ordinals(session.id, count=1)
+    assert taken.cursor_index == 1  # the position is spent when it is handed out
+    outcome = tick(db, session, reserved[0], provider=_provider())
 
     assert outcome.ticker == HOME
     assert outcome.error is None
@@ -139,7 +141,8 @@ def test_a_ticker_the_provider_cannot_serve_is_counted_not_fatal(
     repo = ProspectRepo(db)
     session = _session(db)
 
-    outcome = tick(db, session, provider=_provider(missing=(HOME,)))
+    reserved, _ = repo.reserve_ordinals(session.id, count=1)
+    outcome = tick(db, session, reserved[0], provider=_provider(missing=(HOME,)))
 
     assert outcome.failed
     assert outcome.candidate is None
@@ -149,10 +152,12 @@ def test_a_ticker_the_provider_cannot_serve_is_counted_not_fatal(
 
 
 def test_the_cursor_wraps_and_counts_a_pass(db: psycopg.Connection[TupleRow]) -> None:
+    """The wrap happens when the position is reserved, not when the tick lands."""
     repo = ProspectRepo(db)
     session = _session(db, universe=(HOME,))
 
-    tick(db, session, provider=_provider())
+    reserved, _ = repo.reserve_ordinals(session.id, count=1)
+    tick(db, session, reserved[0], provider=_provider())
     after = repo.require_session(session.id)
 
     assert (after.cursor_index, after.passes_completed) == (0, 1)
@@ -161,15 +166,17 @@ def test_the_cursor_wraps_and_counts_a_pass(db: psycopg.Connection[TupleRow]) ->
 def test_each_ticker_in_a_pass_gets_its_own_seed(db: psycopg.Connection[TupleRow]) -> None:
     """Reproducible, and not the same search twice.
 
-    The seed is the session's plus the cursor, so a tick can be repeated exactly while two
-    tickers in one pass are not handed identical starting points.
+    The seed is the session's plus the reservation's ordinal, so a tick can be repeated exactly
+    while two tickers in one pass are not handed identical starting points -- including when
+    both are reserved at once and run concurrently.
     """
     repo = ProspectRepo(db)
     session = _session(db, universe=(HOME, "NVDA"))
     provider = _provider()
 
-    tick(db, session, provider=provider)
-    tick(db, repo.require_session(session.id), provider=provider)
+    reserved, _ = repo.reserve_ordinals(session.id, count=2)
+    for reservation in reserved:
+        tick(db, session, reservation, provider=provider)
 
     seeds = [
         row.candidate.seed for row in repo.leaderboard(session_id=session.id, survivors_only=False)
@@ -331,20 +338,29 @@ def test_a_candidate_scored_moments_ago_is_not_scored_again(
 
 
 def test_a_takeover_mid_tick_leaves_nothing_behind(db: psycopg.Connection[TupleRow]) -> None:
-    """The candidate and the cursor share one transaction, so a refused tick stores neither.
+    """The candidate and the count share one transaction, so a refused tick stores neither.
 
-    Half a tick would be worse than none: a candidate with no tick counted against it, in a
-    session whose cursor says that ticker was never reached.
+    Half a tick would be worse than none: a candidate with no tick counted against it. The
+    worker reserves while it still owns the session and loses the lease during the search, which
+    is the race the ownership clause exists for.
+
+    The reserved position is *not* given back, and that is section 19.7 as amended: the cursor
+    has moved past this ticker, so the new owner prospects whatever comes next and round-robin
+    returns to this one a pass later.
     """
     repo = ProspectRepo(db)
     session = _session(db)
-    repo.claim_session("somebody-else", lease_seconds=60.0)
+    repo.claim_session("this-worker", lease_seconds=60.0)
+    reserved, _ = repo.reserve_ordinals(session.id, count=1, worker="this-worker")
+    db.commit()
+
+    repo.claim_session("somebody-else", lease_seconds=0.0)
     db.commit()
 
     with pytest.raises(ConflictError):
-        tick(db, session, provider=_provider(), owner="this-worker")
+        tick(db, session, reserved[0], provider=_provider(), owner="this-worker")
     db.rollback()
 
     after = repo.require_session(session.id)
-    assert (after.cursor_index, after.ticks_completed, after.ticks_failed) == (0, 0, 0)
+    assert (after.cursor_index, after.ticks_completed, after.ticks_failed) == (1, 0, 0)
     assert repo.count_candidates(session_id=session.id) == 0

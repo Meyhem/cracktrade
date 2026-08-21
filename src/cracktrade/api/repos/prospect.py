@@ -294,37 +294,34 @@ class ProspectRepo(Repository):
         reserved, _ = rotation.reserve(count)
         return reserved, session
 
-    def record_tick(
-        self,
-        session_id: UUID,
-        *,
-        cursor_index: int,
-        passes_completed: int,
-        failed: bool = False,
-        worker: str | None = None,
+    def count_tick(
+        self, session_id: UUID, *, failed: bool = False, worker: str | None = None
     ) -> ProspectSessionRow:
-        """Advance the cursor and count the tick.
+        """Count a finished tick against the session's tallies.
 
-        The cursor is written rather than incremented in SQL because the rotation, not the
-        database, knows what follows the last ticker in the universe. Passing both integers
-        from the value that computed them keeps the wrap-around in one place.
+        Deliberately does **not** touch the cursor. Positions are handed out by
+        :meth:`reserve_ordinals` before the work starts and several ticks are in flight at once,
+        so writing a cursor here would rewind past reservations other ticks are still working --
+        handing those tickers out a second time and counting them twice.
 
-        A failed tick still advances: one ticker whose history the provider cannot supply must
-        not stop the sweep from reaching the other nineteen.
+        A failed tick is counted separately and is not fatal: one ticker whose history the
+        provider cannot supply must not stop the sweep from reaching the other nineteen. It does
+        not need to advance anything either, because its position was already spent when it was
+        reserved.
 
-        ``worker`` is the ownership check, and it closes a real race. A search holds the main
-        thread for minutes; if the heartbeat connection is down long enough for the lease to
-        lapse, another worker takes the session over while this one is still computing. Without
-        this clause both would then advance the same cursor -- skipping a ticker and
-        double-counting a tick. The caller passes its own name and the write is refused if the
-        session has moved on. The candidate insert shares the transaction, so a refused tick
-        leaves nothing behind and the new owner simply prospects that ticker itself.
+        ``worker`` is the ownership check, and it closes the same race it always did. A search
+        holds a child process for minutes; if the heartbeat connection is down long enough for
+        the lease to lapse, another worker takes the session over while this one is still
+        computing. The candidate insert shares this transaction, so a refused count leaves
+        nothing behind -- half a tick, a candidate with no tick counted against it, would be
+        worse than none.
+
+        Raises:
+            ConflictError: the session is not running, or is no longer held by ``worker``.
         """
         row = self._fetch_one(
             f"""
             UPDATE prospect_session SET
-              cursor_index = %s,
-              passes_completed = %s,
               ticks_completed = ticks_completed + %s,
               ticks_failed = ticks_failed + %s,
               heartbeat_at = clock_timestamp()
@@ -332,15 +329,7 @@ class ProspectRepo(Repository):
               AND (%s::text IS NULL OR claimed_by = %s)
             RETURNING {_SESSION_COLUMNS}
             """,
-            (
-                cursor_index,
-                passes_completed,
-                0 if failed else 1,
-                1 if failed else 0,
-                session_id,
-                worker,
-                worker,
-            ),
+            (0 if failed else 1, 1 if failed else 0, session_id, worker, worker),
         )
         if row is None:
             raise ConflictError(

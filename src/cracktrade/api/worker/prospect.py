@@ -1,22 +1,34 @@
-"""Executing one tick of a prospecting session -- spec section 19.7.
+"""Sweeping a prospecting session -- spec section 19.7.
 
 The shape here is the opposite of :mod:`cracktrade.api.worker.execute`. A run is claimed,
-executed once and lands terminal; a session is claimed, ticks, and is *released* still running,
-so the next pass through the worker loop re-decides whether to give the time to a user's run
-instead. That release is what makes "same worker, low priority" true rather than aspirational:
-a sweep cannot hold the worker for hours while a queued backtest waits behind it.
+executed once and lands terminal; a session is claimed, swept, and *released* still running, so
+the next pass through the worker loop re-decides whether to give the time to a user's run
+instead.
 
-One tick is one ticker: evolve, transfer-test, store the candidate, advance the cursor. Then, if
-there is time and anything is due, one forward score. Everything a tick can fail at is caught
-and counted -- a single ticker whose history the provider will not serve must not end a sweep
-that is working on the other nineteen.
+One tick is one ticker: evolve, transfer-test, store the candidate. The position it works is
+reserved before the search rather than advanced after it, which is what lets
+``prospect_parallelism`` ticks run at once -- see
+:meth:`~cracktrade.api.repos.ProspectRepo.reserve_ordinals`. Then, if there is time and anything
+is due, one forward score.
+
+"Same worker, low priority" used to fall out of releasing the session after every tick. It no
+longer does: a sweep holds its session across many ticks, so it asks :func:`should_yield` after
+each one whether a run is queued or the session has been asked to stop. Yielding drains the
+ticks in flight rather than cancelling them, which keeps the promise that a queued backtest
+waits at most one search.
+
+Everything a tick can fail at is caught and counted -- a single ticker whose history the
+provider will not serve must not end a sweep that is working on the other nineteen.
 """
 
 from __future__ import annotations
 
 import contextlib
 import threading
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass
+from uuid import UUID
 
 import psycopg
 import yaml
@@ -24,10 +36,11 @@ from psycopg.rows import TupleRow
 
 from cracktrade.api.db.uow import unit_of_work_on
 from cracktrade.api.errors import ConflictError
-from cracktrade.api.repos import ProspectRepo
-from cracktrade.api.repos.rows import ProspectCandidateRow, ProspectSessionRow
+from cracktrade.api.repos import ProspectRepo, RunRepo
+from cracktrade.api.repos.rows import ProspectCandidateRow, ProspectSessionRow, RunStatus
 from cracktrade.api.settings import ApiSettings
 from cracktrade.api.worker import worker_name
+from cracktrade.api.worker.pool import TickJob, TickResult, run_tick
 from cracktrade.control import RunControl
 from cracktrade.data import MarketDataProvider, YFinanceProvider
 from cracktrade.errors import CracktradeError, RunCancelled
@@ -36,9 +49,11 @@ from cracktrade.optimize import TradeFloor
 from cracktrade.prospect import (
     Candidate,
     ForwardScore,
+    PrefetchHorizon,
     Reservation,
     SweepHistory,
     SweepParams,
+    family_of,
     forward_score,
     prospect_once,
 )
@@ -235,7 +250,7 @@ def _score_one(row: ProspectCandidateRow, history: SweepHistory) -> ForwardScore
         return None
 
 
-def claim_and_tick(
+def claim_and_sweep(
     connection: psycopg.Connection[TupleRow],
     settings: ApiSettings,
     *,
@@ -243,17 +258,13 @@ def claim_and_tick(
     engine_settings: Settings | None = None,
     stop: threading.Event | None = None,
 ) -> ProspectSessionRow | None:
-    """Claim a session, do one tick and one forward score, then release it.
+    """Claim a session, keep P ticks in flight until something asks it to yield, then release.
 
     ``None`` when there is no session to work on. Returns the session it worked, whatever
-    happened to the tick.
+    happened to the ticks.
 
-    Released rather than held, and that is the whole priority mechanism: the worker goes back
-    to the top of its loop after every tick, where a queued run is checked first. A sweep
-    therefore yields the process roughly once per search rather than once per session.
-
-    A session with ``stop_requested`` is landed here rather than ticked, so it never stops in
-    the middle of a search whose result would be paid for and discarded.
+    A session with ``stop_requested`` is landed here rather than swept, so it never stops in the
+    middle of a search whose result would be paid for and discarded.
     """
     with unit_of_work_on(connection) as work:
         claimed = ProspectRepo(work.connection).claim_session(
@@ -281,40 +292,154 @@ def claim_and_tick(
         _cancelled=threading.Event(),
     )
     with heartbeat as beat:
-        control = RunControl(
-            should_stop=lambda: beat.cancelled or (stop is not None and stop.is_set())
-        )
+
+        def yielding() -> bool:
+            if beat.cancelled or (stop is not None and stop.is_set()):
+                return True
+            return should_yield(connection, claimed.id)
+
         try:
-            with unit_of_work_on(connection) as work:
-                reserved, _ = ProspectRepo(work.connection).reserve_ordinals(
-                    claimed.id, count=1, worker=worker_name()
-                )
-            outcome = tick(
+            _sweep(
                 connection,
                 claimed,
-                reserved[0],
-                provider=provider,
-                engine_settings=engine_settings,
-                control=control,
-                owner=worker_name(),
+                settings,
+                provider=provider or YFinanceProvider(),
+                engine_settings=engine_settings or load_settings(),
+                should_yield=yielding,
             )
         except ConflictError:
-            # The session was taken over while this tick was computing. Nothing was stored;
-            # the new owner will prospect this ticker itself.
-            logger.warning("session %s was taken over mid-tick; discarding it", claimed.id)
+            # The session was taken over while ticks were computing. Nothing was stored for
+            # them; the new owner carries on from the cursor.
+            logger.warning("session %s was taken over mid-sweep; discarding it", claimed.id)
             return claimed
         if not beat.cancelled and (stop is None or not stop.is_set()):
             score_due(connection, claimed, provider=provider, engine_settings=engine_settings)
 
     with unit_of_work_on(connection) as work:
         ProspectRepo(work.connection).release_session(claimed.id, worker_name())
+    return claimed
+
+
+def should_yield(connection: psycopg.Connection[TupleRow], session_id: UUID) -> bool:
+    """Whether a sweep should stop reserving new positions.
+
+    Two reasons, both of which used to be free and are not any more. When a session was claimed
+    for exactly one tick, ``run_forever``'s ordering gave a queued backtest its turn and the next
+    claim re-read ``stop_requested`` from the row. A sweep that holds its session across many
+    ticks has to ask, and this is where it asks.
+
+    Read once per completed tick rather than on a timer, which is exactly as often as the answer
+    can change anything.
+    """
+    with unit_of_work_on(connection) as work:
+        session = ProspectRepo(work.connection).get_session(session_id)
+        if session is None or session.stop_requested:
+            return True
+        return RunRepo(work.connection).count(statuses=[RunStatus.QUEUED]) > 0
+
+
+def _sweep(
+    connection: psycopg.Connection[TupleRow],
+    session: ProspectSessionRow,
+    settings: ApiSettings,
+    *,
+    provider: MarketDataProvider,
+    engine_settings: Settings,
+    should_yield: Callable[[], bool],
+) -> None:
+    """Keep the pool full until ``should_yield``, then drain what is in flight.
+
+    **Sliding window, not a batch.** P positions are reserved and dispatched, and as each child
+    returns its candidate is written and one more position is reserved and dispatched. A
+    reserve-P/await-all loop would let the slowest tick in each wave gate the rest -- ticks were
+    measured at 18-31s, so up to about 40% of the pool would sit idle at every tail.
+
+    **Yielding drains rather than cancels.** Ticks in flight are allowed to finish, which bounds
+    a queued run's wait at one search exactly as section 19.7 promises. Cancelling would throw
+    away compute that was about to produce a candidate, and the position is already spent either
+    way.
+    """
+    params = SweepParams.from_dict(session.params)
+    horizon = PrefetchHorizon(
+        provider,
+        interval=params.interval,
+        ttl_seconds=settings.prospect_prefetch_ttl_seconds,
+    )
+    owner = worker_name()
+
+    def dispatch(pool: ProcessPoolExecutor, count: int) -> set[Future[TickResult]]:
+        with unit_of_work_on(connection) as work:
+            reserved, _ = ProspectRepo(work.connection).reserve_ordinals(
+                session.id, count=count, worker=owner
+            )
+        start, end = params.window()
+        jobs: set[Future[TickResult]] = set()
+        for reservation in reserved:
+            family = family_of(reservation.ticker)
+            tickers = (reservation.ticker, *family.members, *family.controls)
+            jobs.add(
+                pool.submit(
+                    run_tick,
+                    TickJob(
+                        reservation=reservation,
+                        params=params,
+                        # The session's seed plus the position's ordinal across the whole
+                        # sweep -- not its index in the universe, which repeats every lap and
+                        # would make each pass a bit-identical replay of the one before it.
+                        seed=session.seed + reservation.ordinal,
+                        frames=horizon.frames_for(tickers, start, end),
+                        max_filled_fraction=engine_settings.max_filled_fraction,
+                    ),
+                )
+            )
+        return jobs
+
+    with ProcessPoolExecutor(max_workers=settings.prospect_parallelism) as pool:
+        pending = dispatch(pool, settings.prospect_parallelism)
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                _land(connection, session, future.result(), owner=owner)
+            if not should_yield():
+                pending |= dispatch(pool, len(done))
+
+
+def _land(
+    connection: psycopg.Connection[TupleRow],
+    session: ProspectSessionRow,
+    result: TickResult,
+    *,
+    owner: str,
+) -> None:
+    """Write one child's finding and count it, in one transaction.
+
+    The candidate insert shares the transaction with the count and both are ownership-checked, so
+    a session taken over mid-search leaves nothing behind -- half a tick, a candidate with no
+    tick counted against it, would be worse than none.
+    """
+    with unit_of_work_on(connection) as work:
+        repo = ProspectRepo(work.connection)
+        candidate = result.candidate
+        if candidate is not None:
+            repo.add_candidate(
+                session_id=session.id,
+                ticker=candidate.ticker,
+                discovered_at=candidate.discovered_at,
+                last_bar_seen=candidate.last_bar_seen,
+                seed=candidate.seed,
+                candidate=to_dict(candidate),
+                strategy_yaml=candidate.strategy_yaml,
+                survived_transfer=candidate.survives_transfer,
+                transfer_median=candidate.transfer.median_sibling_sharpe,
+                transfer_control=candidate.transfer.median_control_sharpe,
+            )
+        repo.count_tick(session.id, failed=candidate is None, worker=owner)
     logger.info(
         "session %s: %s %s",
-        claimed.id,
-        outcome.ticker,
-        "failed" if outcome.failed else "prospected",
+        session.id,
+        result.reservation.ticker,
+        "failed" if result.failed else "prospected",
     )
-    return claimed
 
 
 @dataclass(slots=True)
@@ -375,7 +500,8 @@ __all__ = [
     "FORWARD_STALE_HOURS",
     "SessionHeartbeat",
     "TickOutcome",
-    "claim_and_tick",
+    "claim_and_sweep",
     "score_due",
+    "should_yield",
     "tick",
 ]

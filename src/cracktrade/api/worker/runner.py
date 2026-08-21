@@ -27,7 +27,7 @@ from cracktrade.api.repos.rows import FailureCategory, RunRow
 from cracktrade.api.settings import ApiSettings
 from cracktrade.api.worker import worker_name
 from cracktrade.api.worker.execute import EXIT_CODES, Engine, execute
-from cracktrade.api.worker.prospect import claim_and_tick
+from cracktrade.api.worker.prospect import claim_and_sweep
 from cracktrade.control import RunControl
 from cracktrade.data import MarketDataProvider
 from cracktrade.log import get_logger
@@ -185,11 +185,12 @@ def run_forever(
     """Claim runs, then prospecting ticks, until asked to stop.
 
     The order is the priority, and it is checked afresh on every pass. A user who launches a
-    backtest waits at most one prospecting tick for it, because a session is claimed for a
-    single tick and released -- see :func:`~cracktrade.api.worker.prospect.claim_and_tick`. The
-    alternative, a second process for sweeps, was rejected: it would double the deployment for
-    work that is already CPU-bound and would let two engines compete for the same cores with
-    nothing arbitrating between them.
+    backtest still waits at most one prospecting tick for it, but the mechanism has moved: a
+    sweep keeps ``prospect_parallelism`` ticks in flight and holds its session while it does, so
+    it is the sweep that checks for a queued run after every tick and drains what is in flight --
+    see :func:`~cracktrade.api.worker.prospect.should_yield`. The alternative, a second process
+    for sweeps, was rejected: it would double the deployment for work that is already CPU-bound
+    and would let two engines compete for the same cores with nothing arbitrating between them.
 
     Sweeping expired run leases happens on every fully idle pass rather than on a timer: the
     moment there is neither a run nor a session to work on is exactly when a stuck lease matters
@@ -205,7 +206,7 @@ def run_forever(
                 continue
             if halt.is_set():
                 break
-            prospected = claim_and_tick(connection, settings, provider=provider, stop=halt)
+            prospected = claim_and_sweep(connection, settings, provider=provider, stop=halt)
             if prospected is None:
                 sweep_expired(connection, settings.worker_lease_seconds)
                 halt.wait(settings.worker_poll_seconds)

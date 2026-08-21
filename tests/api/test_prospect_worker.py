@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import numpy as np
 import pandas as pd
@@ -24,10 +24,15 @@ import pytest
 from psycopg.rows import TupleRow
 
 from cracktrade.api.errors import ConflictError
-from cracktrade.api.repos import ProspectRepo
-from cracktrade.api.repos.rows import ProspectStatus
+from cracktrade.api.repos import ProspectRepo, RunRepo, StrategyRepo, VersionRepo
+from cracktrade.api.repos.rows import (
+    ProspectStatus,
+    RunKind,
+    StrategyOrigin,
+    VersionOrigin,
+)
 from cracktrade.api.settings import ApiSettings
-from cracktrade.api.worker.prospect import claim_and_tick, score_due, tick
+from cracktrade.api.worker.prospect import claim_and_sweep, score_due, should_yield, tick
 from cracktrade.config import Interval
 from cracktrade.data import StaticProvider
 from cracktrade.indicators.catalogue import install
@@ -85,8 +90,36 @@ def _provider(*, missing: tuple[str, ...] = ()) -> StaticProvider:
     )
 
 
-def _settings() -> ApiSettings:
-    return ApiSettings(worker_lease_seconds=60.0, worker_heartbeat_seconds=30.0)
+def _settings(*, parallelism: int = 1) -> ApiSettings:
+    return ApiSettings(
+        worker_lease_seconds=60.0,
+        worker_heartbeat_seconds=30.0,
+        prospect_parallelism=parallelism,
+    )
+
+
+def _queue_a_run(db: psycopg.Connection[TupleRow]) -> None:
+    """A backtest waiting behind the sweep.
+
+    Also the tests' way of bounding a sweep: a queued run is what makes it stop reserving, so a
+    sweep launched with one already queued does exactly one window of ticks and drains.
+    """
+    strategy = StrategyRepo(db).create(name="waiting", origin=StrategyOrigin.AUTHORED)
+    version = VersionRepo(db).append(
+        strategy_id=strategy.id,
+        origin=VersionOrigin.CREATED,
+        config={"strategy": {"name": "waiting"}},
+        config_yaml="strategy:\n  name: waiting\n",
+        after=0,
+    )
+    RunRepo(db).create(
+        strategy_id=strategy.id,
+        version=version.version,
+        kind=RunKind.BACKTEST,
+        params={},
+        seed=0,
+    )
+    db.commit()
 
 
 def _session(
@@ -192,12 +225,14 @@ def test_the_search_size_comes_from_the_sessions_frozen_question() -> None:
 # --------------------------------------------------------------------------- the loop
 
 
-def test_a_session_is_released_after_one_tick(db: psycopg.Connection[TupleRow]) -> None:
+def test_a_session_is_released_after_its_window_of_ticks(db: psycopg.Connection[TupleRow]) -> None:
     """The priority mechanism: a sweep yields the worker rather than holding it for hours."""
     repo = ProspectRepo(db)
     session = _session(db)
 
-    worked = claim_and_tick(db, _settings(), provider=_provider())
+    _queue_a_run(db)
+
+    worked = claim_and_sweep(db, _settings(), provider=_provider())
     assert worked is not None
     assert worked.id == session.id
 
@@ -211,10 +246,10 @@ def test_a_session_is_released_after_one_tick(db: psycopg.Connection[TupleRow]) 
 
 
 def test_an_idle_worker_finds_nothing_to_prospect(db: psycopg.Connection[TupleRow]) -> None:
-    assert claim_and_tick(db, _settings(), provider=_provider()) is None
+    assert claim_and_sweep(db, _settings(), provider=_provider()) is None
 
 
-def test_a_session_asked_to_stop_is_landed_rather_than_ticked(
+def test_a_session_asked_to_stop_is_landed_rather_than_swept(
     db: psycopg.Connection[TupleRow],
 ) -> None:
     """It never stops mid-search: the compute would be paid for and the result discarded."""
@@ -223,7 +258,7 @@ def test_a_session_asked_to_stop_is_landed_rather_than_ticked(
     repo.request_stop(session.id)
     db.commit()
 
-    claim_and_tick(db, _settings(), provider=_provider())
+    claim_and_sweep(db, _settings(), provider=_provider())
 
     after = repo.require_session(session.id)
     assert after.status is ProspectStatus.STOPPED
@@ -241,7 +276,7 @@ def test_a_worker_shutting_down_releases_without_stopping_the_session(
     halt = threading.Event()
     halt.set()
 
-    claim_and_tick(db, _settings(), provider=_provider(), stop=halt)
+    claim_and_sweep(db, _settings(), provider=_provider(), stop=halt)
 
     after = repo.require_session(session.id)
     assert after.status is ProspectStatus.RUNNING
@@ -364,3 +399,93 @@ def test_a_takeover_mid_tick_leaves_nothing_behind(db: psycopg.Connection[TupleR
     after = repo.require_session(session.id)
     assert (after.cursor_index, after.ticks_completed, after.ticks_failed) == (1, 0, 0)
     assert repo.count_candidates(session_id=session.id) == 0
+
+
+# --------------------------------------------------------------------------- the sliding window
+
+
+def test_a_sweep_runs_a_window_of_ticks_and_counts_them_all(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    repo = ProspectRepo(db)
+    session = _session(db, universe=(HOME, "NVDA", "MU", "INTC"))
+    _queue_a_run(db)
+
+    claim_and_sweep(db, _settings(parallelism=4), provider=_provider())
+
+    after = repo.require_session(session.id)
+    assert after.ticks_completed + after.ticks_failed == 4
+    # Four positions over a four-ticker universe is exactly one pass.
+    assert (after.cursor_index, after.passes_completed) == (0, 1)
+    assert repo.count_candidates(session_id=session.id) == 4
+
+
+def test_every_tick_in_a_sweep_gets_a_distinct_seed(db: psycopg.Connection[TupleRow]) -> None:
+    """Reservations are the seed source. Two concurrent ticks sharing one would run the same
+    search twice and store it twice."""
+    repo = ProspectRepo(db)
+    session = _session(db, universe=(HOME, "NVDA", "MU", "INTC"))
+    _queue_a_run(db)
+
+    claim_and_sweep(db, _settings(parallelism=4), provider=_provider())
+
+    stored = repo.leaderboard(session_id=session.id, survivors_only=False)
+    seeds = sorted(row.candidate.seed for row in stored)
+    assert seeds == [session.seed + ordinal for ordinal in range(4)]
+
+
+def test_a_sweep_covers_every_ticker_in_the_universe_exactly_once(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """Round-robin survives the pool: concurrency changes when tickers are searched, never
+    which ones or how often (section 19.7)."""
+    repo = ProspectRepo(db)
+    universe = (HOME, "NVDA", "MU", "INTC")
+    session = _session(db, universe=universe)
+    _queue_a_run(db)
+
+    claim_and_sweep(db, _settings(parallelism=4), provider=_provider())
+
+    stored = repo.leaderboard(session_id=session.id, survivors_only=False)
+    assert sorted(row.candidate.ticker for row in stored) == sorted(universe)
+
+
+def test_a_queued_run_stops_a_sweep_reserving_more(db: psycopg.Connection[TupleRow]) -> None:
+    """Section 19.7 promises a user's backtest waits at most one search. When a session was
+    claimed for one tick that fell out of the loop's ordering; a sweep that holds its session
+    has to ask, and it drains rather than cancelling what is already paid for."""
+    repo = ProspectRepo(db)
+    session = _session(db, universe=(HOME, "NVDA", "MU", "INTC"))
+    _queue_a_run(db)
+
+    claim_and_sweep(db, _settings(parallelism=2), provider=_provider())
+
+    after = repo.require_session(session.id)
+    assert after.ticks_completed + after.ticks_failed == 2
+    assert after.claimed_by is None
+
+
+def test_a_sweep_yields_for_a_queued_run(db: psycopg.Connection[TupleRow]) -> None:
+    session = _session(db)
+
+    assert not should_yield(db, session.id)
+    _queue_a_run(db)
+    assert should_yield(db, session.id)
+
+
+def test_a_sweep_yields_when_the_session_is_asked_to_stop(
+    db: psycopg.Connection[TupleRow],
+) -> None:
+    """Stopping used to be seen at the next claim. A sweep holding its session across many ticks
+    would otherwise ignore the request until it ran out of other reasons to stop."""
+    repo = ProspectRepo(db)
+    session = _session(db)
+
+    assert not should_yield(db, session.id)
+    repo.request_stop(session.id)
+    db.commit()
+    assert should_yield(db, session.id)
+
+
+def test_a_sweep_yields_for_a_session_that_has_gone(db: psycopg.Connection[TupleRow]) -> None:
+    assert should_yield(db, uuid4())

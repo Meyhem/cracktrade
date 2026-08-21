@@ -59,6 +59,23 @@ class ApiSettings(BaseSettings):
     #: Idle sleep between queue polls when there is nothing to claim.
     worker_poll_seconds: float = Field(default=1.0, gt=0)
 
+    #: Prospecting ticks kept in flight at once, in one worker process (spec section 19.7).
+    #:
+    #: Measured rather than derived from the core count. On the 16-core-plus-SMT machine this was
+    #: taken on, wall time for P ticks is flat from P=4 to P=12 -- twelve cost 1.3s more than
+    #: four -- and then climbs steeply, because past the physical cores the only capacity left is
+    #: SMT siblings sharing an execution unit with work already in flight. Marginal throughput
+    #: per added process is 0.66 up to twelve and 0.26 immediately after. The full curve is in
+    #: ``docs/superpowers/specs/2026-08-21-prospecting-parallelism-design.md`` section 8.
+    #:
+    #: A tick is single-core by construction: the GA pool inside it is deliberately unused, since
+    #: nesting one would oversubscribe the machine by this factor.
+    prospect_parallelism: int = Field(default=12, ge=1)
+
+    #: How long the parent may reuse a fetched history before fetching it again. Bounded because
+    #: a sweep runs for days and must never search bars frozen at its first tick.
+    prospect_prefetch_ttl_seconds: float = Field(default=60.0, gt=0)
+
     #: Whether ``POST /config/generate`` will draft a strategy from a description. On by
     #: default because the machinery it needs -- the ``claude`` CLI, signed in -- is machinery
     #: the user of this engine already has; off is for a deployment that does not want the

@@ -146,6 +146,36 @@ def test_every_family_has_members_and_controls() -> None:
         assert not set(family.members) & set(family.controls), family.name
 
 
+def test_no_ticker_belongs_to_two_families() -> None:
+    """``_BY_TICKER`` is a dict comprehension over every family in order, so a ticker listed
+    twice does not raise -- the later family silently wins and the earlier one quietly loses a
+    member. Which family a candidate is transfer-tested against would then depend on the order
+    of a tuple.
+    """
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+    for family in FAMILIES:
+        for ticker in family.members:
+            if ticker in seen:
+                duplicates.append(f"{ticker} in both {seen[ticker]} and {family.name}")
+            seen[ticker] = family.name
+    assert duplicates == []
+
+
+def test_european_families_are_controlled_on_their_own_session() -> None:
+    """Section 19.4: a control answers "is this just risk appetite?", and can only answer it if
+    it is exposed to the hours the candidate traded.
+
+    GLD and TLT trade a US afternoon against a European day, so a European family controlled on
+    them would be measured on two clocks at once.
+    """
+    european = [f for f in FAMILIES if f.name.startswith("european ")]
+    assert european, "the European families should be registered in FAMILIES"
+    for family in european:
+        assert set(family.controls) == {"4GLD.DE", "VGEA.DE"}, family.name
+        assert all("." in member for member in family.members), family.name
+
+
 def test_family_of_refuses_an_unmapped_ticker() -> None:
     with pytest.raises(ProspectError, match="belongs to no family"):
         family_of("NOT_A_TICKER")

@@ -3604,6 +3604,36 @@ most associated with day trading are the ones where this engine has the least ro
 0.08% round trip consumes a tenth of SPY's entire median day. This is recorded because it is
 counter-intuitive and was arrived at by measurement.
 
+**European instruments are supported, in families of their own — decided 2026-08-21.** Six
+families cover the liquid EUR-denominated large caps: semiconductors, luxury, banks, defence,
+software and energy. They are deliberately *not* merged into their US counterparts even where the
+industry is plainly the same, because transfer here is an **intraday** claim and the two trade
+different clocks. Measured 2026-08-21, a European session yields 9 hourly bars against a US
+session's 7 — corroborating §4.6's nine-bar Xetra day — which §7.5 annualises as 2,268 periods a
+year against 1,764. "This survives the move from ASML to Infineon" and "this survives the move
+from ASML to NVDA" are different statements, and only the first is about the industry rather than about the session. A
+merged family's median would also blend two trading days.
+
+They carry **their own controls**, `4GLD.DE` and `VGEA.DE` — gold and eurozone government bonds,
+both listed in euros on the same 09:00–17:30 CET session as the members. GLD and TLT are more
+liquid and a Sharpe is unitless, so reusing them would not be arithmetically wrong; it would be
+evidentially wrong, measuring a candidate on its members' clock and its controls' clock at once.
+`IBCL.DE` is the closer duration match to TLT and is rejected anyway: 25 shares an hour against
+`VGEA.DE`'s 1,747, and a control whose price barely moves manufactures exactly the degenerate
+statistic §19.3 has to withhold.
+
+Screened on the same range-to-cost ratio, 2026-08-21, at a 0.08% round trip: BESI 45.9, IFX 44.2,
+RHM 41.2, ASM 41.7, STMPA 40.1, ASML 39.3 at the top; ISP 20.6, ENI 20.6, TTE 20.8 at the bottom.
+Every one clears SPY's 10.7 and the best clear NVDA's 34.0, so the engine has room on them — but
+turnover is one to two orders of magnitude below the US names (€45M–725M against $5–45bn), which
+§3.4's fixed-percentage cost model does not represent — it charges the same `slippage_pct`
+however thin the book is, so §12.7's cost sensitivity is the only check that reacts to the
+difference. A European result should be read with that in mind.
+
+Note that Yahoo identifies these by **exchange**, not by country: `.AS` Amsterdam, `.PA` Paris,
+`.DE` Xetra, `.MI` Milan, `.MC` Madrid. Country-style tickers (`ASML.NL`, `MC.FR`, `SAN.ES`) are
+accepted by the provider and return no bars at all rather than an error.
+
 **Inverse and volatility ETFs occupy a separate bucket**, never the main ranking, for §19.5's
 reason. They are retained rather than excluded because §7.5 pins `direction='longonly'` and short
 signals are not expressible, so buying an inverse instrument is the only bearish position the

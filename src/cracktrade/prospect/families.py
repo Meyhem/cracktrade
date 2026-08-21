@@ -96,6 +96,67 @@ ENERGY = Family(
     controls=_MARKET_CONTROLS,
 )
 
+#: Controls for European equity families: gold and eurozone government bonds, both listed in
+#: euros and trading the same 09:00-17:30 CET session as the members.
+#:
+#: Deliberately not ``_EQUITY_CONTROLS``. GLD and TLT are more liquid, and a Sharpe is unitless
+#: so the comparison would not be nonsense -- but they trade a US afternoon session against a
+#: European day, so an intraday candidate would be measured on its members' clock and its
+#: controls' clock at once. A control exists to answer "is this just risk appetite?", and it can
+#: only answer that if it is exposed to the same hours the candidate traded.
+#:
+#: ``IBCL.DE`` is the better duration match for TLT -- 15-30 year euro governments against
+#: 20-year treasuries -- and is rejected anyway: measured 2026-08-21 it trades a median of 25
+#: shares an hour against ``VGEA.DE``'s 1,747, and a control whose price barely moves produces
+#: exactly the degenerate statistic section 19.3 has to withhold. Breadth of maturity is worth
+#: less here than having a price at all.
+_EUROPEAN_CONTROLS = ("4GLD.DE", "VGEA.DE")
+
+# European families are kept separate from their US counterparts rather than merged into them,
+# even where the economic claim is plainly the same -- ASML and NVDA are in one industry by any
+# reading. The reason is that transfer here is an *intraday* claim and the two trade different
+# clocks: measured 2026-08-21, a European session yields 9 hourly bars against a US session's 7,
+# which the calendar annualises as 2268 periods a year against 1764. "This effect survives the
+# move from ASML to Infineon" and "this effect survives the move from ASML to NVDA" are then
+# different statements, and only the first is about the industry rather than about the session.
+# Merging them would also make every family's median a blend of two trading days.
+
+EUROPEAN_SEMICONDUCTORS = Family(
+    name="european semiconductors",
+    members=("ASML.AS", "IFX.DE", "STMPA.PA", "ASM.AS", "BESI.AS"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
+EUROPEAN_LUXURY = Family(
+    name="european luxury",
+    members=("MC.PA", "KER.PA", "RMS.PA", "EL.PA", "MONC.MI"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
+EUROPEAN_BANKS = Family(
+    name="european banks",
+    members=("BNP.PA", "DBK.DE", "SAN.MC", "UCG.MI", "ISP.MI", "INGA.AS", "GLE.PA", "BBVA.MC"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
+EUROPEAN_DEFENCE = Family(
+    name="european defence",
+    members=("RHM.DE", "HO.PA", "LDO.MI", "SAF.PA"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
+EUROPEAN_SOFTWARE = Family(
+    name="european software",
+    members=("SAP.DE", "ADYEN.AS", "DSY.PA", "CAP.PA"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
+EUROPEAN_ENERGY = Family(
+    name="european energy",
+    members=("TTE.PA", "ENI.MI", "REP.MC"),
+    controls=_EUROPEAN_CONTROLS,
+)
+
 #: Every family, in a fixed order. Order is not load-bearing the way section 16.2's block order
 #: is -- nothing stores a family index -- but a stable order keeps reports diffable.
 FAMILIES: tuple[Family, ...] = (
@@ -106,6 +167,12 @@ FAMILIES: tuple[Family, ...] = (
     BROAD_INDICES,
     PRECIOUS_METALS,
     ENERGY,
+    EUROPEAN_SEMICONDUCTORS,
+    EUROPEAN_LUXURY,
+    EUROPEAN_BANKS,
+    EUROPEAN_DEFENCE,
+    EUROPEAN_SOFTWARE,
+    EUROPEAN_ENERGY,
 )
 
 #: The default prospecting universe, screened per section 19.6 on median intraday range against
@@ -183,6 +250,12 @@ __all__ = [
     "CRYPTO_PROXIES",
     "DEFAULT_UNIVERSE",
     "ENERGY",
+    "EUROPEAN_BANKS",
+    "EUROPEAN_DEFENCE",
+    "EUROPEAN_ENERGY",
+    "EUROPEAN_LUXURY",
+    "EUROPEAN_SEMICONDUCTORS",
+    "EUROPEAN_SOFTWARE",
     "FAMILIES",
     "HIGH_BETA_GROWTH",
     "INVERSE_BUCKET",

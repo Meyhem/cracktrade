@@ -199,19 +199,37 @@ Run on the target machine: AMD Ryzen 9 9950X, **16 physical cores with SMT for 3
 123 GB RAM. N concurrent single-tick processes, population 50 x 10 generations over 700 daily
 bars, `StaticProvider` so no network variance enters the numbers.
 
-| P | wall for P ticks | per-tick | throughput vs P=1 | efficiency |
-| --- | --- | --- | --- | --- |
-| 1 | 16.4s | 16.36s | 1.00x | 100% |
-| 4 | 23.0s | 5.76s | 2.84x | 71% |
-| 8 | 24.0s | 3.00s | 5.45x | 68% |
-| **12** | **24.3s** | **2.02s** | **8.10x** | **67%** |
-| 16 | 28.6s | 1.79s | 9.14x | 57% |
-| 24 | 34.6s | 1.44s | 11.36x | 47% |
-| 32 | 41.0s | 1.28s | 12.78x | 40% |
+Measured first with the default `fork` start method, then again with `spawn`, which is what the
+implementation actually uses (see below). Both are recorded because the second is the real one
+and the first is what the choice of P was originally made against.
+
+| P | fork wall | spawn wall | spawn per-tick | throughput vs P=1 | efficiency |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 16.4s | 19.8s | 19.80s | 1.00x | 100% |
+| 4 | 23.0s | 26.9s | 6.73s | 2.94x | 73% |
+| 8 | 24.0s | 28.6s | 3.58s | 5.53x | 69% |
+| **12** | **24.3s** | **29.5s** | **2.46s** | **8.05x** | **67%** |
+| 16 | 28.6s | 32.7s | 2.04s | 9.71x | 61% |
+| 24 | 34.6s | -- | -- | 11.36x (fork) | 47% |
+| 32 | 41.0s | -- | -- | 12.78x (fork) | 40% |
+
+**Spawn costs about 3-5 seconds of pool start-up and changes nothing else.** Every child pays a
+fresh interpreter and a vectorbt import, which is why the wall column shifts up uniformly; the
+*shape* is identical and the speedup at P=12 is 8.05x against fork's 8.10x. The knee did not
+move, so the choice of P did not either. In production the cost is amortised further still: the
+pool is held for the life of a session claim, not rebuilt per tick as it is in this probe.
+
+**The pool uses `spawn`, not the default `fork`.** Two reasons. The first is the one
+`evolution_pool` already gives -- a fresh interpreter inherits no half-initialised native state
+from numba and vectorbt. The second is specific to the worker: the parent holds an open psycopg
+connection, and a forked child finalising its inherited copy at exit would close the socket
+underneath the parent. A child is handed a `TickJob` and nothing else precisely so that it needs
+nothing it could only have inherited, which is what makes spawn free of consequences here beyond
+its start-up cost.
 
 **`DEFAULT_PARALLELISM = 12`**, and the curve says why rather than the core count. Wall time is
-nearly flat from P=4 to P=12 -- twelve ticks cost 1.3 seconds more than four -- and then climbs
-steeply. Marginal throughput per added process is 0.66 up to P=12 and 0.26 immediately after it,
+nearly flat from P=4 to P=12 -- twelve ticks cost 2.6 seconds more than four under spawn, 1.3
+under fork -- and then climbs steeply. Marginal throughput per added process is 0.66 up to P=12 and 0.26 immediately after it,
 a 60% drop at one step. The knee sits just below the 16 physical cores, which is what it should
 do: the parent, its heartbeat thread, the prefetch threads and Postgres all need somewhere to
 run, and past 16 the only capacity left is SMT siblings sharing an execution unit with work
@@ -221,14 +239,15 @@ Twelve is not a ceiling anyone must respect -- 32 still delivers 12.8x -- but it
 best throughput on the box for 37% of it, and leaves the machine responsive for the runs that
 have priority over the sweep.
 
-**Against the real baseline.** Recorded sessions ran 22.2s per tick serially. At 8.10x that is
-2.7s effective: a 12-ticker pass falls from 4.4 minutes to about 33 seconds, and the 58-minute
+**Against the real baseline.** Recorded sessions ran 22.2s per tick serially. At 8.05x that is
+2.8s effective: a 12-ticker pass falls from 4.4 minutes to about 33 seconds, and the 58-minute
 session that produced 156 ticks becomes roughly 7 minutes.
 
 ### Determinism survives, and no thread pinning is needed
 
 Twelve ticks run through a P=1 pool and through a P=12 pool produced **bit-identical**
-`strategy_yaml` for every seed. The same held at P=4. BLAS and numba thread counts are left
+`strategy_yaml` for every seed, under `fork`; six ticks at P=1 against P=6 under `spawn` did the
+same. The same held at P=4. BLAS and numba thread counts are left
 unpinned exactly as `parallel.py` leaves them, and `threadpoolctl` does **not** become a
 dependency.
 

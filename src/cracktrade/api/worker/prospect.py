@@ -24,6 +24,7 @@ provider will not serve must not end a sweep that is working on the other ninete
 from __future__ import annotations
 
 import contextlib
+import multiprocessing
 import threading
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
@@ -394,7 +395,16 @@ def _sweep(
             )
         return jobs
 
-    with ProcessPoolExecutor(max_workers=settings.prospect_parallelism) as pool:
+    with ProcessPoolExecutor(
+        max_workers=settings.prospect_parallelism,
+        # Spawn, for the reason :func:`~cracktrade.evolution.parallel.evolution_pool` gives --
+        # a fresh interpreter inherits no half-initialised native state -- and for a second
+        # reason specific to here: this process holds an open psycopg connection, and a forked
+        # child finalising its inherited copy at exit would close the socket underneath the
+        # parent. A child is handed a TickJob and nothing else precisely so that it needs
+        # nothing it could only have inherited.
+        mp_context=multiprocessing.get_context("spawn"),
+    ) as pool:
         pending = dispatch(pool, settings.prospect_parallelism)
         while pending:
             done, pending = wait(pending, return_when=FIRST_COMPLETED)

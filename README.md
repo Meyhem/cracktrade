@@ -17,6 +17,12 @@ NOT CREDIBLE
 
 That is real output, from one of the example strategies in this repository.
 
+The web UI carries the same discipline into a candidate's detail view — transfer to the rest of
+its family, forward evidence not yet accrued, and the figures the search selected on labelled as
+exactly that, not proof:
+
+![Strategy detail view, showing transfer, forward evidence, and selection figures for a candidate](docs/images/strategy_detail.png)
+
 ## Install
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).

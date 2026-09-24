@@ -7,19 +7,17 @@ That last part is the design constraint. A backtester that reports a large numbe
 that reports a large number *and* the reasons not to believe it is the useful kind, because the
 ways a backtest lies are well understood and every one of them is checkable.
 
-```
-NOT CREDIBLE
-  out-of-sample +6.6% vs +149.0% buy-and-hold, profitable in 2/4 folds
-  x deflated Sharpe P=0.00, below the 0.95 bar for 4800 trials
-  x a 10% parameter nudge destroys 81% of the objective
-  x only 16 out-of-sample trades in total
-```
-
-That is real output, from one of the example strategies in this repository.
-
-The web UI carries the same discipline into a candidate's detail view — transfer to the rest of
-its family, forward evidence not yet accrued, and the figures the search selected on labelled as
-exactly that, not proof:
+- **Look-ahead bias is proven absent, not just discouraged.** Signal expressions are
+  AST-whitelisted, indicators are causal by construction, and a truncation-equivalence harness
+  checks every result bit for bit against one computed on the history truncated to that bar.
+- **A verdict, not just a number.** Deflated Sharpe, probability of backtest overfitting,
+  parameter-stability and cost-sensitivity checks all run automatically, and a result below 20
+  out-of-sample trades is refused a verdict rather than given one anyway.
+- **Always benchmarked, fold by fold**, against buying and holding the same ticker — never a
+  single blended number standing in for how the strategy actually held up over time.
+- **Prospecting across a whole instrument family**, with each candidate's transfer to its
+  relatives, forward evidence as it accrues, and the figures the search selected on labelled as
+  exactly that, not proof.
 
 ![Strategy detail view, showing transfer, forward evidence, and selection figures for a candidate](docs/images/strategy_detail.png)
 
@@ -64,7 +62,17 @@ uv run cracktrade walkforward examples/rsi_pullback.yaml --folds 6
 `backtest` runs a strategy as written and compares it against buying and holding the same
 ticker. `optimize` searches the parameters on the first 80% of history and reports on the rest.
 `walkforward` does that repeatedly across successive folds and then judges the result — it is
-the one to use before putting money behind anything.
+the one to use before putting money behind anything, and the judgment is blunt about it:
+
+```
+NOT CREDIBLE
+  out-of-sample +6.6% vs +149.0% buy-and-hold, profitable in 2/4 folds
+  x deflated Sharpe P=0.00, below the 0.95 bar for 4800 trials
+  x a 10% parameter nudge destroys 81% of the objective
+  x only 16 out-of-sample trades in total
+```
+
+That is real output, from one of the example strategies in this repository.
 
 All three take `--format table|json|yaml` and `-o FILE`. Stdout carries the requested output and
 nothing else, so this works:

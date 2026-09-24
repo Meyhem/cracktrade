@@ -34,6 +34,22 @@ uv sync
 ## Use
 
 ```bash
+./scripts/dev.sh up
+```
+
+starts Postgres, the API, the worker and the web UI together — `./scripts/dev.sh down` stops
+exactly what it started. Open `http://localhost:5173`, write a strategy, and run a backtest,
+optimization, walk-forward or evolution against it from there, plus the sweep browser and
+per-candidate evidence view shown above. `./scripts/dev.sh status` shows what's running and
+`logs <service>` follows any one of them; see [Running the API](#running-the-api) for the
+manual, one-terminal-per-process equivalent this wraps.
+
+### CLI
+
+The engine is also a command-line tool, for scripting and one-off checks without the stack
+running:
+
+```bash
 uv run cracktrade validate examples/rsi_pullback.yaml
 ```
 
@@ -284,8 +300,8 @@ exit at once.
 
 ## Status
 
-The engine, optimizer, validation suite, HTTP interface and persistence are complete. The web
-UI (React + TypeScript + Mantine) and AI-assisted strategy generation come next. The core is a
-library and the CLI is one consumer of it, so adding another interface did not mean moving any
-logic — the engine stays stateless, and what the API stores is the engine's own serialized
-output.
+The engine, optimizer, validation suite, HTTP interface, persistence and the web UI (React +
+TypeScript + Mantine) are complete. AI-assisted strategy generation comes next. The core is a
+library and the CLI and web UI are each one consumer of it, so adding another interface did not
+mean moving any logic — the engine stays stateless, and what the API stores is the engine's own
+serialized output.
